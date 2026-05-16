@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+uploads/*.csv
+uploads/rejected_*
+.pm2/
+*.log
