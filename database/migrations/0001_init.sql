@@ -17,10 +17,10 @@ CREATE TABLE IF NOT EXISTS tenants (
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Phase 1: single tenant row
-INSERT INTO tenants (business_name, escalation_phone, product_price_aud)
-VALUES ('PrinterIQ', '+61400457006', 1500.00)
-ON CONFLICT DO NOTHING;
+-- Phase 1: single tenant row (deterministic UUID for seeding and test references)
+INSERT INTO tenants (tenant_id, business_name, escalation_phone, product_price_aud)
+VALUES ('10000000-0000-0000-0000-000000000001', 'PrinterIQ', '+61400457006', 1500.00)
+ON CONFLICT (tenant_id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS leads (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
