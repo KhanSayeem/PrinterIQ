@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import ws from 'ws';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -6,7 +7,10 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!supabaseUrl) throw new Error('Missing env var: SUPABASE_URL');
 if (!supabaseServiceKey) throw new Error('Missing env var: SUPABASE_SERVICE_ROLE_KEY');
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+// Node.js < 22 has no native WebSocket — pass the ws package
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  realtime: { transport: ws },
+});
 
 // Fixed UUIDs — safe to reference in tests
 export const SEED_TENANT_ID = '00000000-0000-0000-0000-000000000001';
