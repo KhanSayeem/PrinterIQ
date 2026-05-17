@@ -1,0 +1,14 @@
+{
+  "name": "printeriq-database",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "seed": "tsx seed.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}
