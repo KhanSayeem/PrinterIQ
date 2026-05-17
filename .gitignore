@@ -9,3 +9,6 @@ uploads/*.csv
 uploads/rejected_*
 .pm2/
 *.log
+dist/
+.next/
+free-claude-code/
