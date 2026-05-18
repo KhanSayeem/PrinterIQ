@@ -67,3 +67,9 @@ Status only advances forward. Never skip stages. Never go backward.
 - Feature branches target `dev`, not `main`
 - `main` only receives merges after a full sub-plan is verified end-to-end
 - Use `.claude/commands/fix-issue.md` to work an issue from start to PR
+
+## Handoffs
+
+- Always save handoff documents inside this repo at `docs/superpowers/handoffs/`
+- Use dated session filenames, e.g. `YYYY-MM-DD-session-N.md`
+- Do not leave handoffs only in temp directories; future agents should be able to find them from the repo root

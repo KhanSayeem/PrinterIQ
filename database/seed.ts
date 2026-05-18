@@ -13,7 +13,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey, {
 });
 
 // Fixed UUIDs — safe to reference in tests
-export const SEED_TENANT_ID = '00000000-0000-0000-0000-000000000001';
+export const SEED_TENANT_ID = '10000000-0000-0000-0000-000000000001';
 export const SEED_LEAD_IDS = {
   imported:   '00000000-0000-0000-0001-000000000001',
   enriched:   '00000000-0000-0000-0001-000000000002',
