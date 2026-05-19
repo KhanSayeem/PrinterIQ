@@ -68,6 +68,11 @@ class RecordingConnection:
         self.args.append(args)
         return self.fetchval_result
 
+    async def fetchrow(self, query: str, *args: object) -> object:
+        self.queries.append(query)
+        self.args.append(args)
+        return None
+
     async def execute(self, query: str, *args: object) -> object:
         self.queries.append(query)
         self.args.append(args)
