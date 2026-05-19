@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Literal, Protocol, cast
 from uuid import UUID
 
@@ -288,6 +289,88 @@ async def update_lead_status(
         lead_id,
         status,
     )
+
+
+@dataclass(frozen=True)
+class QualificationInsert:
+    lead_id: UUID
+    tenant_id: UUID
+    score: int
+    rationale: str
+    top_weakness: str
+    subject_line: str | None
+    personalised_opener: str | None
+    followup_1: str | None
+    followup_2: str | None
+    model_haiku: str
+    model_sonnet: str | None
+    cost_usd: Decimal
+    prompt_version: str
+
+
+async def get_enrichment_by_lead_id(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        SELECT id, lead_id, tenant_id,
+               has_site, is_reachable, is_mobile_friendly,
+               has_ssl, has_meta_title, has_meta_description, has_h1,
+               load_ms, lighthouse_mobile_score, cms_detected,
+               tech_source, weaknesses, raw_audit
+        FROM enrichments
+        WHERE tenant_id = $1
+          AND lead_id = $2
+        """,
+        tenant_id,
+        lead_id,
+    )
+    if result is None:
+        raise LookupError(f"Enrichment for lead {lead_id} not found for tenant {tenant_id}")
+    return dict(cast(Mapping[str, object], result))
+
+
+async def insert_qualification(
+    connection: DatabaseConnection,
+    q: QualificationInsert,
+) -> UUID:
+    raw_id = await connection.fetchval(
+        """
+        INSERT INTO qualifications (
+          lead_id, tenant_id,
+          score, rationale, top_weakness,
+          subject_line, personalised_opener, followup_1, followup_2,
+          model_haiku, model_sonnet,
+          cost_usd, prompt_version
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9,
+          $10, $11, $12, $13
+        )
+        RETURNING id
+        """,
+        q.lead_id,
+        q.tenant_id,
+        q.score,
+        q.rationale,
+        q.top_weakness,
+        q.subject_line,
+        q.personalised_opener,
+        q.followup_1,
+        q.followup_2,
+        q.model_haiku,
+        q.model_sonnet,
+        q.cost_usd,
+        q.prompt_version,
+    )
+    if isinstance(raw_id, UUID):
+        return raw_id
+    if isinstance(raw_id, str):
+        return UUID(raw_id)
+    raise TypeError(f"Expected qualification UUID, got {type(raw_id).__name__}")
 
 
 async def create_queue_job(connection: DatabaseConnection, insert: QueueJobInsert) -> UUID:
