@@ -306,6 +306,12 @@ def test_insert_enrichment_writes_tenant_scoped_row() -> None:
         assert inserted_id == enrichment_id
         q = connection.queries[0]
         assert "INSERT INTO enrichments" in q
+        assert "SELECT" in q
+        assert "FROM leads" in q
+        assert "WHERE id = $1" in q
+        assert "tenant_id = $2" in q
+        assert "ON CONFLICT (lead_id) DO UPDATE" in q
+        assert "enrichments.tenant_id = EXCLUDED.tenant_id" in q
         assert "tenant_id" in q
         assert "tech_source" in q
         assert connection.args[0][0] == LEAD_ID
@@ -329,6 +335,7 @@ def test_update_lead_status_is_tenant_scoped() -> None:
         assert "UPDATE leads" in q
         assert "tenant_id = $" in q
         assert "id = $" in q
+        assert "status IN ('imported')" in q
         assert "enriched" in connection.args[0]
 
     asyncio.run(scenario())

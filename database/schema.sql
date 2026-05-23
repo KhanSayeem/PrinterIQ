@@ -103,7 +103,7 @@ CREATE TABLE outreach_sends (
   tenant_id             UUID NOT NULL REFERENCES tenants(tenant_id),
   -- Instantly references
   instantly_lead_id     TEXT,
-  instantly_campaign_id TEXT,
+  instantly_campaign_id TEXT NOT NULL,
   -- Send metadata
   channel               TEXT NOT NULL DEFAULT 'email',
   step                  INTEGER NOT NULL DEFAULT 1,
@@ -174,3 +174,16 @@ CREATE TABLE queue_jobs (
   completed_at    TIMESTAMPTZ,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX queue_jobs_active_lead_job_idx
+ON queue_jobs (tenant_id, lead_id, job_type)
+WHERE lead_id IS NOT NULL
+  AND status IN ('pending', 'active', 'failed');
+
+CREATE UNIQUE INDEX queue_jobs_active_tenant_job_idx
+ON queue_jobs (tenant_id, job_type)
+WHERE lead_id IS NULL
+  AND status IN ('pending', 'active', 'failed');
+
+CREATE UNIQUE INDEX outreach_sends_tenant_lead_campaign_channel_idx
+ON outreach_sends (tenant_id, lead_id, instantly_campaign_id, channel);
