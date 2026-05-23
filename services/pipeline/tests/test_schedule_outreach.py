@@ -1,0 +1,255 @@
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from uuid import UUID
+
+import pytest
+
+from pipeline_queue.definitions import JobType
+from workers.schedule_outreach import schedule_outreach
+
+TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
+LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
+
+
+@dataclass
+class FakeLeadFetcher:
+    lead: dict[str, object]
+
+    async def get_lead(self, *, tenant_id: UUID, lead_id: UUID) -> dict[str, object]:
+        assert tenant_id == TENANT_ID
+        assert lead_id == LEAD_ID
+        return self.lead
+
+
+@dataclass
+class FakeQualificationFetcher:
+    qualification: dict[str, object]
+
+    async def get_qualification(self, *, tenant_id: UUID, lead_id: UUID) -> dict[str, object]:
+        assert tenant_id == TENANT_ID
+        assert lead_id == LEAD_ID
+        return self.qualification
+
+
+@dataclass
+class FakeOutreachRepository:
+    inserted: list[dict[str, object]] = field(default_factory=list)
+    updates: list[tuple[UUID, UUID]] = field(default_factory=list)
+    existing: dict[str, object] | None = None
+
+    async def get_outreach_send(
+        self,
+        *,
+        tenant_id: UUID,
+        lead_id: UUID,
+        instantly_campaign_id: str,
+        channel: str,
+    ) -> dict[str, object] | None:
+        return self.existing
+
+    async def insert_outreach_send(self, send: dict[str, object]) -> UUID:
+        self.inserted.append(send)
+        return UUID("30000000-0000-0000-0000-000000000003")
+
+    async def mark_lead_contacted(self, *, tenant_id: UUID, lead_id: UUID) -> bool:
+        self.updates.append((tenant_id, lead_id))
+        return True
+
+
+@dataclass
+class FakeInstantlyClient:
+    result: dict[str, object] | Exception
+    calls: list[dict[str, object]] = field(default_factory=list)
+
+    async def add_lead_to_campaign(self, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(payload)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _lead() -> dict[str, object]:
+    return {
+        "id": LEAD_ID,
+        "tenant_id": TENANT_ID,
+        "email": "brett@stonebuilders.com.au",
+        "first_name": "Brett",
+        "last_name": "Stone",
+        "business_name": "Stone Builders",
+        "website_url": "https://stonebuilders.com.au",
+        "phone": "+61400000001",
+        "status": "qualified",
+    }
+
+
+def _qualification() -> dict[str, object]:
+    return {
+        "lead_id": LEAD_ID,
+        "tenant_id": TENANT_ID,
+        "top_weakness": "no_mobile",
+        "personalised_opener": "Brett, your site is hard to use on mobile.",
+        "followup_1": "Worth fixing before the next batch of quote requests.",
+        "followup_2": "Happy to show what a fast tradie site can look like.",
+    }
+
+
+def _payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "job_type": JobType.SCHEDULE_OUTREACH.value,
+        "tenant_id": str(TENANT_ID),
+        "lead_id": str(LEAD_ID),
+        "campaign_id": "campaign-from-payload",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+        instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
+
+        await schedule_outreach(
+            _payload(channel="email", send_after="2026-05-20T09:00:00+10:00"),
+            lead_fetcher=FakeLeadFetcher(_lead()),
+            qualification_fetcher=FakeQualificationFetcher(_qualification()),
+            outreach_repo=repo,
+            instantly_client=instantly,
+        )
+
+        assert instantly.calls == [
+            {
+                "campaign": "campaign-from-payload",
+                "email": "brett@stonebuilders.com.au",
+                "personalization": "Brett, your site is hard to use on mobile.",
+                "website": "https://stonebuilders.com.au",
+                "first_name": "Brett",
+                "last_name": "Stone",
+                "company_name": "Stone Builders",
+                "phone": "+61400000001",
+                "custom_variables": {
+                    "opener": "Brett, your site is hard to use on mobile.",
+                    "weakness": "no_mobile",
+                    "followup_1": "Worth fixing before the next batch of quote requests.",
+                    "followup_2": "Happy to show what a fast tradie site can look like.",
+                    "lead_id": str(LEAD_ID),
+                },
+            }
+        ]
+        assert repo.inserted == [
+            {
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+                "instantly_campaign_id": "campaign-from-payload",
+                "instantly_lead_id": "instantly-lead-1",
+                "channel": "email",
+            }
+        ]
+        assert repo.updates == [(TENANT_ID, LEAD_ID)]
+
+    asyncio.run(scenario())
+
+
+def test_existing_outreach_send_marks_contacted_without_calling_instantly_again() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository(
+            existing={
+                "id": UUID("30000000-0000-0000-0000-000000000003"),
+                "instantly_lead_id": "instantly-lead-1",
+            }
+        )
+        instantly = FakeInstantlyClient(result={"id": "unused"})
+
+        await schedule_outreach(
+            _payload(),
+            lead_fetcher=FakeLeadFetcher(_lead()),
+            qualification_fetcher=FakeQualificationFetcher(_qualification()),
+            outreach_repo=repo,
+            instantly_client=instantly,
+        )
+
+        assert instantly.calls == []
+        assert repo.inserted == []
+        assert repo.updates == [(TENANT_ID, LEAD_ID)]
+
+    asyncio.run(scenario())
+
+
+def test_instantly_failure_writes_no_outreach_and_does_not_mark_contacted() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+
+        with pytest.raises(RuntimeError, match="Instantly unavailable"):
+            await schedule_outreach(
+                _payload(),
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=repo,
+                instantly_client=FakeInstantlyClient(result=RuntimeError("Instantly unavailable")),
+            )
+
+        assert repo.inserted == []
+        assert repo.updates == []
+
+    asyncio.run(scenario())
+
+
+def test_missing_default_campaign_id_fails_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        monkeypatch.delenv("INSTANTLY_CAMPAIGN_ID", raising=False)
+
+        with pytest.raises(ValueError, match="campaign_id missing"):
+            await schedule_outreach(
+                {
+                    "job_type": JobType.SCHEDULE_OUTREACH.value,
+                    "tenant_id": str(TENANT_ID),
+                    "lead_id": str(LEAD_ID),
+                },
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=FakeOutreachRepository(),
+                instantly_client=FakeInstantlyClient(result={"id": "unused"}),
+            )
+
+    asyncio.run(scenario())
+
+
+def test_campaign_id_defaults_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-from-env")
+        instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
+
+        await schedule_outreach(
+            {
+                "job_type": JobType.SCHEDULE_OUTREACH.value,
+                "tenant_id": str(TENANT_ID),
+                "lead_id": str(LEAD_ID),
+            },
+            lead_fetcher=FakeLeadFetcher(_lead()),
+            qualification_fetcher=FakeQualificationFetcher(_qualification()),
+            outreach_repo=FakeOutreachRepository(),
+            instantly_client=instantly,
+        )
+
+        assert instantly.calls[0]["campaign"] == "campaign-from-env"
+
+    asyncio.run(scenario())
+
+
+def test_worker_refuses_qualification_without_personalised_opener() -> None:
+    async def scenario() -> None:
+        qualification = _qualification()
+        qualification["personalised_opener"] = ""
+
+        with pytest.raises(ValueError, match="personalised_opener"):
+            await schedule_outreach(
+                _payload(),
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(qualification),
+                outreach_repo=FakeOutreachRepository(),
+                instantly_client=FakeInstantlyClient(result={"id": "unused"}),
+            )
+
+    asyncio.run(scenario())

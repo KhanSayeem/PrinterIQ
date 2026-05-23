@@ -58,6 +58,7 @@ async def run_tracked_job[ResultT](
         await store.update_queue_job(
             QueueJobUpdate(
                 job_id=job_id,
+                tenant_id=tenant_id,
                 status="dead" if should_dead_letter(attempt_count, max_attempts) else "failed",
                 attempt_count=attempt_count,
                 error_message=str(exc),
@@ -68,6 +69,7 @@ async def run_tracked_job[ResultT](
     await store.update_queue_job(
         QueueJobUpdate(
             job_id=job_id,
+            tenant_id=tenant_id,
             status="completed",
             attempt_count=attempt_count,
             error_message=None,

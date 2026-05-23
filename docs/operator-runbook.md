@@ -86,6 +86,28 @@ redis-cli
 > LLEN bull:replies:wait     # jobs waiting in replies queue
 ```
 
+## Local smoke testing
+
+Local Redis and orchestrator smoke tests are safe to run while domains and mailboxes are warming up. Start local Redis with:
+
+```powershell
+docker start printeriq-redis
+```
+
+Then run the orchestrator smoke test:
+
+```bash
+python -m src.workers.orchestrator
+```
+
+This only checks Redis connectivity, registered workers, concurrency settings, and pending queue count. It does not send emails.
+
+Do not run live `schedule_outreach` smoke tests until warmup is complete and a paused dev/test Instantly campaign ID is configured:
+
+```env
+INSTANTLY_CAMPAIGN_ID=<paused_dev_campaign_id>
+```
+
 ## Monitor escalation SMSes
 
 Escalation SMSes go to `+61 400 457 006`. If you receive one:

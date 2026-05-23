@@ -4,10 +4,18 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, SupportsInt, cast
 from uuid import UUID
 
 QueueJobStatus = Literal["active", "completed", "failed", "dead"]
+_ALLOWED_STATUS_PREDECESSORS: dict[str, tuple[str, ...]] = {
+    "enriched": ("imported",),
+    "qualified": ("enriched",),
+    "contacted": ("qualified",),
+    "replied": ("contacted",),
+    "paid": ("replied",),
+    "archived": ("enriched", "qualified", "contacted", "replied"),
+}
 
 
 class DatabaseConnection(Protocol):
@@ -34,6 +42,7 @@ class QueueJobInsert:
 @dataclass(frozen=True)
 class QueueJobUpdate:
     job_id: UUID
+    tenant_id: UUID
     status: QueueJobStatus
     attempt_count: int
     error_message: str | None = None
@@ -105,6 +114,106 @@ class LeadStore:
                 status=str(lead["status"]),
             ),
         )
+
+
+class PipelineStore:
+    def __init__(self, connection: DatabaseConnection) -> None:
+        self._connection = connection
+
+    async def get_lead(self, *, tenant_id: UUID, lead_id: UUID) -> dict[str, object]:
+        return await get_lead_by_id(self._connection, tenant_id=tenant_id, lead_id=lead_id)
+
+    async def get_enrichment(self, *, tenant_id: UUID, lead_id: UUID) -> dict[str, object]:
+        return await get_enrichment_by_lead_id(
+            self._connection, tenant_id=tenant_id, lead_id=lead_id
+        )
+
+    async def get_qualification(self, *, tenant_id: UUID, lead_id: UUID) -> dict[str, object]:
+        return await get_qualification_by_lead_id(
+            self._connection, tenant_id=tenant_id, lead_id=lead_id
+        )
+
+    async def insert_enrichment(self, enrichment: dict[str, object]) -> UUID:
+        return await insert_enrichment(
+            self._connection,
+            EnrichmentInsert(
+                lead_id=cast(UUID, enrichment["lead_id"]),
+                tenant_id=cast(UUID, enrichment["tenant_id"]),
+                has_site=cast(bool | None, enrichment["has_site"]),
+                is_reachable=cast(bool | None, enrichment["is_reachable"]),
+                is_mobile_friendly=cast(bool | None, enrichment["is_mobile_friendly"]),
+                has_ssl=cast(bool | None, enrichment["has_ssl"]),
+                has_meta_title=cast(bool | None, enrichment["has_meta_title"]),
+                has_meta_description=cast(bool | None, enrichment["has_meta_description"]),
+                has_h1=cast(bool | None, enrichment["has_h1"]),
+                load_ms=cast(int | None, enrichment["load_ms"]),
+                lighthouse_mobile_score=cast(
+                    int | None, enrichment["lighthouse_mobile_score"]
+                ),
+                cms_detected=cast(str | None, enrichment["cms_detected"]),
+                tech_source=str(enrichment["tech_source"]),
+                weaknesses=cast(list[str], enrichment["weaknesses"]),
+                raw_audit=cast(dict[str, object], enrichment["raw_audit"] or {}),
+            ),
+        )
+
+    async def insert_qualification(self, q: dict[str, object]) -> UUID:
+        return await insert_qualification(
+            self._connection,
+            QualificationInsert(
+                lead_id=cast(UUID, q["lead_id"]),
+                tenant_id=cast(UUID, q["tenant_id"]),
+                score=int(cast(SupportsInt, q["score"])),
+                rationale=str(q["rationale"]),
+                top_weakness=str(q["top_weakness"]),
+                subject_line=cast(str | None, q["subject_line"]),
+                personalised_opener=cast(str | None, q["personalised_opener"]),
+                followup_1=cast(str | None, q["followup_1"]),
+                followup_2=cast(str | None, q["followup_2"]),
+                model_haiku=str(q["model_haiku"]),
+                model_sonnet=cast(str | None, q["model_sonnet"]),
+                cost_usd=cast(Decimal, q["cost_usd"]),
+                prompt_version=str(q["prompt_version"]),
+            ),
+        )
+
+    async def insert_outreach_send(self, send: dict[str, object]) -> UUID:
+        return await insert_outreach_send(
+            self._connection,
+            OutreachSendInsert(
+                tenant_id=cast(UUID, send["tenant_id"]),
+                lead_id=cast(UUID, send["lead_id"]),
+                instantly_campaign_id=str(send["instantly_campaign_id"]),
+                instantly_lead_id=str(send["instantly_lead_id"]),
+                channel=str(send["channel"]),
+            ),
+        )
+
+    async def get_outreach_send(
+        self,
+        *,
+        tenant_id: UUID,
+        lead_id: UUID,
+        instantly_campaign_id: str,
+        channel: str,
+    ) -> dict[str, object] | None:
+        return await get_outreach_send_by_lead_campaign_channel(
+            self._connection,
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            instantly_campaign_id=instantly_campaign_id,
+            channel=channel,
+        )
+
+    async def update_lead_status(
+        self, *, tenant_id: UUID, lead_id: UUID, status: str
+    ) -> None:
+        await update_lead_status(
+            self._connection, tenant_id=tenant_id, lead_id=lead_id, status=status
+        )
+
+    async def mark_lead_contacted(self, *, tenant_id: UUID, lead_id: UUID) -> bool:
+        return await mark_lead_contacted(self._connection, tenant_id=tenant_id, lead_id=lead_id)
 
 
 async def lead_email_exists(
@@ -214,6 +323,7 @@ async def get_lead_by_id(
     result = await connection.fetchrow(
         """
         SELECT id, tenant_id, email, website_url, technologies, status,
+               phone,
                first_name, last_name, business_name, city, state
         FROM leads
         WHERE tenant_id = $1
@@ -242,10 +352,30 @@ async def insert_enrichment(
           load_ms, lighthouse_mobile_score, cms_detected,
           tech_source, weaknesses, raw_audit
         )
-        VALUES (
+        SELECT
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14::jsonb, $15::jsonb
-        )
+        FROM leads
+        WHERE id = $1
+          AND tenant_id = $2
+          AND is_deleted = FALSE
+        ON CONFLICT (lead_id) DO UPDATE
+        SET tenant_id = EXCLUDED.tenant_id,
+            has_site = EXCLUDED.has_site,
+            is_reachable = EXCLUDED.is_reachable,
+            is_mobile_friendly = EXCLUDED.is_mobile_friendly,
+            has_ssl = EXCLUDED.has_ssl,
+            has_meta_title = EXCLUDED.has_meta_title,
+            has_meta_description = EXCLUDED.has_meta_description,
+            has_h1 = EXCLUDED.has_h1,
+            load_ms = EXCLUDED.load_ms,
+            lighthouse_mobile_score = EXCLUDED.lighthouse_mobile_score,
+            cms_detected = EXCLUDED.cms_detected,
+            tech_source = EXCLUDED.tech_source,
+            weaknesses = EXCLUDED.weaknesses,
+            raw_audit = EXCLUDED.raw_audit,
+            analysed_at = NOW()
+        WHERE enrichments.tenant_id = EXCLUDED.tenant_id
         RETURNING id
         """,
         enrichment.lead_id,
@@ -278,12 +408,17 @@ async def update_lead_status(
     lead_id: UUID,
     status: str,
 ) -> None:
+    previous_statuses = _ALLOWED_STATUS_PREDECESSORS.get(status)
+    if previous_statuses is None:
+        raise ValueError(f"Unsupported lead status transition target: {status}")
+    previous_status_literals = ", ".join(f"'{item}'" for item in previous_statuses)
     await connection.execute(
-        """
+        f"""
         UPDATE leads
         SET status = $3
         WHERE tenant_id = $1
           AND id = $2
+          AND status IN ({previous_status_literals})
         """,
         tenant_id,
         lead_id,
@@ -346,10 +481,28 @@ async def insert_qualification(
           model_haiku, model_sonnet,
           cost_usd, prompt_version
         )
-        VALUES (
+        SELECT
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13
-        )
+        FROM leads
+        WHERE id = $1
+          AND tenant_id = $2
+          AND is_deleted = FALSE
+        ON CONFLICT (lead_id) DO UPDATE
+        SET tenant_id = EXCLUDED.tenant_id,
+            score = EXCLUDED.score,
+            rationale = EXCLUDED.rationale,
+            top_weakness = EXCLUDED.top_weakness,
+            subject_line = EXCLUDED.subject_line,
+            personalised_opener = EXCLUDED.personalised_opener,
+            followup_1 = EXCLUDED.followup_1,
+            followup_2 = EXCLUDED.followup_2,
+            model_haiku = EXCLUDED.model_haiku,
+            model_sonnet = EXCLUDED.model_sonnet,
+            cost_usd = EXCLUDED.cost_usd,
+            prompt_version = EXCLUDED.prompt_version,
+            qualified_at = NOW()
+        WHERE qualifications.tenant_id = EXCLUDED.tenant_id
         RETURNING id
         """,
         q.lead_id,
@@ -373,8 +526,157 @@ async def insert_qualification(
     raise TypeError(f"Expected qualification UUID, got {type(raw_id).__name__}")
 
 
+async def get_qualification_by_lead_id(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        SELECT id, lead_id, tenant_id,
+               score, rationale, top_weakness,
+               subject_line, personalised_opener, followup_1, followup_2,
+               model_haiku, model_sonnet, cost_usd, prompt_version,
+               qualified_at
+        FROM qualifications
+        WHERE tenant_id = $1
+          AND lead_id = $2
+        """,
+        tenant_id,
+        lead_id,
+    )
+    if result is None:
+        raise LookupError(f"Qualification for lead {lead_id} not found for tenant {tenant_id}")
+    return dict(cast(Mapping[str, object], result))
+
+
+@dataclass(frozen=True)
+class OutreachSendInsert:
+    tenant_id: UUID
+    lead_id: UUID
+    instantly_campaign_id: str
+    instantly_lead_id: str
+    channel: str
+
+
+async def insert_outreach_send(
+    connection: DatabaseConnection,
+    send: OutreachSendInsert,
+) -> UUID:
+    raw_id = await connection.fetchval(
+        """
+        WITH existing_send AS (
+          SELECT id
+          FROM outreach_sends
+          WHERE tenant_id = $1
+            AND lead_id = $2
+            AND instantly_campaign_id = $4
+            AND channel = $5
+        ),
+        inserted_send AS (
+        INSERT INTO outreach_sends (
+          tenant_id,
+          lead_id,
+          instantly_lead_id,
+          instantly_campaign_id,
+          channel,
+          sent_at
+        )
+        SELECT $1, $2, $3, $4, $5, NOW()
+        FROM leads
+        WHERE tenant_id = $1
+          AND id = $2
+          AND status = 'qualified'
+          AND is_deleted = FALSE
+          AND NOT EXISTS (SELECT 1 FROM existing_send)
+        ON CONFLICT (tenant_id, lead_id, instantly_campaign_id, channel)
+        DO UPDATE
+        SET instantly_lead_id = outreach_sends.instantly_lead_id
+        RETURNING id
+        )
+        SELECT id FROM inserted_send
+        UNION ALL
+        SELECT id FROM existing_send
+        LIMIT 1
+        """,
+        send.tenant_id,
+        send.lead_id,
+        send.instantly_lead_id,
+        send.instantly_campaign_id,
+        send.channel,
+    )
+    if isinstance(raw_id, UUID):
+        return raw_id
+    if isinstance(raw_id, str):
+        return UUID(raw_id)
+    if raw_id is None:
+        raise LookupError(f"Qualified lead {send.lead_id} not found for tenant {send.tenant_id}")
+    raise TypeError(f"Expected outreach_sends UUID, got {type(raw_id).__name__}")
+
+
+async def get_outreach_send_by_lead_campaign_channel(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+    instantly_campaign_id: str,
+    channel: str,
+) -> dict[str, object] | None:
+    result = await connection.fetchrow(
+        """
+        SELECT id, tenant_id, lead_id,
+               instantly_lead_id, instantly_campaign_id,
+               channel, sent_at
+        FROM outreach_sends
+        WHERE tenant_id = $1
+          AND lead_id = $2
+          AND instantly_campaign_id = $3
+          AND channel = $4
+        """,
+        tenant_id,
+        lead_id,
+        instantly_campaign_id,
+        channel,
+    )
+    if result is None:
+        return None
+    return dict(cast(Mapping[str, object], result))
+
+
+async def mark_lead_contacted(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+) -> bool:
+    result = await connection.execute(
+        """
+        UPDATE leads
+        SET status = 'contacted'
+        WHERE tenant_id = $1
+          AND id = $2
+          AND status = 'qualified'
+        """,
+        tenant_id,
+        lead_id,
+    )
+    return str(result).upper() == "UPDATE 1"
+
+
 async def create_queue_job(connection: DatabaseConnection, insert: QueueJobInsert) -> UUID:
-    raw_job_id = await connection.fetchval(
+    if insert.lead_id is None:
+        existing = await _create_queue_job_without_lead(connection, insert)
+    else:
+        existing = await _create_queue_job_for_lead(connection, insert)
+    return _coerce_uuid(existing, "queue job")
+
+
+async def _create_queue_job_for_lead(
+    connection: DatabaseConnection,
+    insert: QueueJobInsert,
+) -> object:
+    return await connection.fetchval(
         """
         INSERT INTO queue_jobs (
           tenant_id,
@@ -386,7 +688,20 @@ async def create_queue_job(connection: DatabaseConnection, insert: QueueJobInser
           payload,
           started_at
         )
-        VALUES ($1, $2, $3, 'active', $4, $5, $6::jsonb, NOW())
+        SELECT $1, $2, $3, 'active', $4, $5, $6::jsonb, NOW()
+        FROM leads
+        WHERE leads.id = $2
+          AND leads.tenant_id = $1
+          AND leads.is_deleted = FALSE
+        ON CONFLICT (tenant_id, lead_id, job_type)
+        WHERE lead_id IS NOT NULL
+          AND status IN ('pending', 'active', 'failed')
+        DO UPDATE
+        SET status = EXCLUDED.status,
+            attempt_count = EXCLUDED.attempt_count,
+            max_attempts = EXCLUDED.max_attempts,
+            payload = EXCLUDED.payload,
+            started_at = NOW()
         RETURNING id
         """,
         insert.tenant_id,
@@ -394,13 +709,52 @@ async def create_queue_job(connection: DatabaseConnection, insert: QueueJobInser
         insert.job_type,
         insert.attempt_count,
         insert.max_attempts,
-        dict(insert.payload),
+        json.dumps(dict(insert.payload)),
     )
-    if isinstance(raw_job_id, UUID):
-        return raw_job_id
-    if isinstance(raw_job_id, str):
-        return UUID(raw_job_id)
-    raise TypeError(f"Expected queue job UUID, got {type(raw_job_id).__name__}")
+
+
+async def _create_queue_job_without_lead(
+    connection: DatabaseConnection,
+    insert: QueueJobInsert,
+) -> object:
+    return await connection.fetchval(
+        """
+        INSERT INTO queue_jobs (
+          tenant_id,
+          lead_id,
+          job_type,
+          status,
+          attempt_count,
+          max_attempts,
+          payload,
+          started_at
+        )
+        VALUES ($1, NULL, $2, 'active', $3, $4, $5::jsonb, NOW())
+        ON CONFLICT (tenant_id, job_type)
+        WHERE lead_id IS NULL
+          AND status IN ('pending', 'active', 'failed')
+        DO UPDATE
+        SET status = EXCLUDED.status,
+            attempt_count = EXCLUDED.attempt_count,
+            max_attempts = EXCLUDED.max_attempts,
+            payload = EXCLUDED.payload,
+            started_at = NOW()
+        RETURNING id
+        """,
+        insert.tenant_id,
+        insert.job_type,
+        insert.attempt_count,
+        insert.max_attempts,
+        json.dumps(dict(insert.payload)),
+    )
+
+
+def _coerce_uuid(raw_id: object, label: str) -> UUID:
+    if isinstance(raw_id, UUID):
+        return raw_id
+    if isinstance(raw_id, str):
+        return UUID(raw_id)
+    raise TypeError(f"Expected {label} UUID, got {type(raw_id).__name__}")
 
 
 async def update_queue_job(connection: DatabaseConnection, update: QueueJobUpdate) -> None:
@@ -408,13 +762,15 @@ async def update_queue_job(connection: DatabaseConnection, update: QueueJobUpdat
     await connection.execute(
         f"""
         UPDATE queue_jobs
-        SET status = $2,
-            attempt_count = $3,
-            error_message = $4
+        SET status = $3,
+            attempt_count = $4,
+            error_message = $5
             {completed_fragment}
         WHERE id = $1
+          AND tenant_id = $2
         """,
         update.job_id,
+        update.tenant_id,
         update.status,
         update.attempt_count,
         update.error_message,

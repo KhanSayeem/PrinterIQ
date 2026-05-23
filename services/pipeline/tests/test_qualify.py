@@ -378,6 +378,12 @@ def test_insert_qualification_writes_tenant_scoped_row() -> None:
         assert inserted_id == qual_id
         q = conn.queries[0]
         assert "INSERT INTO qualifications" in q
+        assert "SELECT" in q
+        assert "FROM leads" in q
+        assert "WHERE id = $1" in q
+        assert "tenant_id = $2" in q
+        assert "ON CONFLICT (lead_id) DO UPDATE" in q
+        assert "qualifications.tenant_id = EXCLUDED.tenant_id" in q
         assert "tenant_id" in q
         assert "lead_id" in q
         assert conn.args[0][0] == LEAD_ID
