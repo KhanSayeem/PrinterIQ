@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
+from env import load_pipeline_env
 from pipeline_queue.definitions import JobType
 
 logger = logging.getLogger(__name__)
@@ -14,6 +18,10 @@ logger = logging.getLogger(__name__)
 _HAIKU_PROMPT = "qualify-v1"
 _SONNET_PROMPT = "opener-v1"
 _PROMPT_VERSION = "qualify-v1"
+_DEFAULT_CHANNEL = "email"
+_SEND_WINDOW_TZ = ZoneInfo("Australia/Sydney")
+_SEND_WINDOW_START = time(hour=9)
+_SEND_WINDOW_END = time(hour=17)
 
 _HAIKU_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -190,6 +198,9 @@ async def qualify_lead(
             "job_type": JobType.SCHEDULE_OUTREACH.value,
             "tenant_id": str(tenant_id),
             "lead_id": str(lead_id),
+            "campaign_id": _campaign_id(payload),
+            "channel": str(payload.get("channel", _DEFAULT_CHANNEL)),
+            "send_after": _send_after(payload),
         }
     )
 
@@ -208,3 +219,48 @@ def _parse_and_validate(text: str, schema: dict[str, Any]) -> dict[str, Any] | N
     except jsonschema.ValidationError:
         return None
     return raw
+
+
+def _campaign_id(payload: dict[str, object]) -> str:
+    raw_campaign_id = payload.get("campaign_id")
+    if raw_campaign_id is not None and str(raw_campaign_id).strip():
+        return str(raw_campaign_id)
+
+    load_pipeline_env()
+    env_campaign_id = os.getenv("INSTANTLY_CAMPAIGN_ID")
+    if env_campaign_id:
+        return env_campaign_id
+    raise ValueError("campaign_id missing from qualify_lead payload")
+
+
+def _next_send_after(now: datetime | None = None) -> datetime:
+    current = now.astimezone(_SEND_WINDOW_TZ) if now else datetime.now(_SEND_WINDOW_TZ)
+    if _is_send_window(current):
+        return current
+
+    candidate = current
+    if candidate.time() >= _SEND_WINDOW_END:
+        candidate += timedelta(days=1)
+    candidate = candidate.replace(
+        hour=_SEND_WINDOW_START.hour,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _is_send_window(value: datetime) -> bool:
+    return value.weekday() < 5 and _SEND_WINDOW_START <= value.time() < _SEND_WINDOW_END
+
+
+def _send_after(payload: dict[str, object]) -> str:
+    raw_send_after = payload.get("send_after")
+    if raw_send_after is None:
+        return _next_send_after().isoformat()
+    parsed = datetime.fromisoformat(str(raw_send_after))
+    if parsed.tzinfo is None:
+        raise ValueError("send_after must include timezone")
+    return str(raw_send_after)

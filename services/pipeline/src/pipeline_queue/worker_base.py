@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 from uuid import UUID
 
-from db.queries import QueueJobInsert, QueueJobUpdate
+from db.queries import QueueJobInsert, QueueJobLease, QueueJobUpdate
 from pipeline_queue.dead_letter import should_dead_letter
 from pipeline_queue.definitions import JobType
 
@@ -13,7 +13,7 @@ type JobHandler[ResultT] = Callable[[dict[str, object]], Awaitable[ResultT]]
 
 
 class QueueJobRepository(Protocol):
-    async def create_queue_job(self, insert: QueueJobInsert) -> UUID:
+    async def create_queue_job(self, insert: QueueJobInsert) -> QueueJobLease:
         """Persist the running queue job and return its database id."""
 
     async def update_queue_job(self, update: QueueJobUpdate) -> None:
@@ -36,12 +36,12 @@ async def run_tracked_job[ResultT](
     handler: JobHandler[ResultT],
     attempt_count: int = 1,
     max_attempts: int = 5,
-) -> ResultT:
+) -> ResultT | None:
     normalised_payload = dict(payload)
     tenant_id = _required_uuid(normalised_payload, "tenant_id")
     lead_id = _optional_uuid(normalised_payload, "lead_id")
 
-    job_id = await store.create_queue_job(
+    lease = await store.create_queue_job(
         QueueJobInsert(
             job_type=job_type.value,
             tenant_id=tenant_id,
@@ -51,13 +51,15 @@ async def run_tracked_job[ResultT](
             attempt_count=attempt_count,
         )
     )
+    if not lease.acquired:
+        return None
 
     try:
         result = await handler(normalised_payload)
     except Exception as exc:
         await store.update_queue_job(
             QueueJobUpdate(
-                job_id=job_id,
+                job_id=lease.job_id,
                 tenant_id=tenant_id,
                 status="dead" if should_dead_letter(attempt_count, max_attempts) else "failed",
                 attempt_count=attempt_count,
@@ -68,7 +70,7 @@ async def run_tracked_job[ResultT](
 
     await store.update_queue_job(
         QueueJobUpdate(
-            job_id=job_id,
+            job_id=lease.job_id,
             tenant_id=tenant_id,
             status="completed",
             attempt_count=attempt_count,

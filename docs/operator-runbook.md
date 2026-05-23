@@ -97,7 +97,7 @@ docker start printeriq-redis
 Then run the orchestrator smoke test:
 
 ```bash
-python -m src.workers.orchestrator
+python -m src.workers.orchestrator --smoke
 ```
 
 This only checks Redis connectivity, registered workers, concurrency settings, and pending queue count. It does not send emails.

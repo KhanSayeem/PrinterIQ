@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
+
+import pytest
 
 from db.queries import (
     QualificationInsert,
@@ -175,13 +178,15 @@ def _sonnet_response() -> ClaudeResponse:
     return ClaudeResponse(text=content, cost_usd=SONNET_COST, model=SONNET_MODEL)
 
 
-def _payload(score_threshold: int = 40) -> dict[str, object]:
-    return {
+def _payload(score_threshold: int = 40, **overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
         "job_type": JobType.QUALIFY_LEAD.value,
         "tenant_id": str(TENANT_ID),
         "lead_id": str(LEAD_ID),
         "score_threshold": score_threshold,
     }
+    payload.update(overrides)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +225,11 @@ def test_below_threshold_archives_lead_without_sonnet_call() -> None:
     asyncio.run(scenario())
 
 
-def test_above_threshold_qualifies_lead_calls_sonnet_enqueues_outreach() -> None:
+def test_above_threshold_qualifies_lead_calls_sonnet_enqueues_outreach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-from-env")
         fetcher = FakeLeadFetcher(lead=_make_lead())
         enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
         repo = FakeQualificationRepository()
@@ -244,9 +252,57 @@ def test_above_threshold_qualifies_lead_calls_sonnet_enqueues_outreach() -> None
         assert q["personalised_opener"] is not None
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
         assert len(queue.jobs) == 1
-        assert queue.jobs[0]["job_type"] == JobType.SCHEDULE_OUTREACH.value
+        outreach_payload = queue.jobs[0]
+        assert outreach_payload["job_type"] == JobType.SCHEDULE_OUTREACH.value
+        assert outreach_payload["tenant_id"] == str(TENANT_ID)
+        assert outreach_payload["lead_id"] == str(LEAD_ID)
+        assert outreach_payload["campaign_id"] == "campaign-from-env"
+        assert outreach_payload["channel"] == "email"
+        assert isinstance(outreach_payload["send_after"], str)
+        datetime.fromisoformat(outreach_payload["send_after"])
         assert len(client.calls) == 2
         assert client.calls[1][0] == "opener-v1"
+
+    asyncio.run(scenario())
+
+
+def test_outreach_campaign_id_can_come_from_qualify_payload() -> None:
+    async def scenario() -> None:
+        queue = FakeOutreachQueue()
+
+        await qualify_lead(
+            _payload(campaign_id="campaign-from-payload"),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=FakeQualificationRepository(),
+            outreach_queue=queue,
+            claude_client=FakeClaudeClient(
+                responses=[_haiku_response(score=75), _sonnet_response()]
+            ),
+        )
+
+        assert queue.jobs[0]["campaign_id"] == "campaign-from-payload"
+
+    asyncio.run(scenario())
+
+
+def test_outreach_send_after_preserves_qualify_payload_value() -> None:
+    async def scenario() -> None:
+        queue = FakeOutreachQueue()
+        send_after = "2026-05-25T09:30:00+10:00"
+
+        await qualify_lead(
+            _payload(campaign_id="campaign-from-payload", send_after=send_after),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=FakeQualificationRepository(),
+            outreach_queue=queue,
+            claude_client=FakeClaudeClient(
+                responses=[_haiku_response(score=75), _sonnet_response()]
+            ),
+        )
+
+        assert queue.jobs[0]["send_after"] == send_after
 
     asyncio.run(scenario())
 
@@ -290,7 +346,7 @@ def test_cost_usd_sums_haiku_and_sonnet() -> None:
         client = FakeClaudeClient(responses=[_haiku_response(score=75), _sonnet_response()])
 
         await qualify_lead(
-            _payload(score_threshold=40),
+            _payload(score_threshold=40, campaign_id="campaign-from-payload"),
             lead_fetcher=fetcher,
             enrichment_fetcher=enrichment,
             qualification_repo=repo,

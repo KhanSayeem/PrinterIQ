@@ -5,10 +5,15 @@ from uuid import UUID
 
 from db.queries import (
     OutreachSendInsert,
+    abandon_outreach_send_reservation,
+    acquire_outreach_send_lock,
+    complete_outreach_send,
     get_outreach_send_by_lead_campaign_channel,
     get_qualification_by_lead_id,
     insert_outreach_send,
     mark_lead_contacted,
+    release_outreach_send_lock,
+    reserve_outreach_send,
 )
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
@@ -124,6 +129,94 @@ def test_insert_outreach_send_returns_existing_send_for_replay_after_contacted()
     asyncio.run(scenario())
 
 
+def test_reserve_outreach_send_writes_tenant_scoped_pending_row() -> None:
+    async def scenario() -> None:
+        outreach_id = UUID("30000000-0000-0000-0000-000000000003")
+        conn = RecordingConnection(fetchval_result=outreach_id)
+
+        result = await reserve_outreach_send(
+            conn,
+            tenant_id=TENANT_ID,
+            lead_id=LEAD_ID,
+            instantly_campaign_id="campaign-123",
+            channel="email",
+        )
+
+        assert result == outreach_id
+        query = conn.queries[0]
+        assert "INSERT INTO outreach_sends" in query
+        assert "instantly_lead_id" not in query
+        assert "sent_at" not in query
+        assert "tenant_id = $1" in query
+        assert "id = $2" in query
+        assert "status = 'qualified'" in query
+        assert "ON CONFLICT" in query
+        assert "DO NOTHING" in query
+        assert conn.args[0] == (TENANT_ID, LEAD_ID, "campaign-123", "email")
+
+    asyncio.run(scenario())
+
+
+def test_complete_outreach_send_sets_instantly_id_and_sent_at_for_reserved_row() -> None:
+    async def scenario() -> None:
+        outreach_id = UUID("30000000-0000-0000-0000-000000000003")
+        conn = RecordingConnection(fetchval_result=outreach_id)
+
+        result = await complete_outreach_send(
+            conn,
+            OutreachSendInsert(
+                tenant_id=TENANT_ID,
+                lead_id=LEAD_ID,
+                instantly_campaign_id="campaign-123",
+                instantly_lead_id="instantly-lead-123",
+                channel="email",
+            ),
+        )
+
+        assert result == outreach_id
+        query = conn.queries[0]
+        assert "UPDATE outreach_sends" in query
+        assert "SET instantly_lead_id = $3" in query
+        assert "sent_at = NOW()" in query
+        assert "tenant_id = $1" in query
+        assert "lead_id = $2" in query
+        assert "instantly_campaign_id = $4" in query
+        assert "channel = $5" in query
+        assert conn.args[0] == (
+            TENANT_ID,
+            LEAD_ID,
+            "instantly-lead-123",
+            "campaign-123",
+            "email",
+        )
+
+    asyncio.run(scenario())
+
+
+def test_abandon_outreach_send_reservation_deletes_only_pending_tenant_row() -> None:
+    async def scenario() -> None:
+        conn = RecordingConnection()
+
+        await abandon_outreach_send_reservation(
+            conn,
+            tenant_id=TENANT_ID,
+            lead_id=LEAD_ID,
+            instantly_campaign_id="campaign-123",
+            channel="email",
+        )
+
+        query = conn.queries[0]
+        assert "DELETE FROM outreach_sends" in query
+        assert "tenant_id = $1" in query
+        assert "lead_id = $2" in query
+        assert "instantly_campaign_id = $3" in query
+        assert "channel = $4" in query
+        assert "instantly_lead_id IS NULL" in query
+        assert conn.args[0] == (TENANT_ID, LEAD_ID, "campaign-123", "email")
+
+    asyncio.run(scenario())
+
+
 def test_get_existing_outreach_send_is_tenant_scoped_by_campaign_and_channel() -> None:
     async def scenario() -> None:
         expected = {
@@ -169,5 +262,52 @@ def test_mark_lead_contacted_is_tenant_scoped_and_requires_qualified_status() ->
         assert "status = 'qualified'" in query
         assert conn.args[0] == (TENANT_ID, LEAD_ID)
         assert updated is True
+
+    asyncio.run(scenario())
+
+
+def test_acquire_outreach_send_lock_uses_tenant_scoped_lock_key() -> None:
+    async def scenario() -> None:
+        conn = RecordingConnection(fetchval_result=True)
+
+        acquired = await acquire_outreach_send_lock(
+            conn,
+            tenant_id=TENANT_ID,
+            lead_id=LEAD_ID,
+            instantly_campaign_id="campaign-123",
+            channel="email",
+        )
+
+        query = conn.queries[0]
+        assert "pg_try_advisory_lock" in query
+        assert "hashtextextended($1::text, 0)" in query
+        assert str(TENANT_ID) in str(conn.args[0][0])
+        assert str(LEAD_ID) in str(conn.args[0][0])
+        assert "campaign-123" in str(conn.args[0][0])
+        assert "email" in str(conn.args[0][0])
+        assert acquired is True
+
+    asyncio.run(scenario())
+
+
+def test_release_outreach_send_lock_uses_same_tenant_scoped_lock_key() -> None:
+    async def scenario() -> None:
+        conn = RecordingConnection(fetchval_result=True)
+
+        await release_outreach_send_lock(
+            conn,
+            tenant_id=TENANT_ID,
+            lead_id=LEAD_ID,
+            instantly_campaign_id="campaign-123",
+            channel="email",
+        )
+
+        query = conn.queries[0]
+        assert "pg_advisory_unlock" in query
+        assert "hashtextextended($1::text, 0)" in query
+        assert str(TENANT_ID) in str(conn.args[0][0])
+        assert str(LEAD_ID) in str(conn.args[0][0])
+        assert "campaign-123" in str(conn.args[0][0])
+        assert "email" in str(conn.args[0][0])
 
     asyncio.run(scenario())

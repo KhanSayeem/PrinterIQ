@@ -7,7 +7,13 @@ from uuid import UUID
 
 import pytest
 
-from db.queries import QueueJobInsert, QueueJobUpdate, create_queue_job, update_queue_job
+from db.queries import (
+    QueueJobInsert,
+    QueueJobLease,
+    QueueJobUpdate,
+    create_queue_job,
+    update_queue_job,
+)
 from pipeline_queue.definitions import JobType, QueueName, queue_for_job_type
 from pipeline_queue.worker_base import MissingTenantIdError, run_tracked_job
 
@@ -29,8 +35,9 @@ class FakeQueueJobStore:
         self.inserts: list[RecordedInsert] = []
         self.updates: list[QueueJobUpdate] = []
         self.next_job_id = UUID("20000000-0000-0000-0000-000000000001")
+        self.acquired = True
 
-    async def create_queue_job(self, insert: QueueJobInsert) -> UUID:
+    async def create_queue_job(self, insert: QueueJobInsert) -> QueueJobLease:
         self.inserts.append(
             RecordedInsert(
                 job_type=insert.job_type,
@@ -40,7 +47,7 @@ class FakeQueueJobStore:
                 max_attempts=insert.max_attempts,
             )
         )
-        return self.next_job_id
+        return QueueJobLease(job_id=self.next_job_id, acquired=self.acquired)
 
     async def update_queue_job(self, update: QueueJobUpdate) -> None:
         self.updates.append(update)
@@ -56,6 +63,8 @@ class RecordingConnection:
     async def fetchrow(self, query: str, *args: object) -> object:
         self.queries.append(query)
         self.args.append(args)
+        if self.fetchrow_result is None:
+            return {"id": self.next_job_id, "acquired": True}
         return self.fetchrow_result
 
     async def fetchval(self, query: str, *args: object) -> object:
@@ -123,7 +132,7 @@ def test_create_queue_job_reuses_existing_active_job_for_same_tenant_lead_and_ty
             ),
         )
 
-        assert result == existing_job_id
+        assert result == QueueJobLease(job_id=existing_job_id, acquired=True)
         query = connection.queries[0]
         assert "ON CONFLICT (tenant_id, lead_id, job_type)" in query
         assert "SELECT $1, $2, $3" in query
@@ -132,7 +141,65 @@ def test_create_queue_job_reuses_existing_active_job_for_same_tenant_lead_and_ty
         assert "leads.tenant_id = $1" in query
         assert "WHERE lead_id IS NOT NULL" in query
         assert "DO UPDATE" in query
-        assert "status = EXCLUDED.status" in query
+        assert "WHERE queue_jobs.status = 'failed'" in query
+        assert "acquired" in query
+
+    asyncio.run(scenario())
+
+
+def test_create_queue_job_reacquires_failed_job_for_retry() -> None:
+    async def scenario() -> None:
+        existing_job_id = UUID("40000000-0000-0000-0000-000000000001")
+        connection = RecordingConnection(fetchrow_result={"id": existing_job_id, "acquired": True})
+
+        result = await create_queue_job(
+            connection,
+            QueueJobInsert(
+                job_type="schedule_outreach",
+                tenant_id=UUID(TENANT_ID),
+                lead_id=UUID(LEAD_ID),
+                payload={
+                    "job_type": "schedule_outreach",
+                    "tenant_id": TENANT_ID,
+                    "lead_id": LEAD_ID,
+                    "attempt_count": 2,
+                },
+                max_attempts=5,
+                attempt_count=2,
+            ),
+        )
+
+        assert result == QueueJobLease(job_id=existing_job_id, acquired=True)
+        query = connection.queries[0]
+        assert "SET status = EXCLUDED.status" in query
+        assert "attempt_count = EXCLUDED.attempt_count" in query
+        assert "WHERE queue_jobs.status = 'failed'" in query
+
+    asyncio.run(scenario())
+
+
+def test_create_queue_job_reports_existing_active_job_without_acquiring_it() -> None:
+    async def scenario() -> None:
+        existing_job_id = UUID("40000000-0000-0000-0000-000000000001")
+        connection = RecordingConnection(fetchrow_result={"id": existing_job_id, "acquired": False})
+
+        result = await create_queue_job(
+            connection,
+            QueueJobInsert(
+                job_type="enrich_lead",
+                tenant_id=UUID(TENANT_ID),
+                lead_id=UUID(LEAD_ID),
+                payload={
+                    "job_type": "enrich_lead",
+                    "tenant_id": TENANT_ID,
+                    "lead_id": LEAD_ID,
+                },
+                max_attempts=5,
+                attempt_count=1,
+            ),
+        )
+
+        assert result == QueueJobLease(job_id=existing_job_id, acquired=False)
 
     asyncio.run(scenario())
 
@@ -210,6 +277,35 @@ def test_run_tracked_job_writes_active_and_completed_states() -> None:
         assert store.updates[0].tenant_id == UUID(TENANT_ID)
         assert store.updates[0].status == "completed"
         assert store.updates[0].error_message is None
+
+    asyncio.run(scenario())
+
+
+def test_run_tracked_job_skips_handler_for_existing_active_job() -> None:
+    async def scenario() -> None:
+        store = FakeQueueJobStore()
+        store.acquired = False
+        handled_payloads: list[dict[str, Any]] = []
+
+        async def handler(payload: dict[str, Any]) -> str:
+            handled_payloads.append(payload)
+            return "ok"
+
+        result = await run_tracked_job(
+            store,
+            job_type=JobType.ENRICH_LEAD,
+            payload={
+                "job_type": "enrich_lead",
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+            },
+            handler=handler,
+            max_attempts=5,
+        )
+
+        assert result is None
+        assert handled_payloads == []
+        assert store.updates == []
 
     asyncio.run(scenario())
 

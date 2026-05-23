@@ -40,6 +40,12 @@ class QueueJobInsert:
 
 
 @dataclass(frozen=True)
+class QueueJobLease:
+    job_id: UUID
+    acquired: bool
+
+
+@dataclass(frozen=True)
 class QueueJobUpdate:
     job_id: UUID
     tenant_id: UUID
@@ -52,7 +58,7 @@ class QueueJobStore:
     def __init__(self, connection: DatabaseConnection) -> None:
         self._connection = connection
 
-    async def create_queue_job(self, insert: QueueJobInsert) -> UUID:
+    async def create_queue_job(self, insert: QueueJobInsert) -> QueueJobLease:
         return await create_queue_job(self._connection, insert)
 
     async def update_queue_job(self, update: QueueJobUpdate) -> None:
@@ -189,6 +195,36 @@ class PipelineStore:
             ),
         )
 
+    async def reserve_outreach_send(self, send: dict[str, object]) -> UUID:
+        return await reserve_outreach_send(
+            self._connection,
+            tenant_id=cast(UUID, send["tenant_id"]),
+            lead_id=cast(UUID, send["lead_id"]),
+            instantly_campaign_id=str(send["instantly_campaign_id"]),
+            channel=str(send["channel"]),
+        )
+
+    async def complete_outreach_send(self, send: dict[str, object]) -> UUID:
+        return await complete_outreach_send(
+            self._connection,
+            OutreachSendInsert(
+                tenant_id=cast(UUID, send["tenant_id"]),
+                lead_id=cast(UUID, send["lead_id"]),
+                instantly_campaign_id=str(send["instantly_campaign_id"]),
+                instantly_lead_id=str(send["instantly_lead_id"]),
+                channel=str(send["channel"]),
+            ),
+        )
+
+    async def abandon_outreach_send_reservation(self, send: dict[str, object]) -> None:
+        await abandon_outreach_send_reservation(
+            self._connection,
+            tenant_id=cast(UUID, send["tenant_id"]),
+            lead_id=cast(UUID, send["lead_id"]),
+            instantly_campaign_id=str(send["instantly_campaign_id"]),
+            channel=str(send["channel"]),
+        )
+
     async def get_outreach_send(
         self,
         *,
@@ -214,6 +250,38 @@ class PipelineStore:
 
     async def mark_lead_contacted(self, *, tenant_id: UUID, lead_id: UUID) -> bool:
         return await mark_lead_contacted(self._connection, tenant_id=tenant_id, lead_id=lead_id)
+
+    async def acquire_outreach_send_lock(
+        self,
+        *,
+        tenant_id: UUID,
+        lead_id: UUID,
+        instantly_campaign_id: str,
+        channel: str,
+    ) -> bool:
+        return await acquire_outreach_send_lock(
+            self._connection,
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            instantly_campaign_id=instantly_campaign_id,
+            channel=channel,
+        )
+
+    async def release_outreach_send_lock(
+        self,
+        *,
+        tenant_id: UUID,
+        lead_id: UUID,
+        instantly_campaign_id: str,
+        channel: str,
+    ) -> None:
+        await release_outreach_send_lock(
+            self._connection,
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            instantly_campaign_id=instantly_campaign_id,
+            channel=channel,
+        )
 
 
 async def lead_email_exists(
@@ -615,6 +683,115 @@ async def insert_outreach_send(
     raise TypeError(f"Expected outreach_sends UUID, got {type(raw_id).__name__}")
 
 
+async def reserve_outreach_send(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+    instantly_campaign_id: str,
+    channel: str,
+) -> UUID:
+    raw_id = await connection.fetchval(
+        """
+        WITH inserted_send AS (
+        INSERT INTO outreach_sends (
+          tenant_id,
+          lead_id,
+          instantly_campaign_id,
+          channel
+        )
+        SELECT $1, $2, $3, $4
+        FROM leads
+        WHERE tenant_id = $1
+          AND id = $2
+          AND status = 'qualified'
+          AND is_deleted = FALSE
+        ON CONFLICT (tenant_id, lead_id, instantly_campaign_id, channel)
+        DO NOTHING
+        RETURNING id
+        )
+        SELECT id FROM inserted_send
+        UNION ALL
+        SELECT id
+        FROM outreach_sends
+        WHERE tenant_id = $1
+          AND lead_id = $2
+          AND instantly_campaign_id = $3
+          AND channel = $4
+        LIMIT 1
+        """,
+        tenant_id,
+        lead_id,
+        instantly_campaign_id,
+        channel,
+    )
+    if isinstance(raw_id, UUID):
+        return raw_id
+    if isinstance(raw_id, str):
+        return UUID(raw_id)
+    if raw_id is None:
+        raise LookupError(f"Qualified lead {lead_id} not found for tenant {tenant_id}")
+    raise TypeError(f"Expected outreach_sends UUID, got {type(raw_id).__name__}")
+
+
+async def complete_outreach_send(
+    connection: DatabaseConnection,
+    send: OutreachSendInsert,
+) -> UUID:
+    raw_id = await connection.fetchval(
+        """
+        UPDATE outreach_sends
+        SET instantly_lead_id = $3,
+            sent_at = NOW(),
+            updated_at = NOW()
+        WHERE tenant_id = $1
+          AND lead_id = $2
+          AND instantly_campaign_id = $4
+          AND channel = $5
+        RETURNING id
+        """,
+        send.tenant_id,
+        send.lead_id,
+        send.instantly_lead_id,
+        send.instantly_campaign_id,
+        send.channel,
+    )
+    if isinstance(raw_id, UUID):
+        return raw_id
+    if isinstance(raw_id, str):
+        return UUID(raw_id)
+    if raw_id is None:
+        raise LookupError(
+            f"Reserved outreach send {send.lead_id}/{send.instantly_campaign_id} "
+            f"not found for tenant {send.tenant_id}"
+        )
+    raise TypeError(f"Expected outreach_sends UUID, got {type(raw_id).__name__}")
+
+
+async def abandon_outreach_send_reservation(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+    instantly_campaign_id: str,
+    channel: str,
+) -> None:
+    await connection.execute(
+        """
+        DELETE FROM outreach_sends
+        WHERE tenant_id = $1
+          AND lead_id = $2
+          AND instantly_campaign_id = $3
+          AND channel = $4
+          AND instantly_lead_id IS NULL
+        """,
+        tenant_id,
+        lead_id,
+        instantly_campaign_id,
+        channel,
+    )
+
+
 async def get_outreach_send_by_lead_campaign_channel(
     connection: DatabaseConnection,
     *,
@@ -664,20 +841,74 @@ async def mark_lead_contacted(
     return str(result).upper() == "UPDATE 1"
 
 
-async def create_queue_job(connection: DatabaseConnection, insert: QueueJobInsert) -> UUID:
+async def acquire_outreach_send_lock(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+    instantly_campaign_id: str,
+    channel: str,
+) -> bool:
+    raw_result = await connection.fetchval(
+        """
+        SELECT pg_try_advisory_lock(hashtextextended($1::text, 0))
+        """,
+        _outreach_send_lock_key(
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            instantly_campaign_id=instantly_campaign_id,
+            channel=channel,
+        ),
+    )
+    return bool(raw_result)
+
+
+async def release_outreach_send_lock(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+    instantly_campaign_id: str,
+    channel: str,
+) -> None:
+    await connection.fetchval(
+        """
+        SELECT pg_advisory_unlock(hashtextextended($1::text, 0))
+        """,
+        _outreach_send_lock_key(
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            instantly_campaign_id=instantly_campaign_id,
+            channel=channel,
+        ),
+    )
+
+
+def _outreach_send_lock_key(
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+    instantly_campaign_id: str,
+    channel: str,
+) -> str:
+    return f"outreach_send:{tenant_id}:{lead_id}:{instantly_campaign_id}:{channel}"
+
+
+async def create_queue_job(connection: DatabaseConnection, insert: QueueJobInsert) -> QueueJobLease:
     if insert.lead_id is None:
         existing = await _create_queue_job_without_lead(connection, insert)
     else:
         existing = await _create_queue_job_for_lead(connection, insert)
-    return _coerce_uuid(existing, "queue job")
+    return _coerce_queue_job_lease(existing)
 
 
 async def _create_queue_job_for_lead(
     connection: DatabaseConnection,
     insert: QueueJobInsert,
 ) -> object:
-    return await connection.fetchval(
+    return await connection.fetchrow(
         """
+        WITH inserted_job AS (
         INSERT INTO queue_jobs (
           tenant_id,
           lead_id,
@@ -701,8 +932,26 @@ async def _create_queue_job_for_lead(
             attempt_count = EXCLUDED.attempt_count,
             max_attempts = EXCLUDED.max_attempts,
             payload = EXCLUDED.payload,
-            started_at = NOW()
-        RETURNING id
+            started_at = NOW(),
+            error_message = NULL,
+            completed_at = NULL
+        WHERE queue_jobs.status = 'failed'
+        RETURNING id, TRUE AS acquired
+        ),
+        existing_job AS (
+        SELECT id, FALSE AS acquired
+        FROM queue_jobs
+        WHERE tenant_id = $1
+          AND lead_id = $2
+          AND job_type = $3
+          AND status IN ('pending', 'active', 'failed')
+          AND NOT EXISTS (SELECT 1 FROM inserted_job)
+        LIMIT 1
+        )
+        SELECT id, acquired FROM inserted_job
+        UNION ALL
+        SELECT id, acquired FROM existing_job
+        LIMIT 1
         """,
         insert.tenant_id,
         insert.lead_id,
@@ -717,8 +966,9 @@ async def _create_queue_job_without_lead(
     connection: DatabaseConnection,
     insert: QueueJobInsert,
 ) -> object:
-    return await connection.fetchval(
+    return await connection.fetchrow(
         """
+        WITH inserted_job AS (
         INSERT INTO queue_jobs (
           tenant_id,
           lead_id,
@@ -738,8 +988,26 @@ async def _create_queue_job_without_lead(
             attempt_count = EXCLUDED.attempt_count,
             max_attempts = EXCLUDED.max_attempts,
             payload = EXCLUDED.payload,
-            started_at = NOW()
-        RETURNING id
+            started_at = NOW(),
+            error_message = NULL,
+            completed_at = NULL
+        WHERE queue_jobs.status = 'failed'
+        RETURNING id, TRUE AS acquired
+        ),
+        existing_job AS (
+        SELECT id, FALSE AS acquired
+        FROM queue_jobs
+        WHERE tenant_id = $1
+          AND lead_id IS NULL
+          AND job_type = $2
+          AND status IN ('pending', 'active', 'failed')
+          AND NOT EXISTS (SELECT 1 FROM inserted_job)
+        LIMIT 1
+        )
+        SELECT id, acquired FROM inserted_job
+        UNION ALL
+        SELECT id, acquired FROM existing_job
+        LIMIT 1
         """,
         insert.tenant_id,
         insert.job_type,
@@ -749,12 +1017,18 @@ async def _create_queue_job_without_lead(
     )
 
 
-def _coerce_uuid(raw_id: object, label: str) -> UUID:
+def _coerce_queue_job_lease(raw_row: object) -> QueueJobLease:
+    if raw_row is None:
+        raise LookupError("Queue job could not be created or leased")
+    row = cast(Mapping[str, object], raw_row)
+    raw_id = row["id"]
     if isinstance(raw_id, UUID):
-        return raw_id
-    if isinstance(raw_id, str):
-        return UUID(raw_id)
-    raise TypeError(f"Expected {label} UUID, got {type(raw_id).__name__}")
+        job_id = raw_id
+    elif isinstance(raw_id, str):
+        job_id = UUID(raw_id)
+    else:
+        raise TypeError(f"Expected queue job UUID, got {type(raw_id).__name__}")
+    return QueueJobLease(job_id=job_id, acquired=bool(row["acquired"]))
 
 
 async def update_queue_job(connection: DatabaseConnection, update: QueueJobUpdate) -> None:

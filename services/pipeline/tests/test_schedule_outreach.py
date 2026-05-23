@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
 
 from pipeline_queue.definitions import JobType
-from workers.schedule_outreach import schedule_outreach
+from workers.schedule_outreach import (
+    OutreachSendLockedError,
+    SendWindowNotReachedError,
+    schedule_outreach,
+)
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -37,7 +42,13 @@ class FakeQualificationFetcher:
 class FakeOutreachRepository:
     inserted: list[dict[str, object]] = field(default_factory=list)
     updates: list[tuple[UUID, UUID]] = field(default_factory=list)
+    reserved: list[dict[str, object]] = field(default_factory=list)
+    completed: list[dict[str, object]] = field(default_factory=list)
+    abandoned: list[dict[str, object]] = field(default_factory=list)
+    events: list[str] = field(default_factory=list)
     existing: dict[str, object] | None = None
+    lock_acquired: bool = False
+    lock_released: bool = False
 
     async def get_outreach_send(
         self,
@@ -50,12 +61,50 @@ class FakeOutreachRepository:
         return self.existing
 
     async def insert_outreach_send(self, send: dict[str, object]) -> UUID:
+        assert self.lock_acquired is True
         self.inserted.append(send)
         return UUID("30000000-0000-0000-0000-000000000003")
 
+    async def reserve_outreach_send(self, send: dict[str, object]) -> UUID:
+        assert self.lock_acquired is True
+        self.events.append("reserve")
+        self.reserved.append(send)
+        return UUID("30000000-0000-0000-0000-000000000003")
+
+    async def complete_outreach_send(self, send: dict[str, object]) -> UUID:
+        self.events.append("complete")
+        self.completed.append(send)
+        return UUID("30000000-0000-0000-0000-000000000003")
+
+    async def abandon_outreach_send_reservation(self, send: dict[str, object]) -> None:
+        self.events.append("abandon")
+        self.abandoned.append(send)
+
     async def mark_lead_contacted(self, *, tenant_id: UUID, lead_id: UUID) -> bool:
+        self.events.append("contacted")
         self.updates.append((tenant_id, lead_id))
         return True
+
+    async def acquire_outreach_send_lock(
+        self,
+        *,
+        tenant_id: UUID,
+        lead_id: UUID,
+        instantly_campaign_id: str,
+        channel: str,
+    ) -> bool:
+        self.lock_acquired = True
+        return True
+
+    async def release_outreach_send_lock(
+        self,
+        *,
+        tenant_id: UUID,
+        lead_id: UUID,
+        instantly_campaign_id: str,
+        channel: str,
+    ) -> None:
+        self.lock_released = True
 
 
 @dataclass
@@ -64,6 +113,10 @@ class FakeInstantlyClient:
     calls: list[dict[str, object]] = field(default_factory=list)
 
     async def add_lead_to_campaign(self, payload: dict[str, object]) -> dict[str, object]:
+        if "events" in payload:
+            events = payload["events"]
+            assert isinstance(events, list)
+            events.append("instantly")
         self.calls.append(payload)
         if isinstance(self.result, Exception):
             raise self.result
@@ -101,6 +154,7 @@ def _payload(**overrides: object) -> dict[str, object]:
         "tenant_id": str(TENANT_ID),
         "lead_id": str(LEAD_ID),
         "campaign_id": "campaign-from-payload",
+        "send_after": "2026-05-20T09:00:00+10:00",
     }
     payload.update(overrides)
     return payload
@@ -138,7 +192,15 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
                 },
             }
         ]
-        assert repo.inserted == [
+        assert repo.reserved == [
+            {
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+                "instantly_campaign_id": "campaign-from-payload",
+                "channel": "email",
+            }
+        ]
+        assert repo.completed == [
             {
                 "tenant_id": TENANT_ID,
                 "lead_id": LEAD_ID,
@@ -148,6 +210,72 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
             }
         ]
         assert repo.updates == [(TENANT_ID, LEAD_ID)]
+        assert repo.lock_released is True
+
+    asyncio.run(scenario())
+
+
+def test_successful_job_reserves_outreach_before_calling_instantly() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+
+        class EventInstantlyClient(FakeInstantlyClient):
+            async def add_lead_to_campaign(self, payload: dict[str, object]) -> dict[str, object]:
+                repo.events.append("instantly")
+                return await super().add_lead_to_campaign(payload)
+
+        await schedule_outreach(
+            _payload(),
+            lead_fetcher=FakeLeadFetcher(_lead()),
+            qualification_fetcher=FakeQualificationFetcher(_qualification()),
+            outreach_repo=repo,
+            instantly_client=EventInstantlyClient(result={"id": "instantly-lead-1"}),
+        )
+
+        assert repo.events == ["reserve", "instantly", "complete", "contacted"]
+        assert repo.reserved == [
+            {
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+                "instantly_campaign_id": "campaign-from-payload",
+                "channel": "email",
+            }
+        ]
+        assert repo.completed == [
+            {
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+                "instantly_campaign_id": "campaign-from-payload",
+                "instantly_lead_id": "instantly-lead-1",
+                "channel": "email",
+            }
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_pending_outreach_reservation_does_not_call_instantly_again() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository(
+            existing={
+                "id": UUID("30000000-0000-0000-0000-000000000003"),
+                "instantly_lead_id": None,
+            }
+        )
+        instantly = FakeInstantlyClient(result={"id": "unused"})
+
+        with pytest.raises(RuntimeError, match="reserved but not completed"):
+            await schedule_outreach(
+                _payload(),
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=repo,
+                instantly_client=instantly,
+            )
+
+        assert instantly.calls == []
+        assert repo.updates == []
+        assert repo.lock_acquired is False
 
     asyncio.run(scenario())
 
@@ -173,6 +301,7 @@ def test_existing_outreach_send_marks_contacted_without_calling_instantly_again(
         assert instantly.calls == []
         assert repo.inserted == []
         assert repo.updates == [(TENANT_ID, LEAD_ID)]
+        assert repo.lock_acquired is False
 
     asyncio.run(scenario())
 
@@ -191,7 +320,74 @@ def test_instantly_failure_writes_no_outreach_and_does_not_mark_contacted() -> N
             )
 
         assert repo.inserted == []
+        assert repo.abandoned == [
+            {
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+                "instantly_campaign_id": "campaign-from-payload",
+                "channel": "email",
+            }
+        ]
         assert repo.updates == []
+        assert repo.lock_released is True
+
+    asyncio.run(scenario())
+
+
+def test_future_send_after_delays_before_instantly_side_effect() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+        instantly = FakeInstantlyClient(result={"id": "unused"})
+        future = datetime.now(UTC) + timedelta(hours=1)
+
+        with pytest.raises(SendWindowNotReachedError, match="send_after is in the future"):
+            await schedule_outreach(
+                _payload(send_after=future.isoformat()),
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=repo,
+                instantly_client=instantly,
+            )
+
+        assert instantly.calls == []
+        assert repo.inserted == []
+        assert repo.updates == []
+        assert repo.lock_acquired is False
+
+    asyncio.run(scenario())
+
+
+def test_unavailable_outreach_lock_delays_before_instantly_side_effect() -> None:
+    async def scenario() -> None:
+        class LockedRepository(FakeOutreachRepository):
+            async def acquire_outreach_send_lock(
+                self,
+                *,
+                tenant_id: UUID,
+                lead_id: UUID,
+                instantly_campaign_id: str,
+                channel: str,
+            ) -> bool:
+                self.lock_acquired = True
+                return False
+
+        repo = LockedRepository()
+        instantly = FakeInstantlyClient(result={"id": "unused"})
+
+        with pytest.raises(OutreachSendLockedError, match="outreach send is already locked"):
+            await schedule_outreach(
+                _payload(),
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=repo,
+                instantly_client=instantly,
+            )
+
+        assert instantly.calls == []
+        assert repo.inserted == []
+        assert repo.updates == []
+        assert repo.lock_acquired is True
+        assert repo.lock_released is False
 
     asyncio.run(scenario())
 
@@ -206,6 +402,7 @@ def test_missing_default_campaign_id_fails_clearly(monkeypatch: pytest.MonkeyPat
                     "job_type": JobType.SCHEDULE_OUTREACH.value,
                     "tenant_id": str(TENANT_ID),
                     "lead_id": str(LEAD_ID),
+                    "send_after": "2026-05-20T09:00:00+10:00",
                 },
                 lead_fetcher=FakeLeadFetcher(_lead()),
                 qualification_fetcher=FakeQualificationFetcher(_qualification()),
@@ -226,6 +423,7 @@ def test_campaign_id_defaults_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
                 "job_type": JobType.SCHEDULE_OUTREACH.value,
                 "tenant_id": str(TENANT_ID),
                 "lead_id": str(LEAD_ID),
+                "send_after": "2026-05-20T09:00:00+10:00",
             },
             lead_fetcher=FakeLeadFetcher(_lead()),
             qualification_fetcher=FakeQualificationFetcher(_qualification()),

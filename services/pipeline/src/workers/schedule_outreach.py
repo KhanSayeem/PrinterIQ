@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
 from env import load_pipeline_env
+
+
+class SendWindowNotReachedError(RuntimeError):
+    """Raised when outreach should be retried after the configured send time."""
+
+
+class OutreachSendLockedError(RuntimeError):
+    """Raised when another worker already holds the same outreach send lock."""
 
 
 class LeadFetcher(Protocol):
@@ -31,8 +40,37 @@ class OutreachRepository(Protocol):
     async def insert_outreach_send(self, send: dict[str, object]) -> UUID:
         """Insert one outreach_sends row."""
 
+    async def reserve_outreach_send(self, send: dict[str, object]) -> UUID:
+        """Reserve one outreach_sends row before the external Instantly call."""
+
+    async def complete_outreach_send(self, send: dict[str, object]) -> UUID:
+        """Attach the Instantly id to a reserved outreach_sends row."""
+
+    async def abandon_outreach_send_reservation(self, send: dict[str, object]) -> None:
+        """Remove a pending reservation when no external send was created."""
+
     async def mark_lead_contacted(self, *, tenant_id: UUID, lead_id: UUID) -> bool:
         """Advance a qualified lead to contacted and report whether a row changed."""
+
+    async def acquire_outreach_send_lock(
+        self,
+        *,
+        tenant_id: UUID,
+        lead_id: UUID,
+        instantly_campaign_id: str,
+        channel: str,
+    ) -> bool:
+        """Acquire a per-send lock before making the external Instantly call."""
+
+    async def release_outreach_send_lock(
+        self,
+        *,
+        tenant_id: UUID,
+        lead_id: UUID,
+        instantly_campaign_id: str,
+        channel: str,
+    ) -> None:
+        """Release the per-send lock after the external call path finishes."""
 
 
 class InstantlyClient(Protocol):
@@ -52,6 +90,7 @@ async def schedule_outreach(
     lead_id = UUID(str(payload["lead_id"]))
     campaign_id = _campaign_id(payload)
     channel = str(payload.get("channel", "email"))
+    _ensure_send_after_due(payload)
 
     lead = await lead_fetcher.get_lead(tenant_id=tenant_id, lead_id=lead_id)
     existing_send = await outreach_repo.get_outreach_send(
@@ -61,6 +100,8 @@ async def schedule_outreach(
         channel=channel,
     )
     if existing_send is not None:
+        if not existing_send.get("instantly_lead_id"):
+            raise RuntimeError("outreach send is reserved but not completed")
         if lead.get("status") == "qualified":
             await outreach_repo.mark_lead_contacted(tenant_id=tenant_id, lead_id=lead_id)
         if lead.get("status") in {"qualified", "contacted"}:
@@ -70,33 +111,69 @@ async def schedule_outreach(
     if lead.get("status") != "qualified":
         raise ValueError("schedule_outreach requires a qualified lead")
 
-    qualification = await qualification_fetcher.get_qualification(
+    lock_acquired = await outreach_repo.acquire_outreach_send_lock(
         tenant_id=tenant_id,
         lead_id=lead_id,
+        instantly_campaign_id=campaign_id,
+        channel=channel,
     )
-    opener = _required_text(qualification, "personalised_opener")
+    if not lock_acquired:
+        raise OutreachSendLockedError("outreach send is already locked")
 
-    instantly_payload = _instantly_payload(
-        campaign_id=campaign_id,
-        lead=lead,
-        qualification=qualification,
-        opener=opener,
-        lead_id=lead_id,
-    )
-    result = await instantly_client.add_lead_to_campaign(instantly_payload)
-    instantly_lead_id = _instantly_lead_id(result)
+    try:
+        await outreach_repo.reserve_outreach_send(
+            {
+                "tenant_id": tenant_id,
+                "lead_id": lead_id,
+                "instantly_campaign_id": campaign_id,
+                "channel": channel,
+            }
+        )
+        qualification = await qualification_fetcher.get_qualification(
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+        )
+        opener = _required_text(qualification, "personalised_opener")
 
-    await outreach_repo.insert_outreach_send(
-        {
-            "tenant_id": tenant_id,
-            "lead_id": lead_id,
-            "instantly_campaign_id": campaign_id,
-            "instantly_lead_id": instantly_lead_id,
-            "channel": channel,
-        }
-    )
-    if not await outreach_repo.mark_lead_contacted(tenant_id=tenant_id, lead_id=lead_id):
-        raise RuntimeError("Lead was not qualified when marking contacted")
+        instantly_payload = _instantly_payload(
+            campaign_id=campaign_id,
+            lead=lead,
+            qualification=qualification,
+            opener=opener,
+            lead_id=lead_id,
+        )
+        try:
+            result = await instantly_client.add_lead_to_campaign(instantly_payload)
+        except Exception:
+            await outreach_repo.abandon_outreach_send_reservation(
+                {
+                    "tenant_id": tenant_id,
+                    "lead_id": lead_id,
+                    "instantly_campaign_id": campaign_id,
+                    "channel": channel,
+                }
+            )
+            raise
+        instantly_lead_id = _instantly_lead_id(result)
+
+        await outreach_repo.complete_outreach_send(
+            {
+                "tenant_id": tenant_id,
+                "lead_id": lead_id,
+                "instantly_campaign_id": campaign_id,
+                "instantly_lead_id": instantly_lead_id,
+                "channel": channel,
+            }
+        )
+        if not await outreach_repo.mark_lead_contacted(tenant_id=tenant_id, lead_id=lead_id):
+            raise RuntimeError("Lead was not qualified when marking contacted")
+    finally:
+        await outreach_repo.release_outreach_send_lock(
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            instantly_campaign_id=campaign_id,
+            channel=channel,
+        )
 
 
 def _campaign_id(payload: dict[str, object]) -> str:
@@ -109,6 +186,25 @@ def _campaign_id(payload: dict[str, object]) -> str:
     if env_campaign_id:
         return env_campaign_id
     raise ValueError("campaign_id missing from schedule_outreach payload")
+
+
+def _ensure_send_after_due(payload: dict[str, object]) -> None:
+    raw_send_after = payload.get("send_after")
+    if raw_send_after is None:
+        raise ValueError("send_after missing from schedule_outreach payload")
+    send_after = _parse_send_after(str(raw_send_after))
+    if send_after > datetime.now(UTC):
+        raise SendWindowNotReachedError("send_after is in the future")
+
+
+def _parse_send_after(raw_value: str) -> datetime:
+    try:
+        value = datetime.fromisoformat(raw_value)
+    except ValueError as exc:
+        raise ValueError("send_after must be an ISO datetime") from exc
+    if value.tzinfo is None:
+        raise ValueError("send_after must include timezone")
+    return value.astimezone(UTC)
 
 
 def _required_text(row: dict[str, object], field_name: str) -> str:
