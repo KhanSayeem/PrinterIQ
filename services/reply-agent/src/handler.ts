@@ -2,12 +2,17 @@ import type {
   ClaudeReplyClassification,
   ConversationClassificationUpdate,
   ConversationHistoryItem,
+  CompletedPaymentInput,
+  CompletedPaymentResult,
+  CheckoutLead,
   LeadContext,
   ProcessReplyJob,
+  RetryCheckoutJob,
   SendReplyJob,
 } from "./types.js";
 import { claudeAgent } from "./claude_agent.js";
 import { queries as defaultQueries } from "./db/queries.js";
+import { stripePayments } from "./stripe.js";
 
 export type ReplyQueries = {
   insertInboundConversation(
@@ -28,6 +33,9 @@ export type ReplyQueries = {
   advanceLeadToReplied(tenantId: string, leadId: string): Promise<void>;
   archiveLeadForSuppression(tenantId: string, leadId: string): Promise<void>;
   conversationExists(tenantId: string, conversationId: string): Promise<boolean>;
+  fetchCheckoutLead(tenantId: string, leadId: string): Promise<CheckoutLead>;
+  hasCompletedPayment(tenantId: string, leadId: string): Promise<boolean>;
+  recordCompletedPayment(input: CompletedPaymentInput): Promise<CompletedPaymentResult>;
 };
 
 export type ClaudeClassifier = {
@@ -46,6 +54,9 @@ type HandlerDeps = {
   queries?: ReplyQueries;
   claude?: ClaudeClassifier;
   queue?: ReplyQueue;
+  stripe?: {
+    createCheckoutSession(input: { tenant_id: string; lead_id: string }): Promise<{ id: string; url: string }>;
+  };
 };
 
 const escalationPhrases = ["call me", "speak to", "too expensive", "can you do a deal", "talk to a human"];
@@ -170,9 +181,10 @@ export async function handleProcessReply(
 
 export async function handleSendReply(
   job: SendReplyJob,
-  deps: Pick<HandlerDeps, "queries"> = {},
-): Promise<{ action: "noop"; conversation_id: string }> {
+  deps: Pick<HandlerDeps, "queries" | "stripe"> = {},
+): Promise<{ action: "noop"; conversation_id: string; stripe_session_url?: string }> {
   const db = deps.queries ?? defaultQueries;
+  const stripe = deps.stripe ?? stripePayments;
 
   if (!job.conversation_id) {
     throw new Error("conversation_id is required");
@@ -183,5 +195,32 @@ export async function handleSendReply(
     throw new Error("conversation_id was not found");
   }
 
+  if (job.action === "send_checkout") {
+    const session = await stripe.createCheckoutSession({
+      tenant_id: job.tenant_id,
+      lead_id: job.lead_id,
+    });
+
+    return {
+      action: "noop",
+      conversation_id: job.conversation_id,
+      stripe_session_url: session.url,
+    };
+  }
+
   return { action: "noop", conversation_id: job.conversation_id };
+}
+
+export async function handleRetryCheckout(
+  job: RetryCheckoutJob,
+  deps: Pick<HandlerDeps, "queries"> = {},
+): Promise<{ action: "noop"; reason: "payment_completed" | "retry_deferred" }> {
+  const db = deps.queries ?? defaultQueries;
+  const completed = await db.hasCompletedPayment(job.tenant_id, job.lead_id);
+
+  if (completed) {
+    return { action: "noop", reason: "payment_completed" };
+  }
+
+  return { action: "noop", reason: "retry_deferred" };
 }

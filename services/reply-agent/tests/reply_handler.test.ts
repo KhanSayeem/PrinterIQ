@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  handleRetryCheckout,
   handleProcessReply,
   handleSendReply,
   type ClaudeClassifier,
@@ -38,6 +39,20 @@ function createQueries(overrides: Partial<ReplyQueries> = {}): ReplyQueries {
     conversationExists: vi.fn().mockResolvedValue(true),
     advanceLeadToReplied: vi.fn().mockResolvedValue(undefined),
     archiveLeadForSuppression: vi.fn().mockResolvedValue(undefined),
+    fetchCheckoutLead: vi.fn().mockResolvedValue({
+      tenant_id: tenantId,
+      lead_id: leadId,
+      business_name: "Test Plumbing",
+      email: "lead@example.com",
+    }),
+    hasCompletedPayment: vi.fn().mockResolvedValue(false),
+    recordCompletedPayment: vi.fn().mockResolvedValue({
+      tenant_id: tenantId,
+      lead_id: leadId,
+      business_name: "Test Plumbing",
+      email: "lead@example.com",
+      should_send_welcome: true,
+    }),
     ...overrides,
   };
 }
@@ -265,5 +280,61 @@ describe("send_reply handler", () => {
         { queries },
       ),
     ).rejects.toThrow("conversation_id was not found");
+  });
+
+  it("creates a Stripe checkout URL for send_checkout replies", async () => {
+    const stripe = {
+      createCheckoutSession: vi.fn().mockResolvedValue({
+        id: "cs_test_123",
+        url: "https://checkout.stripe.com/c/pay/cs_test_123",
+      }),
+    };
+
+    const result = await handleSendReply(
+      {
+        job_type: "send_reply",
+        tenant_id: tenantId,
+        lead_id: leadId,
+        conversation_id: conversationId,
+        channel: "email",
+        action: "send_checkout",
+        body: "Here is the checkout link:",
+        instantly_lead_id: null,
+        stripe_session_url: null,
+      },
+      { queries: createQueries(), stripe },
+    );
+
+    expect(stripe.createCheckoutSession).toHaveBeenCalledWith({
+      tenant_id: tenantId,
+      lead_id: leadId,
+    });
+    expect(result).toEqual({
+      action: "noop",
+      conversation_id: conversationId,
+      stripe_session_url: "https://checkout.stripe.com/c/pay/cs_test_123",
+    });
+  });
+});
+
+describe("retry_checkout handler", () => {
+  it("checks payment completion before doing any retry work", async () => {
+    const queries = createQueries({
+      hasCompletedPayment: vi.fn().mockResolvedValue(true),
+    });
+
+    const result = await handleRetryCheckout(
+      {
+        job_type: "retry_checkout",
+        tenant_id: tenantId,
+        lead_id: leadId,
+        original_session: "cs_test_123",
+        scheduled_at: "2026-05-21T09:00:00+10:00",
+      },
+      { queries },
+    );
+
+    expect(queries.hasCompletedPayment).toHaveBeenCalledWith(tenantId, leadId);
+    expect(result).toEqual({ action: "noop", reason: "payment_completed" });
   });
 });

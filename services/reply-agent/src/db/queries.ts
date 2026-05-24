@@ -1,6 +1,13 @@
 import type pg from "pg";
 import { getPool } from "./client.js";
-import type { ConversationClassificationUpdate, ConversationHistoryItem, LeadContext } from "../types.js";
+import type {
+  CheckoutLead,
+  CompletedPaymentInput,
+  CompletedPaymentResult,
+  ConversationClassificationUpdate,
+  ConversationHistoryItem,
+  LeadContext,
+} from "../types.js";
 
 type Queryable = Pick<pg.Pool, "query">;
 
@@ -263,6 +270,161 @@ export async function conversationExists(
   return result.rows[0]?.exists ?? false;
 }
 
+export async function fetchCheckoutLead(
+  tenantId: string,
+  leadId: string,
+  client?: Queryable,
+): Promise<CheckoutLead> {
+  const result = await db(client).query<CheckoutLead>(
+    `
+      SELECT
+        tenant_id,
+        id AS lead_id,
+        business_name,
+        email
+      FROM leads
+      WHERE tenant_id = $1
+        AND id = $2
+        AND status = 'replied'
+      LIMIT 1
+    `,
+    [tenantId, leadId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("lead not eligible for checkout");
+  }
+
+  return row;
+}
+
+export async function hasCompletedPayment(
+  tenantId: string,
+  leadId: string,
+  client?: Queryable,
+): Promise<boolean> {
+  const result = await db(client).query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM payments
+        WHERE tenant_id = $1
+          AND lead_id = $2
+          AND status = 'completed'
+      ) AS exists
+    `,
+    [tenantId, leadId],
+  );
+
+  return result.rows[0]?.exists ?? false;
+}
+
+export async function recordCompletedPayment(
+  input: CompletedPaymentInput,
+  client?: Queryable,
+): Promise<CompletedPaymentResult> {
+  const result = await db(client).query<CompletedPaymentResult>(
+    `
+      WITH lead_match AS (
+        SELECT
+          leads.tenant_id,
+          leads.id AS lead_id,
+          leads.business_name,
+          leads.email
+        FROM leads
+        WHERE leads.tenant_id = $1
+          AND leads.id = $2
+          AND (
+            leads.status = 'replied'
+            OR EXISTS (
+              SELECT 1
+              FROM payments
+              WHERE payments.tenant_id = leads.tenant_id
+                AND payments.lead_id = leads.id
+                AND payments.stripe_session_id = $3
+            )
+          )
+      ),
+      upserted AS (
+        INSERT INTO payments (
+          tenant_id,
+          lead_id,
+          stripe_session_id,
+          stripe_payment_intent_id,
+          amount_aud,
+          status,
+          paid_at
+        )
+        SELECT
+          tenant_id,
+          lead_id,
+          $3,
+          $4,
+          $5,
+          'completed',
+          NOW()
+        FROM lead_match
+        ON CONFLICT (stripe_session_id) DO UPDATE
+        SET
+          stripe_payment_intent_id = EXCLUDED.stripe_payment_intent_id,
+          status = 'completed',
+          paid_at = COALESCE(payments.paid_at, NOW()),
+          updated_at = NOW()
+        WHERE payments.tenant_id = $1
+          AND payments.lead_id = $2
+        RETURNING tenant_id, lead_id
+      ),
+      onboarding_guard AS (
+        UPDATE payments
+        SET
+          onboarding_triggered = TRUE,
+          updated_at = NOW()
+        WHERE tenant_id = $1
+          AND lead_id = $2
+          AND stripe_session_id = $3
+          AND status = 'completed'
+          AND onboarding_triggered = FALSE
+          AND EXISTS (SELECT 1 FROM upserted)
+        RETURNING id
+      ),
+      paid_lead AS (
+        UPDATE leads
+        SET
+          status = 'paid',
+          updated_at = NOW()
+        WHERE tenant_id = $1
+          AND id = $2
+          AND status = 'replied'
+          AND EXISTS (SELECT 1 FROM onboarding_guard)
+        RETURNING id
+      )
+      SELECT
+        lead_match.tenant_id,
+        lead_match.lead_id,
+        lead_match.business_name,
+        lead_match.email,
+        EXISTS (SELECT 1 FROM onboarding_guard) AS should_send_welcome
+      FROM lead_match
+      WHERE EXISTS (SELECT 1 FROM upserted)
+    `,
+    [
+      input.tenant_id,
+      input.lead_id,
+      input.stripe_session_id,
+      input.stripe_payment_intent_id,
+      input.amount_aud,
+    ],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("payment lead not found for tenant or invalid state");
+  }
+
+  return row;
+}
+
 export const queries = {
   insertInboundConversation,
   fetchLeadContext,
@@ -273,4 +435,7 @@ export const queries = {
   advanceLeadToReplied,
   archiveLeadForSuppression,
   conversationExists,
+  fetchCheckoutLead,
+  hasCompletedPayment,
+  recordCompletedPayment,
 };
