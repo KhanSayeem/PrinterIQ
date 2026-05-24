@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { ProcessReplyJob } from "./types.js";
+import { stripePayments } from "./stripe.js";
 
 export type ReplyQueue = {
   add(name: string, payload: ProcessReplyJob): Promise<unknown>;
@@ -12,6 +13,10 @@ export type ReplyQueue = {
 type BuildServerOptions = {
   instantlySecret: string;
   queue: ReplyQueue;
+  stripeWebhookSecret?: string;
+  stripe?: {
+    handleWebhook(rawBody: string | Buffer, signature: string, options?: { webhookSecret?: string }): Promise<unknown>;
+  };
 };
 
 const webhookPayloadSchema = z.record(z.unknown());
@@ -67,6 +72,22 @@ function mapInstantlyPayload(payload: Record<string, unknown>): ProcessReplyJob 
 
 export function buildServer(options: BuildServerOptions): FastifyInstance {
   const server = Fastify({ logger: false });
+  const stripe = options.stripe ?? stripePayments;
+
+  server.addContentTypeParser<string>("application/json", { parseAs: "string" }, (request, body, done) => {
+    (request as typeof request & { rawBody?: string }).rawBody = body;
+
+    if (request.url.startsWith("/stripe")) {
+      done(null, body);
+      return;
+    }
+
+    try {
+      done(null, JSON.parse(body) as unknown);
+    } catch (error) {
+      done(error as Error);
+    }
+  });
 
   server.setErrorHandler((_error, _request, reply) => {
     return reply.code(500).send({ error: "webhook processing failed" });
@@ -103,6 +124,33 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
       await options.queue.add("process_reply", job);
     } catch {
       return reply.code(500).send({ error: "webhook processing failed" });
+    }
+
+    return reply.code(200).send({ ok: true });
+  });
+
+  server.post("/stripe", async (request, reply) => {
+    const signature = request.headers["stripe-signature"];
+    if (typeof signature !== "string" || signature.length === 0) {
+      return reply.code(400).send({ error: "invalid stripe signature" });
+    }
+
+    const rawBody = (request as typeof request & { rawBody?: string }).rawBody;
+    if (!rawBody) {
+      return reply.code(400).send({ error: "invalid stripe signature" });
+    }
+
+    try {
+      await stripe.handleWebhook(rawBody, signature, {
+        webhookSecret: options.stripeWebhookSecret,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.toLowerCase().includes("signature")) {
+        return reply.code(400).send({ error: "invalid stripe signature" });
+      }
+
+      return reply.code(500).send({ error: "stripe webhook processing failed" });
     }
 
     return reply.code(200).send({ ok: true });

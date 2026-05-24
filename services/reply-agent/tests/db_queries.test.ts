@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { advanceLeadToReplied, archiveLeadForSuppression, insertInboundConversation } from "../src/db/queries.js";
+import {
+  advanceLeadToReplied,
+  archiveLeadForSuppression,
+  hasCompletedPayment,
+  insertInboundConversation,
+  recordCompletedPayment,
+} from "../src/db/queries.js";
 
 describe("reply-agent DB queries", () => {
   it("inserts inbound conversations only through a tenant-scoped lead lookup", async () => {
@@ -49,6 +55,61 @@ describe("reply-agent DB queries", () => {
     expect(sql).toContain("WHERE tenant_id = $1");
     expect(sql).toContain("AND id = $2");
     expect(sql).toContain("status IN ('qualified', 'contacted', 'replied')");
+    expect(params).toEqual(["tenant-id", "lead-id"]);
+  });
+
+  it("records completed payments through a tenant-scoped lead lookup and guarded onboarding update", async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows: [
+        {
+          tenant_id: "tenant-id",
+          lead_id: "lead-id",
+          email: "lead@example.com",
+          business_name: "Test Plumbing",
+          should_send_welcome: true,
+        },
+      ],
+    });
+
+    await recordCompletedPayment(
+      {
+        tenant_id: "tenant-id",
+        lead_id: "lead-id",
+        stripe_session_id: "cs_test",
+        stripe_payment_intent_id: "pi_test",
+        amount_aud: 1500,
+      },
+      { query },
+    );
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("FROM leads");
+    expect(sql).toContain("leads.tenant_id = $1");
+    expect(sql).toContain("leads.id = $2");
+    expect(sql).toContain("leads.status = 'replied'");
+    expect(sql).toContain("payments.stripe_session_id = $3");
+    expect(sql).toContain("INSERT INTO payments");
+    expect(sql).toContain("tenant_id");
+    expect(sql).toContain("ON CONFLICT (stripe_session_id) DO UPDATE");
+    expect(sql).toContain("payments.tenant_id = $1");
+    expect(sql).toContain("payments.lead_id = $2");
+    expect(sql).toContain("onboarding_triggered = FALSE");
+    expect(sql).toMatch(/SET\s+status = 'paid'/);
+    expect(sql).toContain("leads.status = 'replied'");
+    expect(params).toEqual(["tenant-id", "lead-id", "cs_test", "pi_test", 1500]);
+  });
+
+  it("checks completed payments within the tenant before retrying checkout", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ exists: true }] });
+
+    const completed = await hasCompletedPayment("tenant-id", "lead-id", { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(completed).toBe(true);
+    expect(sql).toContain("FROM payments");
+    expect(sql).toContain("tenant_id = $1");
+    expect(sql).toContain("lead_id = $2");
+    expect(sql).toContain("status = 'completed'");
     expect(params).toEqual(["tenant-id", "lead-id"]);
   });
 });
