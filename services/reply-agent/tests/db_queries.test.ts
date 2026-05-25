@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   advanceLeadToReplied,
   archiveLeadForSuppression,
+  fetchEscalationContext,
   hasCompletedPayment,
   insertInboundConversation,
   recordCompletedPayment,
@@ -111,5 +112,46 @@ describe("reply-agent DB queries", () => {
     expect(sql).toContain("lead_id = $2");
     expect(sql).toContain("status = 'completed'");
     expect(params).toEqual(["tenant-id", "lead-id"]);
+  });
+
+  it("fetches escalation context through tenant-scoped lead and outreach send filters", async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows: [
+        {
+          tenant_id: "tenant-id",
+          lead_id: "lead-id",
+          first_name: "Brett",
+          last_name: "Stone",
+          business_name: "Stone Builders",
+          city: "Newcastle",
+          email: "brett@example.com",
+          instantly_lead_id: "instantly-lead-123",
+        },
+      ],
+    });
+
+    const context = await fetchEscalationContext("tenant-id", "lead-id", { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("FROM leads");
+    expect(sql).toContain("WHERE leads.tenant_id = $1");
+    expect(sql).toContain("AND leads.id = $2");
+    expect(sql).toContain("FROM outreach_sends");
+    expect(sql).toContain("outreach_sends.tenant_id = leads.tenant_id");
+    expect(sql).toContain("outreach_sends.lead_id = leads.id");
+    expect(sql).toContain("outreach_sends.instantly_lead_id IS NOT NULL");
+    expect(sql).toContain("outreach_sends.sent_at DESC NULLS LAST");
+    expect(sql).toContain("outreach_sends.created_at DESC");
+    expect(sql).toContain("outreach_sends.id DESC");
+    expect(params).toEqual(["tenant-id", "lead-id"]);
+    expect(context.instantly_lead_id).toBe("instantly-lead-123");
+  });
+
+  it("fails when escalation context has no Instantly lead id", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    await expect(fetchEscalationContext("tenant-id", "lead-id", { query })).rejects.toThrow(
+      "escalation context not found for tenant or missing Instantly lead id",
+    );
   });
 });

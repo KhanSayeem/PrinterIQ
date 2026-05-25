@@ -6,6 +6,7 @@ import type {
   CompletedPaymentResult,
   ConversationClassificationUpdate,
   ConversationHistoryItem,
+  EscalationContext,
   LeadContext,
 } from "../types.js";
 
@@ -299,6 +300,49 @@ export async function fetchCheckoutLead(
   return row;
 }
 
+export async function fetchEscalationContext(
+  tenantId: string,
+  leadId: string,
+  client?: Queryable,
+): Promise<EscalationContext> {
+  const result = await db(client).query<EscalationContext>(
+    `
+      SELECT
+        leads.tenant_id,
+        leads.id AS lead_id,
+        leads.first_name,
+        leads.last_name,
+        leads.business_name,
+        leads.city,
+        leads.email,
+        latest_send.instantly_lead_id
+      FROM leads
+      JOIN LATERAL (
+        SELECT outreach_sends.instantly_lead_id
+        FROM outreach_sends
+        WHERE outreach_sends.tenant_id = leads.tenant_id
+          AND outreach_sends.lead_id = leads.id
+          AND outreach_sends.instantly_lead_id IS NOT NULL
+        ORDER BY outreach_sends.sent_at DESC NULLS LAST,
+                 outreach_sends.created_at DESC,
+                 outreach_sends.id DESC
+        LIMIT 1
+      ) AS latest_send ON TRUE
+      WHERE leads.tenant_id = $1
+        AND leads.id = $2
+      LIMIT 1
+    `,
+    [tenantId, leadId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("escalation context not found for tenant or missing Instantly lead id");
+  }
+
+  return row;
+}
+
 export async function hasCompletedPayment(
   tenantId: string,
   leadId: string,
@@ -436,6 +480,7 @@ export const queries = {
   archiveLeadForSuppression,
   conversationExists,
   fetchCheckoutLead,
+  fetchEscalationContext,
   hasCompletedPayment,
   recordCompletedPayment,
 };
