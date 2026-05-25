@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PrinterIQ — Operator Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #fafaf9;
+  --bg-card: #ffffff;
+  --bg-hover: #f4f4f2;
+  --bg-active: #eeede9;
+  --border: #e8e7e3;
+  --border-strong: #d0cfc9;
+  --text-primary: #1a1a18;
+  --text-secondary: #6b6a65;
+  --text-tertiary: #a09f99;
+  --text-link: #2563eb;
+  --accent: #1a1a18;
+  --accent-fg: #ffffff;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --sidebar-collapsed: 52px;
+  --sidebar-expanded: 216px;
+  --font: 'Geist', -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', monospace;
+  --transition: 0.18s cubic-bezier(0.4,0,0.2,1);
+}
+
+html { font-size: 14px; -webkit-font-smoothing: antialiased; }
+body { font-family: var(--font); background: var(--bg); color: var(--text-primary); min-height: 100vh; overflow-x: hidden; }
+
+/* ─── SVG ICONS ─── */
+.icon { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; display: inline-block; vertical-align: middle; }
+.icon-sm { width: 14px; height: 14px; }
+.icon-lg { width: 18px; height: 18px; }
+
+/* ─── LAYOUT ─── */
+.app { display: flex; min-height: 100vh; }
+
+/* ═══════════════════════════════
+   SIDEBAR — icon rail + hover expand
+═══════════════════════════════ */
+.sidebar {
+  width: var(--sidebar-collapsed);
+  min-height: 100vh;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  position: fixed; top: 0; left: 0; z-index: 100;
+  overflow: hidden;
+  transition: width var(--transition);
+}
+.sidebar.expanded {
+  width: var(--sidebar-expanded);
+}
+.sidebar.pinned {
+  width: var(--sidebar-expanded);
+}
+.sidebar-top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 10px 12px;
+  border-bottom: 1px solid var(--border);
+  min-height: 52px;
+  overflow: hidden;
+}
+.logo-wrap { display: flex; align-items: center; gap: 9px; text-decoration: none; flex-shrink: 0; }
+.logo-mark {
+  width: 28px; height: 28px; min-width: 28px;
+  background: var(--accent); border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 600; color: var(--accent-fg);
+  letter-spacing: -0.01em; font-family: var(--font-mono);
+}
+.logo-name {
+  font-size: 14px; font-weight: 500; color: var(--text-primary);
+  letter-spacing: -0.02em; white-space: nowrap;
+  opacity: 0; transform: translateX(-4px);
+  transition: opacity var(--transition), transform var(--transition);
+}
+.sidebar.expanded .logo-name { opacity: 1; transform: translateX(0); }
+
+.pin-btn {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-tertiary); padding: 4px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity var(--transition), background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+.sidebar.expanded .pin-btn { opacity: 1; }
+.pin-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.pin-btn.active { color: var(--text-primary); opacity: 1; }
+
+.sidebar-nav { padding: 8px 6px; flex: 1; }
+.nav-section-label {
+  font-size: 9px; font-weight: 500; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 8px 6px 3px; white-space: nowrap;
+  opacity: 0; transition: opacity var(--transition);
+}
+.sidebar.expanded .nav-section-label { opacity: 1; }
+
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 6px; border-radius: var(--radius-md);
+  font-size: 13px; color: var(--text-secondary);
+  cursor: pointer; margin-bottom: 1px; text-decoration: none;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap; overflow: hidden;
+  position: relative;
+}
+.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-item.active { background: var(--bg-active); color: var(--text-primary); font-weight: 500; }
+.nav-item .icon { min-width: 16px; }
+.nav-label-text {
+  opacity: 0; transform: translateX(-4px);
+  transition: opacity var(--transition), transform var(--transition);
+  font-size: 13px;
+}
+.sidebar.expanded .nav-label-text { opacity: 1; transform: translateX(0); }
+.nav-badge {
+  margin-left: auto; font-size: 10px; font-weight: 500;
+  background: var(--bg-hover); color: var(--text-tertiary);
+  padding: 1px 6px; border-radius: 99px;
+  opacity: 0; transition: opacity var(--transition);
+}
+.sidebar.expanded .nav-badge { opacity: 1; }
+
+/* Tooltip on collapsed */
+.nav-item[data-tip]:not(.active)::after {
+  content: attr(data-tip);
+  position: absolute; left: calc(var(--sidebar-collapsed) + 6px); top: 50%; transform: translateY(-50%);
+  background: var(--text-primary); color: var(--accent-fg);
+  font-size: 11px; padding: 4px 8px; border-radius: var(--radius-sm);
+  white-space: nowrap; pointer-events: none; opacity: 0;
+  transition: opacity 0.1s; z-index: 200;
+}
+.sidebar:not(.expanded) .nav-item[data-tip]:hover::after { opacity: 1; }
+
+.sidebar-footer { padding: 8px 6px; border-top: 1px solid var(--border); }
+.user-row { display: flex; align-items: center; gap: 9px; padding: 6px 6px; border-radius: var(--radius-md); overflow: hidden; }
+.user-avatar {
+  width: 28px; height: 28px; min-width: 28px; border-radius: 50%;
+  background: var(--bg-active); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 500; color: var(--text-secondary);
+}
+.user-info { opacity: 0; transform: translateX(-4px); transition: opacity var(--transition), transform var(--transition); }
+.sidebar.expanded .user-info { opacity: 1; transform: translateX(0); }
+.user-name { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.user-role { font-size: 10px; color: var(--text-tertiary); }
+
+/* ─── MAIN ─── */
+.main {
+  margin-left: var(--sidebar-collapsed);
+  flex: 1; display: flex; flex-direction: column; min-height: 100vh;
+  transition: margin-left var(--transition);
+  min-width: 0;
+}
+.sidebar.expanded ~ .main,
+.sidebar.pinned ~ .main { margin-left: var(--sidebar-expanded); }
+
+/* ─── PAGE HEADER ─── */
+.page-header {
+  padding: 22px 28px 0;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.page-title-wrap {}
+.page-title { font-size: 21px; font-weight: 500; letter-spacing: -0.03em; }
+.page-subtitle { font-size: 12px; color: var(--text-tertiary); margin-top: 3px; }
+.page-actions { display: flex; gap: 8px; align-items: center; padding-top: 4px; }
+
+/* ─── TOPBAR ─── */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 24px 10px 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  min-height: 48px;
+  position: sticky; top: 0; z-index: 10;
+}
+.topbar-spacer { flex: 1; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.topbar-user { font-size: 12px; color: var(--text-tertiary); }
+.topbar-signout { font-size: 12px; color: var(--text-secondary); }
+.topbar-signout:hover { color: var(--text-primary); }
+
+/* ─── BUTTONS ─── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--radius-md);
+  font-size: 12px; font-weight: 500; font-family: var(--font);
+  border: 1px solid var(--border-strong); background: var(--bg-card);
+  color: var(--text-primary); cursor: pointer; transition: background 0.12s;
+  white-space: nowrap; text-decoration: none;
+}
+.btn:hover { background: var(--bg-hover); }
+.btn-primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn-primary:hover { background: #2d2d2a; }
+.btn-ghost { border-color: transparent; background: transparent; }
+.btn-ghost:hover { background: var(--bg-hover); border-color: transparent; }
+.btn-danger { color: #be123c; border-color: #fecdd3; background: #fff1f2; }
+.btn-danger:hover { background: #ffe4e6; }
+.btn-icon { padding: 6px; border-radius: var(--radius-md); }
+
+/* ─── SCREENS ─── */
+.screen { display: none; flex-direction: column; flex: 1; }
+.screen.active { display: flex; }
+
+/* ══════════════════════════
+   LEADS SCREEN
+══════════════════════════ */
+.leads-toolbar {
+  padding: 14px 28px 12px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.search-wrap { position: relative; }
+.search-wrap .icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary); }
+.search-input {
+  padding: 6px 10px 6px 30px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--bg-card);
+  font-size: 12px; font-family: var(--font); color: var(--text-primary);
+  outline: none; width: 220px;
+}
+.search-input:focus { border-color: var(--border-strong); }
+.search-input::placeholder { color: var(--text-tertiary); }
+
+.filter-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+.pill {
+  font-size: 11px; padding: 4px 11px; border-radius: 99px;
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-secondary); cursor: pointer; transition: all 0.12s;
+}
+.pill:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.pill.active { background: var(--text-primary); color: #fff; border-color: var(--text-primary); }
+.filter-count { margin-left: 4px; opacity: 0.5; font-size: 10px; }
+
+.leads-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+/* TABLE */
+.table-wrap { flex: 1; overflow: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  padding: 9px 14px; text-align: left;
+  font-size: 10px; font-weight: 500; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg); position: sticky; top: 0; z-index: 1;
+  white-space: nowrap;
+}
+thead th:first-child { padding-left: 28px; }
+thead th:last-child { padding-right: 28px; }
+tbody tr { border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+tbody tr:hover { background: var(--bg-hover); }
+tbody tr.selected { background: var(--bg-active); }
+td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--text-primary); }
+td:first-child { padding-left: 28px; }
+td:last-child { padding-right: 28px; }
+.td-name { font-weight: 500; }
+.td-muted { color: var(--text-secondary); }
+
+.badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 99px;
+  font-size: 10px; font-weight: 500; white-space: nowrap;
+}
+.s-imported  { background:#f4f4f2; color:#57564f; }
+.s-enriched  { background:#eff6ff; color:#1e40af; }
+.s-qualified { background:#f3f0ff; color:#5b21b6; }
+.s-contacted { background:#fffbeb; color:#92400e; }
+.s-replied   { background:#f0fdf4; color:#166534; }
+.s-paid      { background:#ecfdf5; color:#065f46; }
+.s-archived  { background:#fff1f2; color:#9f1239; }
+
+.score-cell { display: flex; align-items: center; gap: 7px; }
+.score-track { width: 34px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+.score-fill { height: 100%; border-radius: 2px; }
+
+/* ══════════════════════════
+   DETAIL PANEL (quick glance)
+══════════════════════════ */
+.detail-panel {
+  width: 268px; min-width: 268px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-card);
+  display: flex; flex-direction: column;
+  transition: width 0.2s;
+}
+.detail-panel.hidden { display: none; }
+
+.dp-header {
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.dp-header-top {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.dp-name { font-size: 15px; font-weight: 500; letter-spacing: -0.02em; }
+.dp-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.dp-header-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.dp-icon-btn {
+  width: 28px; height: 28px; border-radius: var(--radius-md);
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: var(--bg-card);
+  cursor: pointer; color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s;
+}
+.dp-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.dp-icon-btn.open-page { color: var(--text-link); border-color: #bfdbfe; background: #eff6ff; }
+.dp-icon-btn.open-page:hover { background: #dbeafe; }
+
+.dp-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.dp-score { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
+
+.dp-body { flex: 1; overflow-y: auto; padding: 0; }
+
+.dp-section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.dp-section:last-child { border-bottom: none; }
+.dp-section-title {
+  font-size: 9px; font-weight: 500; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 9px;
+}
+.dp-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.dp-row:last-child { margin-bottom: 0; }
+.dp-row-label { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
+.dp-row-value { font-size: 11px; color: var(--text-primary); font-weight: 500; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.weakness-wrap { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.w-chip { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #fff1f2; color: #9f1239; border: 1px solid #fecdd3; }
+
+.dp-last-msg {
+  font-size: 11px; line-height: 1.55; color: var(--text-secondary);
+  background: var(--bg); border-radius: var(--radius-md);
+  padding: 8px 10px; font-style: italic;
+  border-left: 2px solid #c4b5fd;
+}
+.dp-msg-meta { font-size: 10px; color: var(--text-tertiary); margin-bottom: 4px; font-style: normal; }
+
+.dp-actions {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex; gap: 4px;
+  background: var(--bg-card);
+}
+.dp-actions .btn { flex: 1; justify-content: center; font-size: 11px; padding: 4px 6px; }
+
+/* ══════════════════════════
+   LEAD DETAIL PAGE
+══════════════════════════ */
+.lead-detail-screen { padding: 0; }
+.lead-detail-header {
+  padding: 20px 28px 0;
+  border-bottom: 1px solid var(--border);
+}
+.breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-tertiary); margin-bottom: 14px; }
+.breadcrumb a { color: var(--text-tertiary); text-decoration: none; cursor: pointer; }
+.breadcrumb a:hover { color: var(--text-primary); }
+.breadcrumb-sep { color: var(--border-strong); }
+
+.lead-detail-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.lead-detail-name-wrap {}
+.lead-detail-name { font-size: 22px; font-weight: 500; letter-spacing: -0.04em; }
+.lead-detail-company { font-size: 13px; color: var(--text-secondary); margin-top: 3px; }
+.lead-detail-badges { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.lead-detail-score-pill {
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 3px 10px; border-radius: 99px;
+  border: 1px solid var(--border); color: var(--text-secondary);
+}
+.lead-detail-actions { display: flex; gap: 7px; align-items: center; padding-top: 4px; flex-wrap: wrap; }
+
+.lead-tabs { display: flex; gap: 0; border-bottom: none; }
+.lead-tab {
+  font-size: 12px; padding: 9px 16px 11px;
+  cursor: pointer; color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: color 0.12s, border-color 0.12s;
+}
+.lead-tab:hover { color: var(--text-primary); }
+.lead-tab.active { color: var(--text-primary); border-bottom-color: var(--text-primary); font-weight: 500; }
+
+.lead-detail-body { flex: 1; overflow-y: auto; }
+.tab-content { display: none; padding: 24px 28px; }
+.tab-content.active { display: block; }
+
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.detail-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 18px 20px;
+}
+.detail-card-title { font-size: 10px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 14px; }
+.detail-field { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 9px; font-size: 12px; }
+.detail-field:last-child { margin-bottom: 0; }
+.detail-field-label { color: var(--text-tertiary); }
+.detail-field-value { color: var(--text-primary); font-weight: 500; text-align: right; }
+.detail-field-value.link { color: var(--text-link); }
+
+.opener-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 18px 20px; margin-bottom: 16px;
+}
+.opener-text {
+  font-size: 13px; line-height: 1.65; color: var(--text-secondary);
+  font-style: italic; padding: 12px 14px;
+  background: var(--bg); border-radius: var(--radius-md);
+  border-left: 2px solid var(--border-strong);
+}
+.opener-followup { margin-top: 10px; }
+.opener-followup-label { font-size: 10px; color: var(--text-tertiary); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Conversation */
+.convo-wrap { display: flex; flex-direction: column; gap: 12px; }
+.convo-item {}
+.convo-item-meta { font-size: 10px; color: var(--text-tertiary); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.convo-dir { font-size: 9px; padding: 1px 6px; border-radius: 99px; font-weight: 500; }
+.dir-out { background: var(--bg-active); color: var(--text-secondary); }
+.dir-in { background: #f3f0ff; color: #5b21b6; }
+.dir-note { background: #fffbeb; color: #92400e; }
+.convo-bubble { font-size: 12px; line-height: 1.6; padding: 10px 13px; border-radius: var(--radius-md); color: var(--text-primary); }
+.bubble-out { background: var(--bg-hover); }
+.bubble-in { background: #f5f3ff; }
+.bubble-note { background: #fffbeb; font-style: italic; }
+
+/* Outreach log */
+.outreach-list { display: flex; flex-direction: column; gap: 8px; }
+.outreach-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+.outreach-step { font-size: 10px; font-weight: 500; color: var(--text-tertiary); width: 48px; flex-shrink: 0; }
+.outreach-label { font-size: 12px; font-weight: 500; flex: 1; }
+.outreach-sub { font-size: 11px; color: var(--text-secondary); }
+.outreach-stat { display: flex; align-items: center; gap: 4px; font-size: 10px; }
+.stat-dot { width: 6px; height: 6px; border-radius: 50%; }
+.stat-dot.sent { background: #059669; }
+.stat-dot.opened { background: #7c3aed; }
+.stat-dot.replied { background: #1d4ed8; }
+.stat-dot.pending { background: var(--border-strong); }
+
+/* Payment */
+.payment-card { max-width: 480px; }
+.payment-status-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 20px; border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+.payment-status-banner.pending { background: #fffbeb; border: 1px solid #fde68a; }
+.payment-status-banner.paid { background: #ecfdf5; border: 1px solid #a7f3d0; }
+.pab-icon { font-size: 20px; }
+.pab-title { font-size: 13px; font-weight: 500; }
+.pab-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+/* ══════════════════════════
+   FUNNEL SCREEN
+══════════════════════════ */
+.funnel-content { padding: 24px 28px; flex: 1; }
+.stage-grid { display: flex; flex-direction: row; gap: 10px; margin-bottom: 28px; overflow-x: auto; width: 100%; }
+.stage-card { flex: 1 1 0; min-width: 110px; }
+.stage-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 16px;
+  position: relative; overflow: hidden;
+}
+.stage-card::after {
+  content: ''; position: absolute; bottom: 0; left: 0; right: 0;
+  height: 3px; background: var(--border);
+}
+.stage-card.has-data::after { background: var(--accent); }
+.stage-name { font-size: 9px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 10px; }
+.stage-count { font-size: 26px; font-weight: 300; letter-spacing: -0.04em; font-family: var(--font-mono); }
+.stage-pct { font-size: 10px; color: var(--text-tertiary); margin-top: 3px; }
+.stage-pct em { color: #059669; font-style: normal; font-weight: 500; }
+
+.funnel-bars { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 22px; }
+.funnel-bars-title { font-size: 13px; font-weight: 500; margin-bottom: 18px; }
+.fbar-row { margin-bottom: 13px; }
+.fbar-row:last-child { margin-bottom: 0; }
+.fbar-meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-bottom: 5px; }
+.fbar-track { height: 5px; background: var(--bg-active); border-radius: 3px; overflow: hidden; }
+.fbar-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.6s ease; }
+.fbar-fill.green { background: #059669; }
+
+/* ══════════════════════════
+   REVENUE SCREEN
+══════════════════════════ */
+.revenue-content { padding: 24px 28px; flex: 1; }
+.rev-tabs { display: flex; gap: 2px; margin-bottom: 22px; border-bottom: 1px solid var(--border); }
+.rev-tab {
+  font-size: 12px; padding: 6px 14px 10px; cursor: pointer;
+  color: var(--text-secondary); border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: color 0.12s;
+}
+.rev-tab.active { color: var(--text-primary); border-bottom-color: var(--text-primary); font-weight: 500; }
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.metric-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; }
+.metric-label { font-size: 11px; color: var(--text-tertiary); margin-bottom: 8px; }
+.metric-value { font-size: 26px; font-weight: 300; letter-spacing: -0.04em; font-family: var(--font-mono); }
+.metric-delta { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+.metric-delta.up { color: #059669; }
+
+.ai-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 22px; }
+.ai-card-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.ai-card-sub { font-size: 11px; color: var(--text-tertiary); margin-bottom: 18px; }
+.ai-row { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.ai-row:last-child { border-bottom: none; padding-bottom: 0; }
+.ai-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.ai-model-name { font-size: 12px; font-weight: 500; flex: 1; }
+.ai-model-sub { font-size: 10px; color: var(--text-tertiary); }
+.ai-calls-count { font-size: 11px; color: var(--text-tertiary); }
+.ai-cost-val { font-size: 13px; font-weight: 500; font-family: var(--font-mono); }
+.ai-total-row { background: var(--bg); border-radius: var(--radius-md); padding: 12px 14px; margin-top: 12px; display: flex; align-items: center; justify-content: space-between; }
+.ai-total-label { font-size: 12px; font-weight: 500; }
+.ai-total-sub { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+.ai-total-val { font-size: 16px; font-weight: 500; font-family: var(--font-mono); }
+
+/* ══════════════════════════
+   LOGIN
+══════════════════════════ */
+.login-wrap {
+  min-height: 100vh; background: var(--bg);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.login-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 40px 36px;
+  width: 100%; max-width: 360px;
+}
+.login-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 30px; }
+.login-heading { font-size: 18px; font-weight: 500; letter-spacing: -0.03em; margin-bottom: 5px; }
+.login-sub { font-size: 12px; color: var(--text-secondary); margin-bottom: 26px; }
+.form-group { margin-bottom: 14px; }
+.form-label { font-size: 11px; font-weight: 500; color: var(--text-secondary); display: block; margin-bottom: 5px; }
+.form-input {
+  width: 100%; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  font-size: 13px; font-family: var(--font); color: var(--text-primary);
+  background: var(--bg-card); outline: none;
+}
+.form-input:focus { border-color: var(--border-strong); }
+.login-btn {
+  width: 100%; padding: 9px; margin-top: 6px;
+  border-radius: var(--radius-md); background: var(--accent); color: var(--accent-fg);
+  border: none; font-size: 13px; font-weight: 500; font-family: var(--font); cursor: pointer;
+}
+.login-note { font-size: 11px; color: var(--text-tertiary); text-align: center; margin-top: 16px; }
+
+/* ══════════════════════════
+   DEMO SWITCHER
+══════════════════════════ */
+.demo-bar {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  background: var(--text-primary); border-radius: 99px;
+  padding: 4px 5px; display: flex; gap: 2px; z-index: 999;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+}
+.demo-tab {
+  font-size: 11px; font-weight: 500; padding: 5px 14px; border-radius: 99px;
+  color: rgba(255,255,255,0.55); cursor: pointer; transition: all 0.15s;
+  white-space: nowrap; font-family: var(--font);
+}
+.demo-tab.active { background: rgba(255,255,255,0.12); color: #fff; }
+.demo-tab:hover:not(.active) { color: rgba(255,255,255,0.85); }
+
+/* ══════════════════════════
+   RESPONSIVE
+══════════════════════════ */
+@media (max-width: 1024px) {
+  .detail-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 900px) {
+  .detail-panel { display: none; }
+  .detail-panel.panel-open { display: flex; position: fixed; top: 0; right: 0; bottom: 0; width: 90%; max-width: 320px; z-index: 200; box-shadow: -8px 0 40px rgba(0,0,0,0.12); }
+}
+@media (max-width: 640px) {
+  .page-header { padding: 16px 16px 0; }
+  .leads-toolbar { padding: 10px 16px; }
+  .funnel-content, .revenue-content { padding: 16px; }
+  .tab-content { padding: 16px; }
+  .lead-detail-header { padding: 16px 16px 0; }
+  thead th:first-child, td:first-child { padding-left: 16px; }
+  thead th:last-child, td:last-child { padding-right: 16px; }
+  .filter-pills { display: none; }
+  .search-input { width: 180px; }
+  .stage-grid { flex-wrap: nowrap; }
+  .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 150; backdrop-filter: blur(1px); }
+.overlay.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="overlay" id="overlay" onclick="closeOverlays()"></div>
+
+<!-- demo bar removed -->
+
+<!-- ═══ LOGIN ═══ -->
+<div id="view-login" style="display:none">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">
+        <div class="logo-mark">IQ</div>
+        <span style="font-size:15px;font-weight:500;letter-spacing:-0.02em">PrinterIQ</span>
+      </div>
+      <div class="login-heading">Operator access</div>
+      <div class="login-sub">Private dashboard — authorised access only.</div>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input class="form-input" type="email" value="macauley@printeriq.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input class="form-input" type="password" value="••••••••">
+      </div>
+      <button class="login-btn" onclick="showScreen('leads')">Sign in →</button>
+      <div class="login-note">Supabase Auth · Single operator account</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ APP SHELL ═══ -->
+<div id="view-app" class="app">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="logo-wrap">
+        <div class="logo-mark">IQ</div>
+        <span class="logo-name">PrinterIQ</span>
+      </div>
+      <button class="pin-btn" id="pinBtn" onclick="togglePin()" title="Pin sidebar">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="14" y1="9" x2="17" y2="9"/><line x1="14" y1="12" x2="17" y2="12"/><line x1="14" y1="15" x2="17" y2="15"/></svg>
+      </button>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Pipeline</div>
+      <a class="nav-item active" id="nav-leads" data-tip="Leads" onclick="showScreen('leads')">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span class="nav-label-text">Leads</span>
+        <span class="nav-badge">4,484</span>
+      </a>
+      <a class="nav-item" id="nav-pipeline" data-tip="Funnel" onclick="showScreen('pipeline')">
+        <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        <span class="nav-label-text">Funnel</span>
+      </a>
+      <a class="nav-item" id="nav-revenue" data-tip="Revenue" onclick="showScreen('revenue')">
+        <svg class="icon" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        <span class="nav-label-text">Revenue</span>
+      </a>
+      <div class="nav-section-label" style="margin-top:6px">System</div>
+      <a class="nav-item" data-tip="Settings">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 19.07l1.41-1.41M4.93 4.93l1.41 1.41M19.07 19.07l-1.41-1.41M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>
+        <span class="nav-label-text">Settings</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-row">
+        <div class="user-avatar">M</div>
+        <div class="user-info">
+          <div class="user-name">Macauley</div>
+          <div class="user-role">Operator</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main" id="mainContent">
+    <div class="topbar">
+      <div class="topbar-spacer"></div>
+      <div class="topbar-right">
+        <span class="topbar-user">macauley@printeriq.com</span>
+        <button class="btn btn-ghost topbar-signout" onclick="showScreen('login')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign out
+        </button>
+      </div>
+    </div>
+
+    <!-- ── LEADS ── -->
+    <div class="screen active" id="screen-leads">
+      <div class="page-header">
+        <div class="page-title-wrap">
+          <div class="page-title">Leads</div>
+          <div class="page-subtitle">4,484 contacts · imported 3 days ago</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-primary">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Import CSV
+          </button>
+        </div>
+      </div>
+      <div class="leads-toolbar">
+        <div class="search-wrap">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input class="search-input" placeholder="Search leads...">
+        </div>
+        <div class="filter-pills">
+          <div class="pill active">All <span class="filter-count">4484</span></div>
+          <div class="pill">Qualified <span class="filter-count">2891</span></div>
+          <div class="pill">Replied <span class="filter-count">342</span></div>
+          <div class="pill">Paid <span class="filter-count">14</span></div>
+          <div class="pill">Archived <span class="filter-count">1593</span></div>
+        </div>
+      </div>
+      <div class="leads-body">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Business</th>
+                <th>State</th>
+                <th>Status</th>
+                <th>Score</th>
+                <th>Last activity</th>
+              </tr>
+            </thead>
+            <tbody id="leadTable">
+              <tr class="selected" data-status="replied" onclick="openPanel(this)">
+                <td class="td-name">Darren Mills</td><td class="td-muted">Aqua Options</td><td class="td-muted">NSW</td>
+                <td><span class="badge s-replied">replied</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:78%;background:#059669"></div></div><span style="font-size:11px;font-family:var(--font-mono)">78</span></div></td>
+                <td class="td-muted">2h ago</td>
+              </tr>
+              <tr data-status="contacted" onclick="openPanel(this)">
+                <td class="td-name">Jake Kowalski</td><td class="td-muted">JK Plumbing</td><td class="td-muted">QLD</td>
+                <td><span class="badge s-contacted">contacted</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:64%;background:#d97706"></div></div><span style="font-size:11px;font-family:var(--font-mono)">64</span></div></td>
+                <td class="td-muted">1d ago</td>
+              </tr>
+              <tr data-status="paid" onclick="openPanel(this)">
+                <td class="td-name">Steve Nguyen</td><td class="td-muted">SN Electrical</td><td class="td-muted">WA</td>
+                <td><span class="badge s-paid">paid ✓</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:91%;background:#059669"></div></div><span style="font-size:11px;font-family:var(--font-mono)">91</span></div></td>
+                <td class="td-muted">3d ago</td>
+              </tr>
+              <tr data-status="qualified" onclick="openPanel(this)">
+                <td class="td-name">Chris Brady</td><td class="td-muted">Brady Builds</td><td class="td-muted">NSW</td>
+                <td><span class="badge s-qualified">qualified</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:55%;background:#7c3aed"></div></div><span style="font-size:11px;font-family:var(--font-mono)">55</span></div></td>
+                <td class="td-muted">4d ago</td>
+              </tr>
+              <tr data-status="archived" onclick="openPanel(this)">
+                <td class="td-name">Matt Tran</td><td class="td-muted">Tran Roofing</td><td class="td-muted">QLD</td>
+                <td><span class="badge s-archived">archived</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:28%;background:#dc2626"></div></div><span style="font-size:11px;font-family:var(--font-mono)">28</span></div></td>
+                <td class="td-muted">5d ago</td>
+              </tr>
+              <tr data-status="enriched" onclick="openPanel(this)">
+                <td class="td-name">Ben Caruso</td><td class="td-muted">Caruso Concrete</td><td class="td-muted">WA</td>
+                <td><span class="badge s-enriched">enriched</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:0%"></div></div><span style="font-size:11px;font-family:var(--font-mono);color:var(--text-tertiary)">—</span></div></td>
+                <td class="td-muted">6d ago</td>
+              </tr>
+              <tr data-status="qualified" onclick="openPanel(this)">
+                <td class="td-name">Liam O'Brien</td><td class="td-muted">OB Landscaping</td><td class="td-muted">NSW</td>
+                <td><span class="badge s-qualified">qualified</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:72%;background:#059669"></div></div><span style="font-size:11px;font-family:var(--font-mono)">72</span></div></td>
+                <td class="td-muted">7d ago</td>
+              </tr>
+              <tr data-status="replied" onclick="openPanel(this)">
+                <td class="td-name">Ryan Fletcher</td><td class="td-muted">Fletcher HVAC</td><td class="td-muted">QLD</td>
+                <td><span class="badge s-replied">replied</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:83%;background:#059669"></div></div><span style="font-size:11px;font-family:var(--font-mono)">83</span></div></td>
+                <td class="td-muted">8d ago</td>
+              </tr>
+              <tr data-status="contacted" onclick="openPanel(this)">
+                <td class="td-name">Sarah Kim</td><td class="td-muted">Kim Interiors</td><td class="td-muted">WA</td>
+                <td><span class="badge s-contacted">contacted</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:61%;background:#d97706"></div></div><span style="font-size:11px;font-family:var(--font-mono)">61</span></div></td>
+                <td class="td-muted">9d ago</td>
+              </tr>
+              <tr data-status="imported" onclick="openPanel(this)">
+                <td class="td-name">Tony Vu</td><td class="td-muted">Vu Solar</td><td class="td-muted">NSW</td>
+                <td><span class="badge s-imported">imported</span></td>
+                <td><div class="score-cell"><div class="score-track"><div class="score-fill" style="width:0%"></div></div><span style="font-size:11px;font-family:var(--font-mono);color:var(--text-tertiary)">—</span></div></td>
+                <td class="td-muted">10d ago</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- QUICK GLANCE PANEL -->
+        <div class="detail-panel hidden" id="detailPanel">
+          <div class="dp-header">
+            <div class="dp-header-top">
+              <div>
+                <div class="dp-name">Darren Mills</div>
+                <div class="dp-sub">Aqua Options</div>
+              </div>
+              <div class="dp-header-actions">
+                <button class="dp-icon-btn open-page" title="Open full lead page" onclick="showScreen('lead-detail')">
+                  <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                </button>
+                <button class="dp-icon-btn" title="Close" onclick="closePanel()">
+                  <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            </div>
+
+          </div>
+          <div class="dp-actions">
+            <button class="btn btn-ghost">Note</button>
+            <button class="btn btn-ghost">Reply</button>
+            <button class="btn btn-danger">Pause</button>
+          </div>
+          <div class="dp-body">
+            <div class="dp-section">
+              <div class="dp-section-title">Key info</div>
+              <div class="dp-row"><span class="dp-row-label">Phone</span><span class="dp-row-value">0412 345 678</span></div>
+              <div class="dp-row"><span class="dp-row-label">State</span><span class="dp-row-value">NSW</span></div>
+              <div class="dp-row"><span class="dp-row-label">Industry</span><span class="dp-row-value">Plumbing</span></div>
+            </div>
+            <div class="dp-section">
+              <div class="dp-section-title">Top weaknesses</div>
+              <div class="weakness-wrap">
+                <span class="w-chip">no mobile</span>
+                <span class="w-chip">slow load</span>
+                <span class="w-chip">no SSL</span>
+              </div>
+            </div>
+            <div class="dp-section">
+              <div class="dp-section-title">Latest message</div>
+              <div class="dp-last-msg">
+                <div class="dp-msg-meta">Inbound · 2h ago</div>
+                "Yeah mate how much is it exactly?"
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── LEAD DETAIL PAGE ── -->
+    <div class="screen lead-detail-screen" id="screen-lead-detail">
+      <div class="lead-detail-header">
+        <div class="breadcrumb">
+          <a onclick="showScreen('leads')">Leads</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Darren Mills</span>
+        </div>
+        <div class="lead-detail-top">
+          <div class="lead-detail-name-wrap">
+            <div class="lead-detail-name">Darren Mills</div>
+            <div class="lead-detail-company">Aqua Options · Sydney, NSW · Plumbing</div>
+            <div class="lead-detail-badges">
+              <span class="badge s-replied">replied</span>
+              <span class="lead-detail-score-pill">score 78 / 100</span>
+              <span style="font-size:11px;color:var(--text-tertiary)">Last active 2h ago</span>
+            </div>
+          </div>
+          <div class="lead-detail-actions">
+            <button class="btn btn-ghost">
+              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Add note
+            </button>
+            <button class="btn btn-ghost">
+              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Override reply
+            </button>
+            <button class="btn btn-danger">
+              <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              Pause lead
+            </button>
+          </div>
+        </div>
+        <div class="lead-tabs">
+          <div class="lead-tab active" onclick="switchTab('overview',this)">Overview</div>
+          <div class="lead-tab" onclick="switchTab('conversation',this)">Conversation</div>
+          <div class="lead-tab" onclick="switchTab('outreach',this)">Outreach</div>
+          <div class="lead-tab" onclick="switchTab('payment',this)">Payment</div>
+        </div>
+      </div>
+      <div class="lead-detail-body">
+
+        <!-- OVERVIEW TAB -->
+        <div class="tab-content active" id="tab-overview">
+          <div class="detail-grid">
+            <div class="detail-card">
+              <div class="detail-card-title">Contact</div>
+              <div class="detail-field"><span class="detail-field-label">Email</span><span class="detail-field-value" style="font-size:11px">darren@aquaoptions.com.au</span></div>
+              <div class="detail-field"><span class="detail-field-label">Phone</span><span class="detail-field-value">0412 345 678</span></div>
+              <div class="detail-field"><span class="detail-field-label">Website</span><span class="detail-field-value link" style="font-size:11px">aquaoptions.com.au ↗</span></div>
+              <div class="detail-field"><span class="detail-field-label">LinkedIn</span><span class="detail-field-value link" style="font-size:11px">linkedin.com/in/... ↗</span></div>
+            </div>
+            <div class="detail-card">
+              <div class="detail-card-title">Enrichment</div>
+              <div class="detail-field"><span class="detail-field-label">CMS</span><span class="detail-field-value">WordPress</span></div>
+              <div class="detail-field"><span class="detail-field-label">Tech source</span><span class="detail-field-value">Apollo</span></div>
+              <div class="detail-field"><span class="detail-field-label">Load time</span><span class="detail-field-value">4.2s</span></div>
+              <div class="detail-field"><span class="detail-field-label">SSL</span><span class="detail-field-value" style="color:#dc2626">None</span></div>
+              <div style="margin-top:12px">
+                <div style="font-size:10px;color:var(--text-tertiary);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em">Weaknesses</div>
+                <div class="weakness-wrap">
+                  <span class="w-chip">no mobile</span><span class="w-chip">slow load</span><span class="w-chip">no SSL</span><span class="w-chip">no meta desc</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="opener-card">
+            <div class="detail-card-title">Personalised opener</div>
+            <div class="opener-text">"Hey Darren, noticed Aqua Options' site isn't loading well on mobile — pretty common for trade businesses. We sort that for a flat $1,500 all in, includes domain, hosting, local SEO basics. Takes 2 weeks."</div>
+            <div class="opener-followup" style="margin-top:12px">
+              <div class="opener-followup-label">Follow-up 1</div>
+              <div class="opener-text" style="font-size:12px">"Hey Darren, just checking in — did you get a chance to look at the site? Happy to answer any questions."</div>
+            </div>
+            <div class="opener-followup" style="margin-top:10px">
+              <div class="opener-followup-label">Follow-up 2</div>
+              <div class="opener-text" style="font-size:12px">"Last nudge from me — offer's still there if timing works. No pressure."</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CONVERSATION TAB -->
+        <div class="tab-content" id="tab-conversation">
+          <div class="convo-wrap">
+            <div class="convo-item">
+              <div class="convo-item-meta"><span class="convo-dir dir-out">outbound</span> Step 1 opener · 2 days ago · AI</div>
+              <div class="convo-bubble bubble-out">Hey Darren, noticed Aqua Options' site isn't loading well on mobile — pretty common for trade businesses. We sort that for a flat $1,500 all in, includes domain, hosting, local SEO basics. Takes 2 weeks.</div>
+            </div>
+            <div class="convo-item">
+              <div class="convo-item-meta"><span class="convo-dir dir-in">inbound</span> 2 hours ago</div>
+              <div class="convo-bubble bubble-in">Yeah mate how much is it exactly?</div>
+            </div>
+            <div class="convo-item">
+              <div class="convo-item-meta"><span class="convo-dir dir-out">outbound</span> 2 hours ago · AI · intent: question (confidence 91%)</div>
+              <div class="convo-bubble bubble-out">It's $1,500 AUD flat — domain, hosting, mobile design, local SEO sorted. Takes about 2 weeks. Want me to send through the checkout link?</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- OUTREACH TAB -->
+        <div class="tab-content" id="tab-outreach">
+          <div class="outreach-list">
+            <div class="outreach-row">
+              <div class="outreach-step">Step 1</div>
+              <div><div class="outreach-label">Opener email</div><div class="outreach-sub">aquaoptions.com.au weakness referenced</div></div>
+              <div>
+                <div class="outreach-stat"><div class="stat-dot sent"></div><span style="font-size:10px;color:var(--text-secondary)">Sent</span></div>
+                <div class="outreach-stat" style="margin-top:3px"><div class="stat-dot opened"></div><span style="font-size:10px;color:var(--text-secondary)">Opened</span></div>
+                <div class="outreach-stat" style="margin-top:3px"><div class="stat-dot replied"></div><span style="font-size:10px;color:var(--text-secondary)">Replied</span></div>
+              </div>
+            </div>
+            <div class="outreach-row" style="opacity:0.5">
+              <div class="outreach-step">Step 2</div>
+              <div><div class="outreach-label">Follow-up 1</div><div class="outreach-sub">Scheduled · paused on reply</div></div>
+              <div><div class="outreach-stat"><div class="stat-dot pending"></div><span style="font-size:10px;color:var(--text-tertiary)">Paused</span></div></div>
+            </div>
+            <div class="outreach-row" style="opacity:0.5">
+              <div class="outreach-step">Step 3</div>
+              <div><div class="outreach-label">Follow-up 2</div><div class="outreach-sub">Not yet sent</div></div>
+              <div><div class="outreach-stat"><div class="stat-dot pending"></div><span style="font-size:10px;color:var(--text-tertiary)">Pending</span></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PAYMENT TAB -->
+        <div class="tab-content" id="tab-payment">
+          <div class="payment-card">
+            <div class="payment-status-banner pending">
+              <div class="pab-icon">⏳</div>
+              <div>
+                <div class="pab-title">Awaiting payment</div>
+                <div class="pab-sub">Checkout link not yet sent</div>
+              </div>
+            </div>
+            <div class="detail-card" style="margin-bottom:12px">
+              <div class="detail-card-title">Payment details</div>
+              <div class="detail-field"><span class="detail-field-label">Amount</span><span class="detail-field-value">$1,500 AUD</span></div>
+              <div class="detail-field"><span class="detail-field-label">Status</span><span class="detail-field-value">Pending</span></div>
+              <div class="detail-field"><span class="detail-field-label">Checkout sent</span><span class="detail-field-value">Not yet</span></div>
+              <div class="detail-field"><span class="detail-field-label">Stripe session</span><span class="detail-field-value" style="color:var(--text-tertiary)">—</span></div>
+            </div>
+            <button class="btn btn-primary">
+              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              Send checkout link
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── PIPELINE ── -->
+    <div class="screen" id="screen-pipeline">
+      <div class="page-header">
+        <div class="page-title-wrap">
+          <div class="page-title">Funnel</div>
+          <div class="page-subtitle">Pipeline stage breakdown · all time</div>
+        </div>
+      </div>
+      <div class="funnel-content">
+        <div class="stage-grid">
+          <div class="stage-card has-data"><div class="stage-name">Imported</div><div class="stage-count">4,484</div><div class="stage-pct">100% of total</div></div>
+          <div class="stage-card has-data"><div class="stage-name">Enriched</div><div class="stage-count">4,412</div><div class="stage-pct"><em>98.4%</em> of prev</div></div>
+          <div class="stage-card has-data"><div class="stage-name">Qualified</div><div class="stage-count">2,891</div><div class="stage-pct"><em>65.5%</em> of prev</div></div>
+          <div class="stage-card has-data"><div class="stage-name">Contacted</div><div class="stage-count">1,204</div><div class="stage-pct"><em>41.6%</em> of prev</div></div>
+          <div class="stage-card has-data"><div class="stage-name">Replied</div><div class="stage-count">342</div><div class="stage-pct"><em>28.4%</em> of prev</div></div>
+          <div class="stage-card has-data"><div class="stage-name">Paid</div><div class="stage-count">14</div><div class="stage-pct"><em>4.1%</em> of prev</div></div>
+          <div class="stage-card"><div class="stage-name">Archived</div><div class="stage-count">1,593</div><div class="stage-pct">score &lt; 40</div></div>
+        </div>
+        <div class="funnel-bars">
+          <div class="funnel-bars-title">Conversion between stages</div>
+          <div class="fbar-row"><div class="fbar-meta"><span>Imported → Enriched</span><span>98.4%</span></div><div class="fbar-track"><div class="fbar-fill" style="width:98.4%"></div></div></div>
+          <div class="fbar-row"><div class="fbar-meta"><span>Enriched → Qualified</span><span>65.5%</span></div><div class="fbar-track"><div class="fbar-fill" style="width:65.5%"></div></div></div>
+          <div class="fbar-row"><div class="fbar-meta"><span>Qualified → Contacted</span><span>41.6%</span></div><div class="fbar-track"><div class="fbar-fill" style="width:41.6%"></div></div></div>
+          <div class="fbar-row"><div class="fbar-meta"><span>Contacted → Replied</span><span>28.4%</span></div><div class="fbar-track"><div class="fbar-fill" style="width:28.4%"></div></div></div>
+          <div class="fbar-row"><div class="fbar-meta"><span>Replied → Paid</span><span style="color:#059669;font-weight:500">4.1%</span></div><div class="fbar-track"><div class="fbar-fill green" style="width:4.1%"></div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── REVENUE ── -->
+    <div class="screen" id="screen-revenue">
+      <div class="page-header">
+        <div class="page-title-wrap">
+          <div class="page-title">Revenue</div>
+          <div class="page-subtitle">Financial overview and AI cost tracker</div>
+        </div>
+      </div>
+      <div class="revenue-content">
+        <div class="rev-tabs">
+          <div class="rev-tab active" onclick="switchRevTab(this)">Today</div>
+          <div class="rev-tab" onclick="switchRevTab(this)">This week</div>
+          <div class="rev-tab" onclick="switchRevTab(this)">This month</div>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-card"><div class="metric-label">Total revenue</div><div class="metric-value">$21,000</div><div class="metric-delta up">↑ 14 payments</div></div>
+          <div class="metric-card"><div class="metric-label">Conversion rate</div><div class="metric-value">0.31%</div><div class="metric-delta">imported → paid</div></div>
+          <div class="metric-card"><div class="metric-label">Avg score (paid)</div><div class="metric-value">81.4</div><div class="metric-delta up">vs 63.2 overall</div></div>
+          <div class="metric-card"><div class="metric-label">Pending checkout</div><div class="metric-value">6</div><div class="metric-delta">links sent, unpaid</div></div>
+        </div>
+        <div class="ai-card">
+          <div class="ai-card-title">AI spend breakdown</div>
+          <div class="ai-card-sub">All Claude API calls logged by model and prompt version</div>
+          <div class="ai-row">
+            <div class="ai-dot" style="background:#6366f1"></div>
+            <div style="flex:1"><div class="ai-model-name">Claude Haiku <span class="ai-model-sub">· qualify-v1</span></div><div class="ai-calls-count">4,412 calls · bulk scoring</div></div>
+            <div class="ai-cost-val">$2.18</div>
+          </div>
+          <div class="ai-row">
+            <div class="ai-dot" style="background:#0ea5e9"></div>
+            <div style="flex:1"><div class="ai-model-name">Claude Sonnet <span class="ai-model-sub">· opener-v1</span></div><div class="ai-calls-count">2,891 calls · personalisation</div></div>
+            <div class="ai-cost-val">$38.40</div>
+          </div>
+          <div class="ai-row">
+            <div class="ai-dot" style="background:#0ea5e9"></div>
+            <div style="flex:1"><div class="ai-model-name">Claude Sonnet <span class="ai-model-sub">· reply-agent-v1</span></div><div class="ai-calls-count">342 calls · reply handling</div></div>
+            <div class="ai-cost-val">$12.74</div>
+          </div>
+          <div class="ai-total-row">
+            <div><div class="ai-total-label">Total AI spend</div><div class="ai-total-sub">Cost per paid lead: $3.81</div></div>
+            <div class="ai-total-val">$53.32</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+let pinned = false;
+
+const sidebar = document.getElementById('sidebar');
+
+// Hover to expand (only when not pinned)
+sidebar.addEventListener('mouseenter', () => {
+  if (!pinned) sidebar.classList.add('expanded');
+});
+sidebar.addEventListener('mouseleave', () => {
+  if (!pinned) sidebar.classList.remove('expanded');
+});
+
+function togglePin() {
+  pinned = !pinned;
+  sidebar.classList.toggle('pinned', pinned);
+  sidebar.classList.toggle('expanded', pinned);
+  const btn = document.getElementById('pinBtn');
+  btn.title = pinned ? 'Unpin sidebar' : 'Pin sidebar';
+  btn.classList.toggle('active', pinned);
+}
+
+function showScreen(name) {
+  const isLogin = name === 'login';
+  document.getElementById('view-login').style.display = isLogin ? 'block' : 'none';
+  document.getElementById('view-app').style.display = isLogin ? 'none' : 'flex';
+
+  if (!isLogin) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const s = document.getElementById('screen-' + name);
+    if (s) s.classList.add('active');
+    ['leads','pipeline','revenue'].forEach(n => {
+      document.getElementById('nav-' + n)?.classList.toggle('active', n === name || (name === 'lead-detail' && n === 'leads'));
+    });
+  }
+
+}
+
+function openPanel(row) {
+  document.querySelectorAll('tbody tr').forEach(r => r.classList.remove('selected'));
+  row.classList.add('selected');
+  const panel = document.getElementById('detailPanel');
+  panel.classList.remove('hidden');
+  if (window.innerWidth <= 900) {
+    panel.classList.add('panel-open');
+    document.getElementById('overlay').classList.add('show');
+  }
+}
+function closePanel() {
+  document.getElementById('detailPanel').classList.add('hidden');
+  document.getElementById('detailPanel').classList.remove('panel-open');
+  document.getElementById('overlay').classList.remove('show');
+}
+function closeOverlays() {
+  closePanel();
+}
+
+function switchTab(name, el) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.lead-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  el.classList.add('active');
+}
+
+function switchRevTab(el) {
+  document.querySelectorAll('.rev-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+}
+
+document.querySelectorAll('.pill').forEach(p => {
+  p.addEventListener('click', () => {
+    document.querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+    p.classList.add('active');
+
+    // Extract filter label (strip the count span text)
+    const label = p.childNodes[0].textContent.trim().toLowerCase();
+    const rows = document.querySelectorAll('#leadTable tr');
+
+    rows.forEach(row => {
+      if (label === 'all') {
+        row.style.display = '';
+      } else {
+        const status = row.getAttribute('data-status') || '';
+        row.style.display = status === label ? '' : 'none';
+      }
+    });
+  });
+});
+</script>
+</body>
+</html>
