@@ -4,6 +4,7 @@ import {
   handleProcessReply,
   handleSendReply,
   type ClaudeClassifier,
+  type EscalationService,
   type ReplyQueries,
   type ReplyQueue,
 } from "../src/handler.js";
@@ -79,16 +80,24 @@ function createQueue(): ReplyQueue {
   };
 }
 
+function createEscalationService(): EscalationService {
+  return {
+    escalate: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 describe("process_reply handler", () => {
   it("escalates call-me replies without calling Claude", async () => {
     const queries = createQueries();
     const claude = createClaude();
     const queue = createQueue();
+    const escalation = createEscalationService();
 
     const result = await handleProcessReply(processJob("Can you call me?"), {
       queries,
       claude,
       queue,
+      escalation,
     });
 
     expect(claude.classifyReply).not.toHaveBeenCalled();
@@ -100,6 +109,13 @@ describe("process_reply handler", () => {
         escalated: true,
       }),
     );
+    expect(escalation.escalate).toHaveBeenCalledWith({
+      tenant_id: tenantId,
+      lead_id: leadId,
+      conversation_id: conversationId,
+      reason: "hardcoded_escalation_phrase",
+      inbound_body: "Can you call me?",
+    });
     expect(result.action).toBe("escalate");
   });
 
@@ -156,10 +172,12 @@ describe("process_reply handler", () => {
 
   it("escalates Claude classifications below 60 confidence", async () => {
     const queries = createQueries();
+    const escalation = createEscalationService();
     const result = await handleProcessReply(processJob("Not sure"), {
       queries,
       claude: createClaude({ confidence: 59, action: "reply" }),
       queue: createQueue(),
+      escalation,
     });
 
     expect(queries.updateConversationClassification).toHaveBeenCalledWith(
@@ -171,6 +189,13 @@ describe("process_reply handler", () => {
         escalation_reason: "low_confidence",
       }),
     );
+    expect(escalation.escalate).toHaveBeenCalledWith({
+      tenant_id: tenantId,
+      lead_id: leadId,
+      conversation_id: conversationId,
+      reason: "low_confidence",
+      inbound_body: "Not sure",
+    });
     expect(result.action).toBe("escalate");
   });
 
@@ -180,11 +205,13 @@ describe("process_reply handler", () => {
       hasCheckoutAction: vi.fn().mockResolvedValue(false),
     });
     const claude = createClaude();
+    const escalation = createEscalationService();
 
     const result = await handleProcessReply(processJob("Another question"), {
       queries,
       claude,
       queue: createQueue(),
+      escalation,
     });
 
     expect(claude.classifyReply).not.toHaveBeenCalled();
@@ -197,6 +224,36 @@ describe("process_reply handler", () => {
         escalation_reason: "three_inbound_replies_without_checkout",
       }),
     );
+    expect(escalation.escalate).toHaveBeenCalledWith({
+      tenant_id: tenantId,
+      lead_id: leadId,
+      conversation_id: conversationId,
+      reason: "three_inbound_replies_without_checkout",
+      inbound_body: "Another question",
+    });
+    expect(result.action).toBe("escalate");
+  });
+
+  it("escalates when Claude returns an escalate action", async () => {
+    const escalation = createEscalationService();
+
+    const result = await handleProcessReply(processJob("This is complicated"), {
+      queries: createQueries(),
+      claude: createClaude({
+        action: "escalate",
+        escalation_reason: "pricing_pushback",
+      }),
+      queue: createQueue(),
+      escalation,
+    });
+
+    expect(escalation.escalate).toHaveBeenCalledWith({
+      tenant_id: tenantId,
+      lead_id: leadId,
+      conversation_id: conversationId,
+      reason: "pricing_pushback",
+      inbound_body: "This is complicated",
+    });
     expect(result.action).toBe("escalate");
   });
 

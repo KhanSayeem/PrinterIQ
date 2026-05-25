@@ -12,6 +12,7 @@ import type {
 } from "./types.js";
 import { claudeAgent } from "./claude_agent.js";
 import { queries as defaultQueries } from "./db/queries.js";
+import { escalate as defaultEscalate, type EscalationInput } from "./escalation.js";
 import { stripePayments } from "./stripe.js";
 
 export type ReplyQueries = {
@@ -38,6 +39,10 @@ export type ReplyQueries = {
   recordCompletedPayment(input: CompletedPaymentInput): Promise<CompletedPaymentResult>;
 };
 
+export type EscalationService = {
+  escalate(input: EscalationInput): Promise<void>;
+};
+
 export type ClaudeClassifier = {
   classifyReply(input: {
     leadContext: LeadContext;
@@ -54,6 +59,7 @@ type HandlerDeps = {
   queries?: ReplyQueries;
   claude?: ClaudeClassifier;
   queue?: ReplyQueue;
+  escalation?: EscalationService;
   stripe?: {
     createCheckoutSession(input: { tenant_id: string; lead_id: string }): Promise<{ id: string; url: string }>;
   };
@@ -103,6 +109,7 @@ export async function handleProcessReply(
   const db = deps.queries ?? defaultQueries;
   const claude = deps.claude ?? claudeAgent;
   const queue = deps.queue;
+  const escalation = deps.escalation ?? { escalate: defaultEscalate };
 
   const conversation = await db.insertInboundConversation(job.tenant_id, job.lead_id, job.channel, job.body);
   await db.advanceLeadToReplied(job.tenant_id, job.lead_id);
@@ -113,6 +120,13 @@ export async function handleProcessReply(
       conversation.id,
       escalationUpdate("hardcoded_escalation_phrase"),
     );
+    await escalation.escalate({
+      tenant_id: job.tenant_id,
+      lead_id: job.lead_id,
+      conversation_id: conversation.id,
+      reason: "hardcoded_escalation_phrase",
+      inbound_body: job.body,
+    });
 
     return { action: "escalate", conversation_id: conversation.id };
   }
@@ -128,6 +142,13 @@ export async function handleProcessReply(
       conversation.id,
       escalationUpdate("three_inbound_replies_without_checkout"),
     );
+    await escalation.escalate({
+      tenant_id: job.tenant_id,
+      lead_id: job.lead_id,
+      conversation_id: conversation.id,
+      reason: "three_inbound_replies_without_checkout",
+      inbound_body: job.body,
+    });
 
     return { action: "escalate", conversation_id: conversation.id };
   }
@@ -148,11 +169,28 @@ export async function handleProcessReply(
       conversation.id,
       escalationUpdate("low_confidence", classification),
     );
+    await escalation.escalate({
+      tenant_id: job.tenant_id,
+      lead_id: job.lead_id,
+      conversation_id: conversation.id,
+      reason: "low_confidence",
+      inbound_body: job.body,
+    });
 
     return { action: "escalate", conversation_id: conversation.id };
   }
 
   await db.updateConversationClassification(job.tenant_id, conversation.id, classificationUpdate(classification));
+
+  if (classification.action === "escalate") {
+    await escalation.escalate({
+      tenant_id: job.tenant_id,
+      lead_id: job.lead_id,
+      conversation_id: conversation.id,
+      reason: classification.escalation_reason ?? "claude_escalate",
+      inbound_body: job.body,
+    });
+  }
 
   if (classification.action === "suppress") {
     await db.archiveLeadForSuppression(job.tenant_id, job.lead_id);

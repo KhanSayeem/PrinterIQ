@@ -77,6 +77,17 @@ export type CompletedPaymentResult = CheckoutLead & {
   should_send_welcome: boolean;
 };
 
+export type EscalationContext = {
+  tenant_id: string;
+  lead_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  business_name: string | null;
+  city: string | null;
+  email: string;
+  instantly_lead_id: string;
+};
+
 export type ConversationHistoryItem = {
   direction: string;
   channel: string;
