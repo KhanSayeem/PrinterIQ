@@ -54,6 +54,8 @@ const requiredColumns = {
     "direction",
     "channel",
     "body",
+    "instantly_email_id",
+    "instantly_account_id",
     "intent",
     "operator_override",
     "created_at",

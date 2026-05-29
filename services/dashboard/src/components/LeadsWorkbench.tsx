@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { LeadQuickPanelWithClose, type LeadListRow } from "./LeadQuickPanel";
 import { LeadTable } from "./LeadTable";
 
-export function LeadsWorkbench({ leads }: { leads: LeadListRow[] }) {
+export function LeadsWorkbench({ tenantId, leads }: { tenantId: string; leads: LeadListRow[] }) {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(leads[0]?.id ?? null);
 
   const selectedLead = useMemo(
@@ -21,7 +21,7 @@ export function LeadsWorkbench({ leads }: { leads: LeadListRow[] }) {
           <div className="empty-state">No leads yet. Import your Apollo CSV to get started.</div>
         )}
       </section>
-      <LeadQuickPanelWithClose lead={selectedLead} onClose={() => setSelectedLeadId(null)} />
+      <LeadQuickPanelWithClose tenantId={tenantId} lead={selectedLead} onClose={() => setSelectedLeadId(null)} />
     </div>
   );
 }

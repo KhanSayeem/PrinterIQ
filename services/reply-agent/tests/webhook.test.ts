@@ -69,9 +69,10 @@ describe("Instantly webhook", () => {
       url: "/instantly",
       headers: { "x-instantly-secret": "expected-secret" },
       payload: {
-        tenant_id: tenantId,
-        lead_id: leadId,
+        metadata: { tenant_id: tenantId, lead_id: leadId },
         reply_text: "Yeah mate how much is it?",
+        lead: { id: "instantly-lead-123" },
+        email: { id: "email-uuid-123", eaccount: "sender@printeriq.com" },
       },
     });
 
@@ -89,6 +90,36 @@ describe("Instantly webhook", () => {
     );
   });
 
+  it("queues Instantly reply metadata when the webhook includes it", async () => {
+    const queue = createQueue();
+    const server = buildServer({
+      instantlySecret: "expected-secret",
+      queue,
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly",
+      headers: { "x-instantly-secret": "expected-secret" },
+      payload: {
+        metadata: { tenant_id: tenantId, lead_id: leadId },
+        reply_text: "Send me the details",
+        lead: { id: "instantly-lead-123" },
+        email: { id: "email-uuid-123", eaccount: "sender@printeriq.com" },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queue.add).toHaveBeenCalledWith(
+      "process_reply",
+      expect.objectContaining({
+        instantly_lead_id: "instantly-lead-123",
+        instantly_email_id: "email-uuid-123",
+        instantly_account_id: "sender@printeriq.com",
+      }),
+    );
+  });
+
   it("does not need DB or Claude dependencies to accept a webhook", async () => {
     const queue = createQueue();
     const server = buildServer({
@@ -101,14 +132,39 @@ describe("Instantly webhook", () => {
       url: "/instantly",
       headers: { "x-instantly-secret": "expected-secret" },
       payload: {
-        tenant_id: tenantId,
-        lead_id: leadId,
+        metadata: { tenant_id: tenantId, lead_id: leadId },
         text: "Interested",
+        lead: { id: "instantly-lead-123" },
+        email: { id: "email-uuid-123", eaccount: "sender@printeriq.com" },
       },
     });
 
     expect(response.statusCode).toBe(200);
     expect(queue.add).toHaveBeenCalledOnce();
+  });
+
+  it("rejects payloads without canonical lead metadata", async () => {
+    const queue = createQueue();
+    const server = buildServer({
+      instantlySecret: "expected-secret",
+      queue,
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly",
+      headers: { "x-instantly-secret": "expected-secret" },
+      payload: {
+        custom_variables: { tenant_id: tenantId, lead_id: leadId },
+        text: "Interested",
+        lead: { id: "instantly-lead-123" },
+        email: { id: "email-uuid-123", eaccount: "sender@printeriq.com" },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "invalid webhook payload" });
+    expect(queue.add).not.toHaveBeenCalled();
   });
 
   it("returns a generic error when queueing fails", async () => {
@@ -126,9 +182,10 @@ describe("Instantly webhook", () => {
       url: "/instantly",
       headers: { "x-instantly-secret": "expected-secret" },
       payload: {
-        tenant_id: tenantId,
-        lead_id: leadId,
+        metadata: { tenant_id: tenantId, lead_id: leadId },
         text: "Interested",
+        lead: { id: "instantly-lead-123" },
+        email: { id: "email-uuid-123", eaccount: "sender@printeriq.com" },
       },
     });
 

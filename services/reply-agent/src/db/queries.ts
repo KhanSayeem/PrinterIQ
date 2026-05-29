@@ -11,6 +11,11 @@ import type {
 } from "../types.js";
 
 type Queryable = Pick<pg.Pool, "query">;
+type InstantlyReplyMetadata = {
+  instantly_lead_id?: string | null;
+  instantly_email_id?: string | null;
+  instantly_account_id?: string | null;
+};
 
 function db(client?: Queryable): Queryable {
   return client ?? getPool();
@@ -21,6 +26,7 @@ export async function insertInboundConversation(
   leadId: string,
   channel: string,
   body: string,
+  metadata: InstantlyReplyMetadata = {},
   client?: Queryable,
 ): Promise<{ id: string }> {
   const result = await db(client).query<{ id: string }>(
@@ -30,20 +36,39 @@ export async function insertInboundConversation(
         lead_id,
         direction,
         channel,
-        body
+        body,
+        instantly_email_id,
+        instantly_account_id
       )
       SELECT
         tenant_id,
         id,
         'inbound',
         $3,
-        $4
+        $4,
+        $5,
+        $6
       FROM leads
       WHERE tenant_id = $1
         AND id = $2
+        AND EXISTS (
+          SELECT 1
+          FROM outreach_sends
+          WHERE outreach_sends.tenant_id = leads.tenant_id
+            AND outreach_sends.lead_id = leads.id
+            AND outreach_sends.instantly_lead_id = $7
+        )
       RETURNING id
     `,
-    [tenantId, leadId, channel, body],
+    [
+      tenantId,
+      leadId,
+      channel,
+      body,
+      metadata.instantly_email_id ?? null,
+      metadata.instantly_account_id ?? null,
+      metadata.instantly_lead_id ?? null,
+    ],
   );
 
   const row = result.rows[0];

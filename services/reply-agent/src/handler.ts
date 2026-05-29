@@ -21,6 +21,11 @@ export type ReplyQueries = {
     leadId: string,
     channel: string,
     body: string,
+    metadata?: {
+      instantly_lead_id?: string | null;
+      instantly_email_id?: string | null;
+      instantly_account_id?: string | null;
+    },
   ): Promise<{ id: string }>;
   fetchLeadContext(tenantId: string, leadId: string): Promise<LeadContext>;
   fetchConversationHistory(tenantId: string, leadId: string): Promise<ConversationHistoryItem[]>;
@@ -111,7 +116,11 @@ export async function handleProcessReply(
   const queue = deps.queue;
   const escalation = deps.escalation ?? { escalate: defaultEscalate };
 
-  const conversation = await db.insertInboundConversation(job.tenant_id, job.lead_id, job.channel, job.body);
+  const conversation = await db.insertInboundConversation(job.tenant_id, job.lead_id, job.channel, job.body, {
+    instantly_lead_id: job.instantly_lead_id ?? null,
+    instantly_email_id: job.instantly_email_id ?? null,
+    instantly_account_id: job.instantly_account_id ?? null,
+  });
   await db.advanceLeadToReplied(job.tenant_id, job.lead_id);
 
   if (containsHardEscalationPhrase(job.body)) {

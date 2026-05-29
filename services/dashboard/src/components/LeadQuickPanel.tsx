@@ -1,6 +1,6 @@
-import { ExternalLink, MessageSquare, Pause, PenLine, X } from "lucide-react";
+import { AlertCircle, ExternalLink, X } from "lucide-react";
 import Link from "next/link";
-import { LeadStatusBadge } from "./LeadStatusBadge";
+import { OperatorActionButtons, type LeadActions } from "./OperatorActionButtons";
 
 export type LeadListRow = {
   id: string;
@@ -31,143 +31,118 @@ function displayName(lead: LeadListRow) {
   return [lead.firstName, lead.lastName].filter(Boolean).join(" ") || lead.email;
 }
 
-export function LeadQuickPanel({ lead }: { lead: LeadListRow | null }) {
+function initials(lead: LeadListRow) {
+  const parts = [lead.firstName, lead.lastName].filter((part): part is string => Boolean(part));
+  const source = parts.length ? parts : [lead.email];
+
+  return source
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join("");
+}
+
+function locationText(lead: LeadListRow) {
+  return [lead.businessName ?? "Unknown business", lead.city ?? "Unknown city"].join(" · ");
+}
+
+type LeadQuickPanelProps = {
+  lead: LeadListRow | null;
+  tenantId: string;
+  actions?: LeadActions;
+};
+
+export function LeadQuickPanel({ lead, tenantId, actions }: LeadQuickPanelProps) {
   if (!lead) {
     return <aside className="detail-panel" aria-label="Lead quick panel"><div className="empty-state">Select a lead to preview details.</div></aside>;
   }
 
   return (
     <aside className="detail-panel" aria-label="Lead quick panel">
-      <div className="dp-header">
-        <div className="dp-header-top">
-          <div>
-            <div className="dp-name">{displayName(lead)}</div>
-            <div className="dp-sub">
-              {lead.businessName ?? "Unknown business"} · {lead.city ?? "Unknown city"}, {lead.state ?? "--"} · {lead.vertical ?? "tradies"}
-            </div>
-          </div>
-          <div className="dp-header-actions">
-            <Link className="dp-icon-btn open-page" aria-label="Open full lead page" href={`/leads/${lead.id}`}>
-              <ExternalLink size={15} />
-            </Link>
-          </div>
-        </div>
-        <div className="dp-meta">
-          <LeadStatusBadge status={lead.status} />
-          <span className="dp-score">score {lead.score ?? "--"} / 100</span>
-        </div>
-      </div>
-      <div className="dp-actions">
-        <button className="btn btn-muted" type="button" disabled title="Available in a future update">
-          <PenLine size={13} />
-          Note
-        </button>
-        <button className="btn btn-muted" type="button" disabled title="Available in a future update">
-          <MessageSquare size={13} />
-          Reply
-        </button>
-        <button className="btn btn-muted" type="button" disabled title="Available in a future update">
-          <Pause size={13} />
-          Pause
-        </button>
-      </div>
-      <div className="dp-body">
-        <div className="dp-section">
-          <div className="dp-section-title">Contact</div>
-          <div className="dp-row"><span className="dp-row-label">Email</span><span className="dp-row-value">{lead.email}</span></div>
-          <div className="dp-row"><span className="dp-row-label">Phone</span><span className="dp-row-value">{lead.phone ?? "--"}</span></div>
-          <div className="dp-row"><span className="dp-row-label">State</span><span className="dp-row-value">{lead.state ?? "--"}</span></div>
-          <div className="dp-row"><span className="dp-row-label">Industry</span><span className="dp-row-value">{lead.vertical ?? "--"}</span></div>
-        </div>
-        <div className="dp-section">
-          <div className="dp-section-title">Top weaknesses</div>
-          {lead.weaknesses.length ? (
-            <div className="weakness-wrap">
-              {lead.weaknesses.slice(0, 4).map((weakness) => (
-                <span className="w-chip" key={weakness}>{weakness}</span>
-              ))}
-            </div>
-          ) : (
-            <div className="dp-empty">No website weaknesses recorded yet.</div>
-          )}
-        </div>
-        <div className="dp-section">
-          <div className="dp-section-title">Latest message</div>
-          {lead.latestConversation ? (
-            <div className="dp-last-msg">
-              <div className="dp-msg-meta">
-                {formatDirection(lead.latestConversation.direction)} · {formatMessageTime(lead.latestConversation.createdAt)}
-              </div>
-              {lead.latestConversation.body}
-            </div>
-          ) : (
-            <div className="dp-last-msg empty">No messages yet.</div>
-          )}
-        </div>
-      </div>
+      <LeadQuickPanelContent lead={lead} tenantId={tenantId} actions={actions} />
     </aside>
   );
 }
 
 export function LeadQuickPanelWithClose({
   lead,
+  tenantId,
   onClose,
+  actions,
 }: {
   lead: LeadListRow | null;
+  tenantId: string;
   onClose: () => void;
+  actions?: LeadActions;
 }) {
   if (!lead) {
-    return <LeadQuickPanel lead={null} />;
+    return <LeadQuickPanel lead={null} tenantId={tenantId} actions={actions} />;
   }
 
   return (
     <aside className="detail-panel" aria-label="Lead quick panel">
+      <LeadQuickPanelContent lead={lead} tenantId={tenantId} actions={actions} onClose={onClose} />
+    </aside>
+  );
+}
+
+function LeadQuickPanelContent({
+  lead,
+  tenantId,
+  actions,
+  onClose,
+}: {
+  lead: LeadListRow;
+  tenantId: string;
+  actions?: LeadActions;
+  onClose?: () => void;
+}) {
+  return (
+    <>
       <div className="dp-header">
         <div className="dp-header-top">
-          <div>
-            <div className="dp-name">{displayName(lead)}</div>
-            <div className="dp-sub">
-              {lead.businessName ?? "Unknown business"} · {lead.city ?? "Unknown city"}, {lead.state ?? "--"} · {lead.vertical ?? "tradies"}
+          <div className="dp-identity">
+            <div className="dp-avatar" aria-hidden="true">{initials(lead)}</div>
+            <div className="dp-identity-copy">
+              <div className="dp-name">{displayName(lead)}</div>
+              <div className="dp-sub">{locationText(lead)}</div>
+              <div className="dp-chip-row">
+                <span className="dp-chip">{lead.vertical ?? "tradies"}</span>
+                <span className="dp-chip">{lead.state ?? "State unknown"}</span>
+              </div>
             </div>
           </div>
           <div className="dp-header-actions">
             <Link className="dp-icon-btn open-page" aria-label="Open full lead page" href={`/leads/${lead.id}`}>
               <ExternalLink size={15} />
             </Link>
-            <button className="dp-icon-btn" type="button" aria-label="Close quick panel" onClick={onClose}>
-              <X size={15} />
-            </button>
+            {onClose ? (
+              <button className="dp-icon-btn" type="button" aria-label="Close quick panel" onClick={onClose}>
+                <X size={15} />
+              </button>
+            ) : null}
           </div>
         </div>
-        <div className="dp-meta">
-          <LeadStatusBadge status={lead.status} />
-          <span className="dp-score">score {lead.score ?? "--"} / 100</span>
-        </div>
       </div>
-      <div className="dp-actions">
-        <button className="btn btn-muted" type="button" disabled title="Available in a future update">
-          <PenLine size={13} />
-          Note
-        </button>
-        <button className="btn btn-muted" type="button" disabled title="Available in a future update">
-          <MessageSquare size={13} />
-          Reply
-        </button>
-        <button className="btn btn-muted" type="button" disabled title="Available in a future update">
-          <Pause size={13} />
-          Pause
-        </button>
+      <div className="dp-section dp-actions-section">
+        <div className="dp-section-title">ACTIONS</div>
+        <OperatorActionButtons
+          tenantId={tenantId}
+          leadId={lead.id}
+          initialStatus={lead.status}
+          score={lead.score}
+          actions={actions}
+          onConversationCreated={() => {}}
+          compact
+        />
       </div>
       <div className="dp-body">
         <div className="dp-section">
-          <div className="dp-section-title">Contact</div>
+          <div className="dp-section-title">CONTACT</div>
           <div className="dp-row"><span className="dp-row-label">Email</span><span className="dp-row-value">{lead.email}</span></div>
-          <div className="dp-row"><span className="dp-row-label">Phone</span><span className="dp-row-value">{lead.phone ?? "--"}</span></div>
-          <div className="dp-row"><span className="dp-row-label">State</span><span className="dp-row-value">{lead.state ?? "--"}</span></div>
-          <div className="dp-row"><span className="dp-row-label">Industry</span><span className="dp-row-value">{lead.vertical ?? "--"}</span></div>
+          <div className="dp-row"><span className="dp-row-label">Phone</span><span className={lead.phone ? "dp-row-value" : "dp-row-value muted-placeholder"}>{lead.phone ?? "No phone on record"}</span></div>
         </div>
         <div className="dp-section">
-          <div className="dp-section-title">Top weaknesses</div>
+          <div className="dp-section-title">TOP WEAKNESSES</div>
           {lead.weaknesses.length ? (
             <div className="weakness-wrap">
               {lead.weaknesses.slice(0, 4).map((weakness) => (
@@ -175,24 +150,28 @@ export function LeadQuickPanelWithClose({
               ))}
             </div>
           ) : (
-            <div className="dp-empty">No website weaknesses recorded yet.</div>
+            <div className="dp-empty dp-empty-with-icon">
+              <AlertCircle size={15} aria-label="No weaknesses recorded" />
+              <span>No website weaknesses recorded yet.</span>
+            </div>
           )}
         </div>
         <div className="dp-section">
-          <div className="dp-section-title">Latest message</div>
+          <div className="dp-section-title">LATEST MESSAGE</div>
           {lead.latestConversation ? (
-            <div className="dp-last-msg">
-              <div className="dp-msg-meta">
-                {formatDirection(lead.latestConversation.direction)} · {formatMessageTime(lead.latestConversation.createdAt)}
+            <div className="dp-message-card">
+              <div className="dp-message-meta">
+                <span className="dp-message-badge">{formatDirection(lead.latestConversation.direction)}</span>
+                <span className="dp-message-time">{formatMessageTime(lead.latestConversation.createdAt)}</span>
               </div>
-              {lead.latestConversation.body}
+              <blockquote className="dp-message-quote">{lead.latestConversation.body}</blockquote>
             </div>
           ) : (
             <div className="dp-last-msg empty">No messages yet.</div>
           )}
         </div>
       </div>
-    </aside>
+    </>
   );
 }
 

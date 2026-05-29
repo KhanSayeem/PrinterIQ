@@ -51,11 +51,14 @@ const leads: LeadListRow[] = [
 
 describe("LeadsWorkbench", () => {
   it("selects rows and closes the quick panel without navigating", () => {
-    render(<LeadsWorkbench leads={leads} />);
+    render(<LeadsWorkbench tenantId="tenant-1" leads={leads} />);
 
     fireEvent.click(screen.getByText("MJ Electrical"));
 
-    expect(screen.getByText("MJ Electrical · Melbourne, VIC · electrical")).toBeInTheDocument();
+    expect(screen.getByText("MJ")).toHaveClass("dp-avatar");
+    expect(screen.getByText("MJ Electrical · Melbourne")).toBeInTheDocument();
+    expect(screen.getAllByText("VIC").some((element) => element.classList.contains("dp-chip"))).toBe(true);
+    expect(screen.getAllByText("electrical").some((element) => element.classList.contains("dp-chip"))).toBe(true);
     expect(screen.getByText("Can you send details?")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close quick panel" }));
@@ -66,7 +69,7 @@ describe("LeadsWorkbench", () => {
   });
 
   it("renders the no-leads empty state outside the panel", () => {
-    render(<LeadsWorkbench leads={[]} />);
+    render(<LeadsWorkbench tenantId="tenant-1" leads={[]} />);
 
     expect(screen.getByText("No leads yet. Import your Apollo CSV to get started.")).toBeInTheDocument();
     expect(within(screen.getByRole("complementary")).getByText("Select a lead to preview details.")).toBeInTheDocument();

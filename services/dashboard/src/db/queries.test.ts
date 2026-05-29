@@ -6,6 +6,10 @@ import {
   buildLatestConversationsForLeadsQuery,
   buildLeadDetailQuery,
   buildLeadListQuery,
+  buildInsertOperatorConversationQuery,
+  buildLeadStatusTransitionCheckQuery,
+  buildLatestInstantlyLeadIdQuery,
+  buildLatestInstantlyReplyMetadataQuery,
   buildPipelineStageSampleLeadsQuery,
   buildPipelineStageScoreSummaryQuery,
   buildPipelineStatusCountsQuery,
@@ -13,6 +17,8 @@ import {
   buildRelatedLeadDataQueries,
   buildRevenueImportedCountQuery,
   buildRevenuePaymentsSummaryQuery,
+  buildUpdateLeadStatusQuery,
+  buildDeleteOperatorNoteQuery,
   normalizePipelineAnalytics,
   normalizePipelineStage,
 } from "./queries";
@@ -78,6 +84,120 @@ describe("dashboard lead queries", () => {
       expect(query.params).toContain(tenantId);
       expect(query.params).toContain(leadId);
     }
+  });
+
+  it("inserts operator conversation rows with tenant scope and override metadata", () => {
+    const query = buildInsertOperatorConversationQuery(db, {
+      tenantId,
+      leadId,
+      direction: "note",
+      channel: "note",
+      body: "Called and left a voicemail",
+    }).getQuery();
+
+    const normalizedSql = query.sql.toLowerCase();
+    expect(normalizedSql).toContain('insert into "conversations"');
+    expect(normalizedSql).toContain('select');
+    expect(normalizedSql).toContain('"leads"."tenant_id"');
+    expect(normalizedSql).toContain('from "leads"');
+    expect(query.sql).toContain('"leads"."tenant_id" =');
+    expect(query.sql).toContain('"leads"."id" =');
+    expect(query.sql).toContain('"tenant_id"');
+    expect(query.sql).toContain('"lead_id"');
+    expect(query.sql).toContain('"direction"');
+    expect(query.sql).toContain('"channel"');
+    expect(query.sql).toContain('"body"');
+    expect(query.sql).toContain('"operator_override"');
+    expect(normalizedSql).toContain("returning");
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain(leadId);
+    expect(query.params).toContain("note");
+    expect(query.params).toContain("Called and left a voicemail");
+    expect(query.params).toContain(true);
+  });
+
+  it("updates lead status only for allowed current states on the matching tenant-scoped lead", () => {
+    const query = buildUpdateLeadStatusQuery(db, {
+      tenantId,
+      leadId,
+      status: "replied",
+    }).toSQL();
+
+    expect(query.sql).toContain('update "leads"');
+    expect(query.sql).toContain('"status" =');
+    expect(query.sql).toContain('"updated_at" =');
+    expect(query.sql).toContain('"leads"."tenant_id" =');
+    expect(query.sql).toContain('"leads"."id" =');
+    expect(query.sql).toContain('"leads"."status" in');
+    expect(query.sql).toContain("returning");
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain(leadId);
+    expect(query.params).toContain("replied");
+    expect(query.params).toContain("contacted");
+  });
+
+  it("checks lead status transition eligibility before external side effects", () => {
+    const query = buildLeadStatusTransitionCheckQuery(db, {
+      tenantId,
+      leadId,
+      status: "archived",
+    }).toSQL();
+
+    expect(query.sql).toContain('from "leads"');
+    expect(query.sql).toContain('"leads"."tenant_id" =');
+    expect(query.sql).toContain('"leads"."id" =');
+    expect(query.sql).toContain('"leads"."status" in');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain(leadId);
+    expect(query.params).toContain("contacted");
+    expect(query.params).toContain("replied");
+  });
+
+  it("fetches the latest Instantly lead id without exposing other tenants", () => {
+    const query = buildLatestInstantlyLeadIdQuery(db, { tenantId, leadId }).toSQL();
+
+    expect(query.sql).toContain('from "outreach_sends"');
+    expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
+    expect(query.sql).toContain('"outreach_sends"."lead_id" =');
+    expect(query.sql).toContain('"outreach_sends"."instantly_lead_id" is not null');
+    expect(query.sql).toContain('order by "outreach_sends"."sent_at" desc');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain(leadId);
+  });
+
+  it("fetches the latest inbound Instantly reply metadata for override replies", () => {
+    const query = buildLatestInstantlyReplyMetadataQuery(db, { tenantId, leadId }).toSQL();
+
+    expect(query.sql).toContain('from "conversations"');
+    expect(query.sql).toContain('"conversations"."tenant_id" =');
+    expect(query.sql).toContain('"conversations"."lead_id" =');
+    expect(query.sql).toContain('"conversations"."direction" =');
+    expect(query.sql).toContain('"conversations"."instantly_email_id" is not null');
+    expect(query.sql).toContain('"conversations"."instantly_account_id" is not null');
+    expect(query.sql).toContain('order by "conversations"."created_at" desc');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain(leadId);
+    expect(query.params).toContain("inbound");
+  });
+
+  it("deletes only tenant-scoped operator note conversations", () => {
+    const query = buildDeleteOperatorNoteQuery(db, {
+      tenantId,
+      leadId,
+      conversationId: "33333333-3333-4333-8333-333333333333",
+    }).toSQL();
+
+    expect(query.sql).toContain('delete from "conversations"');
+    expect(query.sql).toContain('"conversations"."tenant_id" =');
+    expect(query.sql).toContain('"conversations"."lead_id" =');
+    expect(query.sql).toContain('"conversations"."id" =');
+    expect(query.sql).toContain('"conversations"."direction" =');
+    expect(query.sql).toContain('"conversations"."operator_override" =');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain(leadId);
+    expect(query.params).toContain("33333333-3333-4333-8333-333333333333");
+    expect(query.params).toContain("note");
+    expect(query.params).toContain(true);
   });
 });
 
