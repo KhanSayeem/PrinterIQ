@@ -1,4 +1,5 @@
 # Website Preview Feature — Design Spec
+
 **Date:** 2026-05-29
 **Status:** Approved for implementation planning
 
@@ -9,6 +10,7 @@
 When a lead is qualified, PrinterIQ generates a personalised, trade-matched HTML website preview and hosts it at a unique URL. That URL is injected into the outreach email via Instantly's custom variables. The lead clicks a real browser link and sees a polished website mocked up for their specific business. The generated preview is also visible in the dashboard lead detail page.
 
 Two lead scenarios are handled:
+
 - **Lead has a website:** preview demonstrates what a rebuilt, weakness-free version could look like.
 - **Lead has no website:** preview shows a clean landing page as if they already had a professional site.
 
@@ -48,12 +50,14 @@ The `qualify` worker no longer enqueues `SCHEDULE_OUTREACH` directly. Instead it
 8. Enqueue `SCHEDULE_OUTREACH` with forwarded payload + `preview_url`
 
 **Retry / failure handling:**
+
 - BullMQ max attempts: 5
 - Exponential backoff: 60s, 120s, 240s, 480s, 960s
 - On all retries exhausted: dead-letter queue (existing handler); surfaces in dashboard
 - `SCHEDULE_OUTREACH` is only enqueued after confirmed DB insert -- if the insert fails, the job retries from step 6
 
 **TDD requirement:** `generate_preview` is on the TDD-mandatory path. Tests must cover:
+
 - Successful end-to-end generation for each of the 6 template keys
 - Trade-type keyword mapping (all 5 specific + fallback)
 - Haiku JSON parse failure triggers retry
@@ -85,7 +89,7 @@ CREATE TABLE website_previews (
   CONSTRAINT fk_website_previews_lead
     FOREIGN KEY (lead_id) REFERENCES leads(id),
   CONSTRAINT fk_website_previews_tenant
-    FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
 );
 
 CREATE INDEX idx_website_previews_tenant_lead
@@ -101,6 +105,7 @@ CREATE INDEX idx_website_previews_tenant_lead
 ### Query layer
 
 All access to `website_previews` goes through:
+
 - `services/pipeline/src/db/queries.py` -- insert + get by lead_id (Python worker)
 - `services/dashboard/src/db/queries.ts` -- get by lead_id for dashboard read (TypeScript)
 
@@ -112,14 +117,14 @@ No raw queries outside these files.
 
 ### Template inventory
 
-| Key | Dedicated trade types (keyword match) | Hero image theme |
-|---|---|---|
-| `plumbing` | plumber, plumbing, hot water, pipes, drainage, blocked drains | Plumber at work, pipes |
-| `electrical` | electrician, electrical, solar, switchboard, wiring, lighting | Electrician, switchboard |
-| `hvac` | air conditioning, hvac, heating, cooling, refrigeration, split system | HVAC unit, technician |
-| `concreting` | concreting, concrete, driveways, paths, slabs, footings | Fresh concrete pour |
-| `landscaping` | landscaping, lawn, gardens, turf, retaining walls, mowing | Garden transformation |
-| `general` | Fallback -- all leads that do not match any of the above | Construction/trades site |
+| Key           | Dedicated trade types (keyword match)                                 | Hero image theme         |
+| ------------- | --------------------------------------------------------------------- | ------------------------ |
+| `plumbing`    | plumber, plumbing, hot water, pipes, drainage, blocked drains         | Plumber at work, pipes   |
+| `electrical`  | electrician, electrical, solar, switchboard, wiring, lighting         | Electrician, switchboard |
+| `hvac`        | air conditioning, hvac, heating, cooling, refrigeration, split system | HVAC unit, technician    |
+| `concreting`  | concreting, concrete, driveways, paths, slabs, footings               | Fresh concrete pour      |
+| `landscaping` | landscaping, lawn, gardens, turf, retaining walls, mowing             | Garden transformation    |
+| `general`     | Fallback -- all leads that do not match any of the above              | Construction/trades site |
 
 ### Trade-type matching logic
 
@@ -130,6 +135,7 @@ All keyword lists live in a single config dict in `generate_preview.py` -- not s
 ### General fallback template content
 
 The `general` template uses:
+
 - **Hero imagery:** construction/trades stock photo (hard hat, tools, site)
 - **Hero tagline:** "Quality Trades, Local Service"
 - **Services grid (5 items):** Free Quotes, Fully Licensed, Local Area Coverage, Quality Guaranteed, Fast Turnaround
@@ -147,22 +153,23 @@ Templates use `{{PLACEHOLDER}}` tokens (double curly, uppercase). The render ste
 
 **Tokens available in all templates:**
 
-| Token | Source |
-|---|---|
-| `{{BUSINESS_NAME}}` | `lead.business_name` |
-| `{{FIRST_NAME}}` | `lead.first_name` |
-| `{{CITY}}` | `lead.city` |
-| `{{STATE}}` | `lead.state` |
-| `{{PHONE}}` | `lead.phone` |
-| `{{TAGLINE}}` | Haiku output |
-| `{{ABOUT_BLURB}}` | Haiku output |
-| `{{SERVICE_1}}` through `{{SERVICE_5}}` | Haiku output |
-| `{{WEAKNESS_CALLOUT}}` | Human-readable label mapped from `qualification.top_weakness` code: `no_mobile` -> "Not mobile-friendly", `no_ssl` -> "No SSL certificate", `no_meta_title` -> "Missing page title", `no_meta_description` -> "Missing meta description", `no_h1` -> "No main heading", unknown -> "Outdated website" |
-| `{{PREVIEW_URL}}` | `https://preview.printeriq.com/{lead_id}` |
+| Token                                   | Source                                                                                                                                                                                                                                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{{BUSINESS_NAME}}`                     | `lead.business_name`                                                                                                                                                                                                                                                                                  |
+| `{{FIRST_NAME}}`                        | `lead.first_name`                                                                                                                                                                                                                                                                                     |
+| `{{CITY}}`                              | `lead.city`                                                                                                                                                                                                                                                                                           |
+| `{{STATE}}`                             | `lead.state`                                                                                                                                                                                                                                                                                          |
+| `{{PHONE}}`                             | `lead.phone`                                                                                                                                                                                                                                                                                          |
+| `{{TAGLINE}}`                           | Haiku output                                                                                                                                                                                                                                                                                          |
+| `{{ABOUT_BLURB}}`                       | Haiku output                                                                                                                                                                                                                                                                                          |
+| `{{SERVICE_1}}` through `{{SERVICE_5}}` | Haiku output                                                                                                                                                                                                                                                                                          |
+| `{{WEAKNESS_CALLOUT}}`                  | Human-readable label mapped from `qualification.top_weakness` code: `no_mobile` -> "Not mobile-friendly", `no_ssl` -> "No SSL certificate", `no_meta_title` -> "Missing page title", `no_meta_description` -> "Missing meta description", `no_h1` -> "No main heading", unknown -> "Outdated website" |
+| `{{PREVIEW_URL}}`                       | `https://preview.printeriq.com/{lead_id}`                                                                                                                                                                                                                                                             |
 
 ### Template design requirements
 
 Every template must:
+
 - Be fully self-contained (no external JS, no external fonts via Google Fonts CDN -- embed or use system fonts)
 - Be mobile-first responsive
 - Include an SSL padlock visual in the hero or nav (design signal, not functional)
@@ -194,6 +201,7 @@ server {
 ```
 
 After adding this block to `nginx.conf`:
+
 1. `sudo nginx -t && sudo systemctl reload nginx`
 2. `sudo certbot --nginx -d preview.printeriq.com`
 3. `sudo mkdir -p /var/www/previews/assets && sudo chown -R www-data:www-data /var/www/previews`
@@ -223,6 +231,7 @@ Phase 1: no expiry. Preview files persist indefinitely. Cleanup policy (e.g. arc
 Replaces `opener-v1.txt` for all qualified leads once this feature is live.
 
 **Key constraints baked into the prompt:**
+
 - No em-dashes anywhere in output
 - No double-hyphen em-dash substitutes
 - No "hope this email finds you well" or equivalent opener
@@ -246,12 +255,14 @@ Macauley
 ```
 
 **Follow-up 1 (3 days):**
+
 ```
 Hey {first_name}, just checking you got a chance to look at the preview.
 Happy to tweak anything to match your branding or services. Still $1,500 all in.
 ```
 
 **Follow-up 2 (6 days):**
+
 ```
 Last nudge from me. Offer's open if the timing works. No pressure.
 ```
@@ -290,10 +301,12 @@ websitePreview: {
 A new `WebsitePreviewCard` component is added to `LeadDetailView`, receiving `websitePreview` as a prop.
 
 **States:**
+
 - `null` (generation pending or failed): card shows "Preview generating..." skeleton or "Preview failed -- check pipeline" error state
 - Present: renders the full card as designed in `printeriq-dashboard-v2.html`
 
 **Card contents (when preview exists):**
+
 - Template selector tabs -- the matched template tab is active; the other 5 are shown as inactive (Phase 1: one preview per lead, no switching)
 - Browser chrome with desktop/mobile toggle
   - Desktop view: iframe pointing to `previewUrl` directly (X-Frame-Options + CSP headers on the preview server permit this)
@@ -313,11 +326,12 @@ Called once per lead from `generate_preview` worker via `claude_client.py`.
 Input variables: `business_name`, `city`, `state`, `industry`, `keywords`, `top_weakness`
 
 Output schema (JSON, validated before use):
+
 ```json
 {
   "tagline": "string (max 10 words, location-specific, no em-dashes)",
   "about_blurb": "string (2 sentences, casual, professional)",
-  "services": ["string", "string", "string"]  // 3-5 items
+  "services": ["string", "string", "string"] // 3-5 items
 }
 ```
 
@@ -329,12 +343,12 @@ Estimated cost: ~$0.001 per lead
 
 ## Cost Profile
 
-| Item | Cost per lead |
-|---|---|
-| Haiku personalisation call | ~$0.001 |
-| VPS disk (HTML file ~30KB) | ~$0.000003 |
-| Nginx static serve | $0.00 |
-| **Total per lead** | **~$0.001** |
+| Item                       | Cost per lead |
+| -------------------------- | ------------- |
+| Haiku personalisation call | ~$0.001       |
+| VPS disk (HTML file ~30KB) | ~$0.000003    |
+| Nginx static serve         | $0.00         |
+| **Total per lead**         | **~$0.001**   |
 
 At $1,500 AUD revenue per conversion, preview generation cost is negligible.
 
@@ -364,9 +378,148 @@ At $1,500 AUD revenue per conversion, preview generation cost is negligible.
 
 ---
 
+## Template Design Brief
+
+All 6 templates are generated by Claude as part of this task. No template file should be stubbed or left empty. Each must be a complete, production-ready single-file HTML document on delivery.
+
+### Shared design language
+
+All templates share the same structural and visual foundation. The goal is consistent product quality across trades while feeling genuinely trade-specific on first impression.
+
+**Layout — every template must have these sections in this order:**
+
+1. Nav bar — business name (text, not logo), phone number right-aligned, one CTA button ("Get a Free Quote")
+2. Hero — full-width, trade photo background with dark overlay, business name as H1, tagline as H2, two CTA buttons ("Call Now" and "Get a Free Quote")
+3. Trust bar — 4 inline trust signals rendered as icon + label
+4. Services grid — 3 to 5 cards, each with a simple inline SVG icon, service name, one-line description
+5. About section — two-column layout, left is `{{ABOUT_BLURB}}`, right is a simple stat block (years in business placeholder, jobs completed placeholder, areas covered)
+6. Weakness callout banner — full-width coloured band, headline referencing `{{WEAKNESS_CALLOUT}}`, subtext "We build sites that don't have this problem"
+7. Contact section — business name, phone (large, clickable `tel:` link), city/state, simple contact form (name, phone, message — static HTML, no backend)
+8. Footer — business name, city/state, ABN placeholder, no PrinterIQ branding anywhere
+
+**Typography:**
+
+- System font stack only — no Google Fonts CDN calls. Use: `font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
+- H1: 48px bold on desktop, 32px on mobile
+- H2: 28px, medium weight
+- Body: 16px, 1.6 line height
+- All font sizes in `rem`, not `px`, for accessibility
+
+**Colour system:**
+
+- Each template has one primary accent colour (defined per template below)
+- All templates share the same neutral base: white body (`#ffffff`), dark text (`#1a1a1a`), light section backgrounds (`#f8f8f7`), footer dark (`#1a1a1a` with white text)
+- CTA buttons use the accent colour with white text
+- Trust bar and weakness callout banner use a light tint of the accent colour as background
+
+**Spacing and layout:**
+
+- Max content width: 1100px, centred
+- Section padding: 80px vertical on desktop, 48px on mobile
+- All layout via CSS Flexbox or Grid — no frameworks, no external CSS
+
+**Images:**
+
+- Hero background references `/assets/{key}-hero.jpg` — do not inline as base64
+- All other visual elements use inline SVG icons only — no image tags outside the hero
+- Hero overlay: `background: linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.45))` over the photo
+
+**Performance:**
+
+- No external JS of any kind
+- No external CSS of any kind
+- No web fonts loaded externally
+- Entire file (excluding hero image) must be under 50KB
+
+**Mobile:**
+
+- Single breakpoint at 768px
+- Nav collapses to business name + phone only (no hamburger menu needed)
+- Hero H1 drops to 32px
+- Services grid stacks to single column
+- About section stacks to single column
+
+**Trust signals:**
+
+- Include a padlock SVG icon in the nav bar or trust bar, styled in the accent colour — visual signal only, not functional
+
+---
+
+### Per-template specifications
+
+**`plumbing.html`**
+
+- Accent colour: `#0369a1` (deep blue)
+- Trust bar: Licensed Plumber, 24/7 Emergency, Local Business, Free Quotes
+- Services label: "Our Plumbing Services"
+- About headline: "Your Local Plumbing Experts in `{{CITY}}`"
+- Callout tint: `#e0f2fe`
+- Hero image: `/assets/plumbing-hero.jpg`
+
+**`electrical.html`**
+
+- Accent colour: `#d97706` (amber)
+- Trust bar: Licensed Electrician, Safety Certified, Local Business, Free Quotes
+- Services label: "Our Electrical Services"
+- About headline: "Trusted Electricians Serving `{{CITY}}` and Surrounds"
+- Callout tint: `#fef3c7`
+- Hero image: `/assets/electrical-hero.jpg`
+
+**`hvac.html`**
+
+- Accent colour: `#0891b2` (cyan)
+- Trust bar: Fully Licensed, All Brands Serviced, Local Business, Free Quotes
+- Services label: "Heating and Cooling Services"
+- About headline: "`{{CITY}}`'s Air Conditioning Specialists"
+- Callout tint: `#cffafe`
+- Hero image: `/assets/hvac-hero.jpg`
+
+**`concreting.html`**
+
+- Accent colour: `#57534e` (warm grey)
+- Trust bar: Licensed Contractor, Quality Materials, Local Business, Free Quotes
+- Services label: "Our Concreting Services"
+- About headline: "Quality Concreting in `{{CITY}}` and Surrounding Areas"
+- Callout tint: `#f5f5f4`
+- Hero image: `/assets/concreting-hero.jpg`
+
+**`landscaping.html`**
+
+- Accent colour: `#16a34a` (green)
+- Trust bar: Fully Insured, Locally Owned, Seasonal Availability, Free Quotes
+- Services label: "Our Landscaping Services"
+- About headline: "Transforming `{{CITY}}` Gardens Since Day One"
+- Callout tint: `#dcfce7`
+- Hero image: `/assets/landscaping-hero.jpg`
+
+**`general.html`**
+
+- Accent colour: `#1d4ed8` (neutral blue)
+- Trust bar: Fully Licensed, Locally Owned, Quality Guaranteed, Free Quotes
+- Services label: "Our Services"
+- About headline: "Your Local Trade Specialists in `{{CITY}}`"
+- Callout tint: `#eff6ff`
+- Hero image: `/assets/general-hero.jpg`
+- Services grid uses hardcoded fallback values (Free Quotes, Fully Licensed, Local Area Coverage, Quality Guaranteed, Fast Turnaround) — `{{SERVICE_1}}` through `{{SERVICE_5}}` tokens are still used in the template but the worker injects these fixed values directly rather than waiting on Haiku output
+
+---
+
+### Maintenance process
+
+When a template needs updating:
+
+1. Edit the source file in `services/pipeline/src/templates/previews/{key}.html`
+2. If a new `{{TOKEN}}` is added, update the token table in this spec and in `generate_preview.py` before deploying
+3. Already-generated files at `/var/www/previews/` are not automatically updated — they reflect the template version at generation time. This is intentional for Phase 1.
+4. To propagate a fix to existing leads, run a one-off regeneration script against the `website_previews` table — this is a future-phase operator tool, not built now
+5. Template changes do not require a DB migration unless a new token requires a new field in `personalisation_data`
+
+---
+
 ## Files Affected
 
 **New files:**
+
 - `services/pipeline/src/workers/generate_preview.py`
 - `services/pipeline/tests/test_generate_preview.py`
 - `services/pipeline/src/templates/previews/plumbing.html`
@@ -381,6 +534,7 @@ At $1,500 AUD revenue per conversion, preview generation cost is negligible.
 - `docs/operator-runbook.md` (new, includes pre-launch QA checklist)
 
 **Modified files:**
+
 - `services/pipeline/src/workers/qualify.py` -- replace SCHEDULE_OUTREACH enqueue with GENERATE_PREVIEW enqueue, forward payload
 - `services/pipeline/src/workers/schedule_outreach.py` -- accept and forward `preview_url` in Instantly payload
 - `services/pipeline/src/pipeline_queue/definitions.py` -- add GENERATE_PREVIEW job type
