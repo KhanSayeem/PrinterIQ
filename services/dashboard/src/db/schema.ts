@@ -131,6 +131,8 @@ export const conversations = pgTable("conversations", {
   direction: text("direction").notNull(),
   channel: text("channel").notNull(),
   body: text("body").notNull(),
+  instantlyEmailId: text("instantly_email_id"),
+  instantlyAccountId: text("instantly_account_id"),
   intent: text("intent"),
   intentConfidence: integer("intent_confidence"),
   agentAction: text("agent_action"),

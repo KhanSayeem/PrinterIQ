@@ -19,6 +19,8 @@ export function LeadDetailTabs({
   conversations,
   outreachSends,
   payment,
+  now,
+  onDeleteNote,
 }: {
   lead: Lead;
   enrichment: Enrichment;
@@ -26,12 +28,14 @@ export function LeadDetailTabs({
   conversations: Conversation[];
   outreachSends: Outreach[];
   payment: Payment;
+  now?: Date;
+  onDeleteNote?: (conversationId: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>("Overview");
 
   return (
     <>
-      <div className="lead-tabs">
+      <div className="lead-tabs" role="tablist" aria-label="Lead detail tabs">
         {tabs.map((tab) => (
           <button key={tab} className={`lead-tab ${activeTab === tab ? "active" : ""}`} type="button" onClick={() => setActiveTab(tab)}>
             {tab}
@@ -76,7 +80,9 @@ export function LeadDetailTabs({
             </div>
           </>
         ) : null}
-        {activeTab === "Conversation" ? <ConversationThread conversations={conversations} /> : null}
+        {activeTab === "Conversation" ? (
+          <ConversationThread conversations={conversations} now={now} onDeleteNote={onDeleteNote} />
+        ) : null}
         {activeTab === "Outreach" ? (
           outreachSends.length ? outreachSends.map((send) => (
             <div className="outreach-row" key={send.id}>

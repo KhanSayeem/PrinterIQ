@@ -45,17 +45,14 @@ function readNestedString(payload: Record<string, unknown>, path: string[]): str
 }
 
 function mapInstantlyPayload(payload: Record<string, unknown>): ProcessReplyJob {
-  const tenantId =
-    readString(payload, ["tenant_id", "tenantId"]) ??
-    readNestedString(payload, ["metadata", "tenant_id"]) ??
-    readNestedString(payload, ["custom_variables", "tenant_id"]);
-  const leadId =
-    readString(payload, ["lead_id", "leadId"]) ??
-    readNestedString(payload, ["metadata", "lead_id"]) ??
-    readNestedString(payload, ["custom_variables", "lead_id"]);
+  const tenantId = readNestedString(payload, ["metadata", "tenant_id"]);
+  const leadId = readNestedString(payload, ["metadata", "lead_id"]);
   const body = readString(payload, ["reply_text", "body", "text", "message"]);
+  const instantlyLeadId = readNestedString(payload, ["lead", "id"]);
+  const instantlyEmailId = readNestedString(payload, ["email", "id"]);
+  const instantlyAccountId = readNestedString(payload, ["email", "eaccount"]);
 
-  if (!tenantId || !leadId || !body) {
+  if (!tenantId || !leadId || !body || !instantlyLeadId || !instantlyEmailId || !instantlyAccountId) {
     throw new Error("missing required webhook fields");
   }
 
@@ -67,6 +64,9 @@ function mapInstantlyPayload(payload: Record<string, unknown>): ProcessReplyJob 
     direction: "inbound",
     body,
     raw_webhook: payload,
+    instantly_lead_id: instantlyLeadId,
+    instantly_email_id: instantlyEmailId,
+    instantly_account_id: instantlyAccountId,
   };
 }
 

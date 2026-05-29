@@ -78,7 +78,7 @@ export default async function LeadsPage({
         </div>
       </div>
       <LeadFilters activeStatus={params.status} counts={counts} />
-      <LeadsWorkbench leads={rows} />
+      <LeadsWorkbench tenantId={tenantId} leads={rows} />
     </>
   );
 }

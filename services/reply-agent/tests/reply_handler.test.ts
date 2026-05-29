@@ -22,6 +22,9 @@ function processJob(body = "How much is it?") {
     direction: "inbound" as const,
     body,
     raw_webhook: { event: "reply" },
+    instantly_lead_id: null,
+    instantly_email_id: null,
+    instantly_account_id: null,
   };
 }
 
@@ -146,6 +149,37 @@ describe("process_reply handler", () => {
     await handleProcessReply(processJob(), { queries, claude, queue: createQueue() });
 
     expect(events).toEqual(["insert", "claude"]);
+  });
+
+  it("passes Instantly reply metadata into the inbound conversation insert", async () => {
+    const queries = createQueries();
+
+    await handleProcessReply(
+      {
+        ...processJob("Can you send the quote?"),
+        instantly_lead_id: "instantly-lead-123",
+        instantly_email_id: "email-uuid-123",
+        instantly_account_id: "sender@printeriq.com",
+      },
+      {
+        queries,
+        claude: createClaude(),
+        queue: createQueue(),
+        escalation: createEscalationService(),
+      },
+    );
+
+    expect(queries.insertInboundConversation).toHaveBeenCalledWith(
+      tenantId,
+      leadId,
+      "email",
+      "Can you send the quote?",
+      {
+        instantly_lead_id: "instantly-lead-123",
+        instantly_email_id: "email-uuid-123",
+        instantly_account_id: "sender@printeriq.com",
+      },
+    );
   });
 
   it("advances the lead to replied after inserting the inbound conversation", async () => {

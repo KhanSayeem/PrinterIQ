@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { getDb } from "./client";
 import {
@@ -45,6 +45,30 @@ export type LeadListFilters = {
 export type LeadIdentity = {
   tenantId: string;
   leadId: string;
+};
+
+export type OperatorConversationInput = LeadIdentity & {
+  direction: "note" | "outbound";
+  channel: "note" | "email";
+  body: string;
+};
+
+export type LeadStatusUpdateInput = LeadIdentity & {
+  status: Extract<PipelineStatus, "replied" | "archived">;
+};
+
+const STATUS_TRANSITION_ALLOWED_FROM: Record<LeadStatusUpdateInput["status"], PipelineStatus[]> = {
+  replied: ["contacted", "replied"],
+  archived: ["contacted", "replied"],
+};
+
+export type InstantlyReplyMetadata = {
+  instantlyEmailId: string;
+  instantlyAccountId: string;
+};
+
+export type DeleteOperatorNoteInput = LeadIdentity & {
+  conversationId: string;
 };
 
 export type LeadLatestConversation = {
@@ -329,6 +353,137 @@ export function buildRelatedLeadDataQueries(db: DashboardDb, identity: LeadIdent
   ];
 }
 
+export function buildInsertOperatorConversationQuery(
+  db: DashboardDb,
+  input: OperatorConversationInput,
+) {
+  requireTenantId(input.tenantId);
+
+  return db.execute<{
+    id: string;
+    leadId: string;
+    direction: string;
+    channel: string;
+    body: string;
+    createdAt: Date | string;
+  }>(sql`
+    INSERT INTO ${conversations} (
+      ${conversations.tenantId},
+      ${conversations.leadId},
+      ${conversations.direction},
+      ${conversations.channel},
+      ${conversations.body},
+      ${conversations.operatorOverride},
+      ${conversations.sentAt}
+    )
+    SELECT
+      ${leads.tenantId},
+      ${leads.id},
+      ${input.direction},
+      ${input.channel},
+      ${input.body},
+      ${true},
+      ${input.direction === "outbound" ? new Date() : null}
+    FROM ${leads}
+    WHERE ${leads.tenantId} = ${input.tenantId}
+      AND ${leads.id} = ${input.leadId}
+    RETURNING
+      ${conversations.id} AS "id",
+      ${conversations.leadId} AS "leadId",
+      ${conversations.direction} AS "direction",
+      ${conversations.channel} AS "channel",
+      ${conversations.body} AS "body",
+      ${conversations.createdAt} AS "createdAt"
+  `);
+}
+
+export function buildUpdateLeadStatusQuery(db: DashboardDb, input: LeadStatusUpdateInput) {
+  requireTenantId(input.tenantId);
+  const allowedFrom = STATUS_TRANSITION_ALLOWED_FROM[input.status];
+
+  return db
+    .update(leads)
+    .set({ status: input.status, updatedAt: new Date() })
+    .where(and(eq(leads.tenantId, input.tenantId), eq(leads.id, input.leadId), inArray(leads.status, allowedFrom)))
+    .returning({
+      id: leads.id,
+      status: leads.status,
+    });
+}
+
+export function buildLeadStatusTransitionCheckQuery(db: DashboardDb, input: LeadStatusUpdateInput) {
+  requireTenantId(input.tenantId);
+  const allowedFrom = STATUS_TRANSITION_ALLOWED_FROM[input.status];
+
+  return db
+    .select({
+      id: leads.id,
+      status: leads.status,
+    })
+    .from(leads)
+    .where(and(eq(leads.tenantId, input.tenantId), eq(leads.id, input.leadId), inArray(leads.status, allowedFrom)))
+    .limit(1);
+}
+
+export function buildLatestInstantlyLeadIdQuery(db: DashboardDb, identity: LeadIdentity) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      instantlyLeadId: outreachSends.instantlyLeadId,
+    })
+    .from(outreachSends)
+    .where(
+      and(
+        eq(outreachSends.tenantId, identity.tenantId),
+        eq(outreachSends.leadId, identity.leadId),
+        isNotNull(outreachSends.instantlyLeadId),
+      ),
+    )
+    .orderBy(desc(outreachSends.sentAt), desc(outreachSends.createdAt), desc(outreachSends.id))
+    .limit(1);
+}
+
+export function buildLatestInstantlyReplyMetadataQuery(db: DashboardDb, identity: LeadIdentity) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      instantlyEmailId: conversations.instantlyEmailId,
+      instantlyAccountId: conversations.instantlyAccountId,
+    })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.tenantId, identity.tenantId),
+        eq(conversations.leadId, identity.leadId),
+        eq(conversations.direction, "inbound"),
+        isNotNull(conversations.instantlyEmailId),
+        isNotNull(conversations.instantlyAccountId),
+      ),
+    )
+    .orderBy(desc(conversations.createdAt), desc(conversations.id))
+    .limit(1);
+}
+
+export function buildDeleteOperatorNoteQuery(db: DashboardDb, input: DeleteOperatorNoteInput) {
+  requireTenantId(input.tenantId);
+
+  return db
+    .delete(conversations)
+    .where(
+      and(
+        eq(conversations.tenantId, input.tenantId),
+        eq(conversations.leadId, input.leadId),
+        eq(conversations.id, input.conversationId),
+        eq(conversations.direction, "note"),
+        eq(conversations.operatorOverride, true),
+      ),
+    )
+    .returning({ id: conversations.id });
+}
+
+
 export function buildPipelineStatusCountsQuery(db: DashboardDb, identity: { tenantId: string }) {
   requireTenantId(identity.tenantId);
 
@@ -548,6 +703,65 @@ export async function getRevenueAnalytics(identity: { tenantId: string; period: 
     aiCosts,
     totalAiCostUsd: aiCosts.reduce((sum, row) => sum + row.costUsd, 0),
   };
+}
+
+export async function insertOperatorConversation(input: OperatorConversationInput) {
+  const db = getDb();
+  const [conversation] = await buildInsertOperatorConversationQuery(db, input);
+  if (!conversation) {
+    throw new Error("Operator conversation insert failed");
+  }
+  return conversation;
+}
+
+export async function updateLeadStatus(input: LeadStatusUpdateInput) {
+  const db = getDb();
+  const [lead] = await buildUpdateLeadStatusQuery(db, input);
+  if (!lead) {
+    throw new Error(`Lead ${input.leadId} not found for tenant ${input.tenantId}`);
+  }
+  return lead;
+}
+
+export async function assertLeadStatusTransitionAllowed(input: LeadStatusUpdateInput) {
+  const db = getDb();
+  const [lead] = await buildLeadStatusTransitionCheckQuery(db, input);
+  if (!lead) {
+    throw new Error(`Lead ${input.leadId} is not eligible for ${input.status}`);
+  }
+  return lead;
+}
+
+export async function getLatestInstantlyLeadId(identity: LeadIdentity) {
+  const db = getDb();
+  const [row] = await buildLatestInstantlyLeadIdQuery(db, identity);
+  if (!row?.instantlyLeadId) {
+    throw new Error("Instantly lead id not found for lead");
+  }
+  return row.instantlyLeadId;
+}
+
+export async function getLatestInstantlyReplyMetadata(
+  identity: LeadIdentity,
+): Promise<InstantlyReplyMetadata> {
+  const db = getDb();
+  const [row] = await buildLatestInstantlyReplyMetadataQuery(db, identity);
+  if (!row?.instantlyEmailId || !row.instantlyAccountId) {
+    throw new Error("Instantly reply metadata not found for lead");
+  }
+  return {
+    instantlyEmailId: row.instantlyEmailId,
+    instantlyAccountId: row.instantlyAccountId,
+  };
+}
+
+export async function deleteOperatorNote(input: DeleteOperatorNoteInput) {
+  const db = getDb();
+  const [deleted] = await buildDeleteOperatorNoteQuery(db, input);
+  if (!deleted) {
+    throw new Error("Operator note not found for lead");
+  }
+  return deleted;
 }
 
 function normalizeAiCostRows(

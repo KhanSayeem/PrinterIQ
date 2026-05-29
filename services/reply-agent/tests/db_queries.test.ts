@@ -12,7 +12,18 @@ describe("reply-agent DB queries", () => {
   it("inserts inbound conversations only through a tenant-scoped lead lookup", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [{ id: "conversation-id" }] });
 
-    await insertInboundConversation("tenant-id", "lead-id", "email", "Hi", { query });
+    await insertInboundConversation(
+      "tenant-id",
+      "lead-id",
+      "email",
+      "Hi",
+      {
+        instantly_lead_id: "instantly-lead-123",
+        instantly_email_id: "email-uuid-123",
+        instantly_account_id: "sender@printeriq.com",
+      },
+      { query },
+    );
 
     const [sql, params] = query.mock.calls[0]!;
     expect(sql).toContain("INSERT INTO conversations");
@@ -20,15 +31,68 @@ describe("reply-agent DB queries", () => {
     expect(sql).toContain("FROM leads");
     expect(sql).toContain("WHERE tenant_id = $1");
     expect(sql).toContain("AND id = $2");
-    expect(params).toEqual(["tenant-id", "lead-id", "email", "Hi"]);
+    expect(sql).toContain("FROM outreach_sends");
+    expect(sql).toContain("outreach_sends.instantly_lead_id = $7");
+    expect(params).toEqual([
+      "tenant-id",
+      "lead-id",
+      "email",
+      "Hi",
+      "email-uuid-123",
+      "sender@printeriq.com",
+      "instantly-lead-123",
+    ]);
+  });
+
+  it("persists Instantly reply metadata on inbound conversations when present", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: "conversation-id" }] });
+
+    await insertInboundConversation(
+      "tenant-id",
+      "lead-id",
+      "email",
+      "Hi",
+      {
+        instantly_lead_id: "instantly-lead-123",
+        instantly_email_id: "email-uuid-123",
+        instantly_account_id: "sender@printeriq.com",
+      },
+      { query },
+    );
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("instantly_email_id");
+    expect(sql).toContain("instantly_account_id");
+    expect(sql).toContain("FROM outreach_sends");
+    expect(sql).toContain("outreach_sends.instantly_lead_id = $7");
+    expect(params).toEqual([
+      "tenant-id",
+      "lead-id",
+      "email",
+      "Hi",
+      "email-uuid-123",
+      "sender@printeriq.com",
+      "instantly-lead-123",
+    ]);
   });
 
   it("fails when the lead does not belong to the tenant", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
 
-    await expect(insertInboundConversation("tenant-id", "lead-id", "email", "Hi", { query })).rejects.toThrow(
-      "lead not found for tenant",
-    );
+    await expect(
+      insertInboundConversation(
+        "tenant-id",
+        "lead-id",
+        "email",
+        "Hi",
+        {
+          instantly_lead_id: "instantly-lead-123",
+          instantly_email_id: "email-uuid-123",
+          instantly_account_id: "sender@printeriq.com",
+        },
+        { query },
+      ),
+    ).rejects.toThrow("lead not found for tenant");
   });
 
   it("advances a lead to replied only from contacted within the tenant", async () => {

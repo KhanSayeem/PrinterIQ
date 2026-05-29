@@ -128,6 +128,9 @@ CREATE TABLE conversations (
   direction           TEXT NOT NULL,
   channel             TEXT NOT NULL,
   body                TEXT NOT NULL,
+  -- Instantly reply metadata
+  instantly_email_id  TEXT,
+  instantly_account_id TEXT,
   -- Claude classification
   intent              TEXT,
   intent_confidence   INTEGER CHECK (intent_confidence BETWEEN 0 AND 100),

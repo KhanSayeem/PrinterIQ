@@ -8,6 +8,9 @@ export type ProcessReplyJob = {
   direction: "inbound";
   body: string;
   raw_webhook: Record<string, unknown>;
+  instantly_lead_id?: string | null;
+  instantly_email_id?: string | null;
+  instantly_account_id?: string | null;
 };
 
 export type SendReplyJob = {
