@@ -3,382 +3,1095 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="{{BUSINESS_NAME}} — Professional plumbing in {{CITY}}, {{STATE}}. Fully licensed, free quotes. Call {{PHONE}}.">
+<meta property="og:title" content="{{BUSINESS_NAME}} | Plumber in {{CITY}}, {{STATE}}">
+<meta property="og:description" content="Professional plumbing in {{CITY}}, {{STATE}}. Licensed. Insured. Free quotes.">
 <title>{{BUSINESS_NAME}} | Plumber in {{CITY}}, {{STATE}}</title>
 <style>
+/* ═══════════════════════════════════════════════════
+   FIXORA-INSPIRED DESIGN SYSTEM
+   Warm cream body · Chocolate dark sections
+   Orange accent · Large serif editorial type
+   Asymmetric bento layouts · No external deps
+═══════════════════════════════════════════════════ */
 :root {
-  --accent:       #1565c0;
-  --accent-dark:  #0d47a1;
-  --accent-light: #e3f2fd;
-  --text:         #1a1a18;
-  --text-muted:   #6b6a65;
-  --bg:           #fafaf9;
-  --bg-card:      #ffffff;
-  --border:       #e8e7e3;
-  --radius:       8px;
-  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --shadow:    0 1px 3px rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.06);
-  --shadow-md: 0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.05);
-}
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { font-size: 16px; -webkit-font-smoothing: antialiased; }
-body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.6; }
-a { color: inherit; text-decoration: none; }
+  --cream:       #f6f1e9;
+  --cream-mid:   #ede8df;
+  --cream-deep:  #e4ddd2;
+  --choco:       #1c0f09;
+  --choco-mid:   #2a1a10;
+  --choco-soft:  #3d2418;
+  --orange:      #e05a1a;
+  --orange-mid:  #c94f14;
+  --orange-light:#fdf0e8;
+  --orange-tint: #fde8d8;
+  --text:        #1c0f09;
+  --text-mid:    #3d2418;
+  --text-soft:   #7a6255;
+  --text-muted:  #a0897a;
+  --border:      #ddd5c8;
+  --border-soft: #ede8df;
+  --white:       #ffffff;
 
-/* ── NAV ── */
+  --serif: Georgia, 'Times New Roman', 'DejaVu Serif', serif;
+  --sans:  -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Helvetica, Arial, sans-serif;
+
+  --max: 1120px;
+  --r:   8px;
+  --r-lg: 18px;
+  --r-xl: 26px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }
+body { font-family: var(--sans); background: var(--cream); color: var(--text); line-height: 1.6; }
+a { color: inherit; text-decoration: none; }
+.wrap { max-width: var(--max); margin: 0 auto; padding: 0 2rem; }
+@media (max-width: 640px) { .wrap { padding: 0 1.25rem; } }
+
+/* ══════════════════════════
+   NAV
+══════════════════════════ */
 .nav {
-  position: sticky; top: 0; z-index: 100;
-  background: #fff; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 200;
+  background: var(--cream);
+  border-bottom: 1px solid var(--border);
 }
 .nav-inner {
-  max-width: 1100px; margin: 0 auto; padding: 0 1.5rem;
-  display: flex; align-items: center; justify-content: space-between;
-  height: 62px;
+  max-width: var(--max); margin: 0 auto;
+  padding: 0 2rem; height: 62px;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
 }
-.nav-logo { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.015em; color: var(--text); }
-.nav-right { display: flex; align-items: center; gap: 1.25rem; }
-.nav-ssl {
-  display: flex; align-items: center; gap: 0.4rem;
-  font-size: 0.8rem; font-weight: 600; color: #16a34a;
+.nav-logo {
+  font-family: var(--serif);
+  font-size: 1.2rem; font-weight: 400;
+  color: var(--text); letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 240px;
 }
-.nav-ssl svg { width: 14px; height: 14px; flex-shrink: 0; }
-.nav-phone {
-  font-size: 0.95rem; font-weight: 700; color: var(--accent);
-  padding: 0.35rem 0.9rem; border: 2px solid var(--accent);
-  border-radius: var(--radius); transition: background 0.15s, color 0.15s;
+.nav-logo em {
+  font-style: normal;
+  color: var(--orange);
 }
-.nav-phone:hover { background: var(--accent); color: #fff; }
-@media (max-width: 640px) {
-  .nav-ssl .ssl-label { display: none; }
-  .nav-logo { font-size: 0.95rem; max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .nav-phone { font-size: 0.85rem; padding: 0.3rem 0.65rem; }
+.nav-right { display: flex; align-items: center; gap: 1rem; flex-shrink: 0; }
+.nav-phone-text {
+  font-size: 0.82rem; font-weight: 700;
+  color: var(--text-mid); letter-spacing: 0.01em;
+  display: none;
 }
-
-/* ── HERO ── */
-.hero {
-  min-height: 88vh;
-  background: linear-gradient(rgba(0,0,0,0.58), rgba(0,0,0,0.58)),
-              url('/assets/plumbing-hero.jpg') center/cover no-repeat;
-  display: flex; align-items: center; justify-content: center;
-  text-align: center; padding: 5rem 1.5rem;
+.nav-cta {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  background: var(--choco); color: var(--white);
+  font-size: 0.75rem; font-weight: 700;
+  letter-spacing: 0.07em; text-transform: uppercase;
+  padding: 0.55rem 1.25rem; border-radius: var(--r);
+  transition: background 0.15s;
+  white-space: nowrap;
 }
-.hero-inner { max-width: 720px; }
-.hero h1 {
-  font-size: clamp(2rem, 5.5vw, 3.6rem);
-  font-weight: 800; color: #fff; line-height: 1.1;
-  letter-spacing: -0.025em; margin-bottom: 1rem;
-}
-.hero-tagline {
-  font-size: clamp(1.05rem, 2.5vw, 1.35rem);
-  color: rgba(255,255,255,0.88); margin-bottom: 2.25rem; font-weight: 400;
-}
-.btn {
-  display: inline-block; padding: 0.9rem 2.1rem;
-  border-radius: var(--radius); font-size: 1rem; font-weight: 700;
-  cursor: pointer; transition: opacity 0.15s, transform 0.15s; letter-spacing: 0.01em;
-}
-.btn:hover { opacity: 0.88; transform: translateY(-1px); }
-.btn-primary { background: var(--accent); color: #fff; }
-.btn-hero {
-  background: #fff; color: var(--accent);
-  box-shadow: 0 4px 14px rgba(0,0,0,0.25);
-}
-.hero-sub { margin-top: 1.25rem; font-size: 0.85rem; color: rgba(255,255,255,0.6); }
-
-/* ── TRUST BAR ── */
-.trust-bar { background: var(--accent-dark); padding: 1rem 1.5rem; }
-.trust-inner {
-  max-width: 1100px; margin: 0 auto;
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem;
-}
-.trust-item {
-  display: flex; align-items: center; justify-content: center;
-  gap: 0.55rem; color: #fff; font-size: 0.875rem; font-weight: 600;
-  padding: 0.4rem 0;
-}
-.trust-item svg { width: 18px; height: 18px; flex-shrink: 0; }
-@media (max-width: 640px) {
-  .trust-inner { grid-template-columns: repeat(2, 1fr); gap: 0.6rem; }
-  .trust-item { font-size: 0.8rem; }
+.nav-cta:hover { background: var(--orange); }
+.nav-cta svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+@media (min-width: 640px) { .nav-phone-text { display: block; } }
+@media (max-width: 480px) {
+  .nav-inner { padding: 0 1.25rem; height: 54px; }
+  .nav-logo { font-size: 1rem; max-width: 180px; }
 }
 
-/* ── SERVICES ── */
-.services { padding: 5rem 1.5rem; background: var(--bg); }
-.section-inner { max-width: 1100px; margin: 0 auto; }
-.section-header { text-align: center; margin-bottom: 3rem; }
-.section-header h2 {
-  font-size: clamp(1.75rem, 3.5vw, 2.4rem);
-  font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.5rem;
+/* ══════════════════════════
+   HERO — split asymmetric
+══════════════════════════ */
+.hero-section {
+  padding: 3rem 0 0;
+  background: var(--cream);
+  position: relative;
 }
-.section-header p { color: var(--text-muted); font-size: 1.05rem; }
-.services-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
-.service-card {
-  background: var(--bg-card); border-radius: var(--radius);
-  border-top: 4px solid var(--accent); padding: 1.75rem 1.5rem;
-  box-shadow: var(--shadow); transition: box-shadow 0.2s, transform 0.2s;
+.hero-wrap {
+  max-width: var(--max); margin: 0 auto;
+  padding: 0 2rem;
+  position: relative; z-index: 1;
 }
-.service-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
-.service-icon {
-  width: 42px; height: 42px; background: var(--accent-light);
-  border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  margin-bottom: 1rem;
+/* Top hero row */
+.hero-top {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 2.5rem;
+  align-items: end;
+  padding-bottom: 2.5rem;
+  border-bottom: 1px solid var(--border);
 }
-.service-icon svg { width: 20px; height: 20px; stroke: var(--accent); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.service-card h3 { font-size: 1.05rem; font-weight: 600; line-height: 1.3; }
-.service-card p { font-size: 0.875rem; color: var(--text-muted); margin-top: 0.4rem; }
-@media (max-width: 900px) { .services-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px) { .services-grid { grid-template-columns: 1fr; } }
-
-/* ── WEAKNESS CALLOUT ── */
-.weakness { padding: 4.5rem 1.5rem; background: #f4f3f0; }
-.weakness-heading { text-align: center; margin-bottom: 2rem; }
-.weakness-heading h2 {
-  font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 700; letter-spacing: -0.015em;
+.hero-headline {
+  font-family: var(--serif);
+  font-size: clamp(2.6rem, 6vw, 4.8rem);
+  font-weight: 400; color: var(--text);
+  line-height: 1.0; letter-spacing: -0.025em;
 }
-.weakness-heading p { color: var(--text-muted); font-size: 1rem; margin-top: 0.4rem; }
-.weakness-grid {
-  max-width: 860px; margin: 0 auto;
-  display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;
+.hero-headline em {
+  font-style: italic; color: var(--orange);
 }
-.weakness-panel { border-radius: var(--radius); padding: 2rem; }
-.weakness-before {
-  background: #fff8f0; border: 2px solid #fcd34d;
+.hero-right-col { display: flex; flex-direction: column; gap: 1.25rem; }
+.hero-rating-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 1.25rem 1.5rem;
+  display: flex; align-items: center; gap: 1rem;
 }
-.weakness-after {
-  background: #f0fdf4; border: 2px solid #86efac;
+.hero-rating-num {
+  font-family: var(--serif);
+  font-size: 2.6rem; font-weight: 400;
+  color: var(--text); letter-spacing: -0.04em; line-height: 1;
 }
-.panel-label {
-  font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.1em; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;
-}
-.weakness-before .panel-label { color: #92400e; }
-.weakness-after  .panel-label { color: #166534; }
-.panel-badge {
+.hero-rating-star { color: var(--orange); font-size: 1.1rem; line-height: 1; margin-bottom: 2px; }
+.hero-rating-label { font-size: 0.75rem; font-weight: 600; color: var(--text); margin-bottom: 1px; }
+.hero-rating-sub { font-size: 0.7rem; color: var(--text-muted); line-height: 1.4; }
+.hero-cta-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.btn-orange {
   display: inline-flex; align-items: center; gap: 0.5rem;
-  padding: 0.55rem 1.1rem; border-radius: 999px;
-  font-weight: 600; font-size: 0.95rem; margin-bottom: 0.75rem;
+  background: var(--orange); color: var(--white);
+  font-size: 0.75rem; font-weight: 800;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 0.75rem 1.5rem; border-radius: var(--r);
+  transition: background 0.15s;
+  flex-shrink: 0;
 }
-.weakness-before .panel-badge { background: #fef3c7; color: #92400e; }
-.weakness-after  .panel-badge { background: #dcfce7; color: #166534; }
-.panel-sub { font-size: 0.85rem; color: var(--text-muted); }
-@media (max-width: 600px) { .weakness-grid { grid-template-columns: 1fr; } }
+.btn-orange:hover { background: var(--orange-mid); }
+.btn-orange svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.hero-cta-note { font-size: 0.78rem; color: var(--text-soft); line-height: 1.5; }
+/* Bottom hero strip */
+.hero-bottom {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero-bottom-left {
+  padding: 1.5rem 1.5rem 1.5rem 0;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; justify-content: center; gap: 0.3rem;
+}
+.hero-bottom-label {
+  font-size: 0.65rem; font-weight: 800;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.hero-bottom-city {
+  font-family: var(--serif);
+  font-size: 1.15rem; color: var(--text);
+  font-weight: 400; letter-spacing: -0.01em;
+}
+.hero-bottom-right {
+  padding: 1.5rem 0 1.5rem 2rem;
+  display: flex; align-items: center;
+}
+.hero-bottom-tagline {
+  font-size: 0.9rem; color: var(--text-soft);
+  line-height: 1.6; max-width: 480px;
+}
+@media (max-width: 860px) {
+  .hero-top { grid-template-columns: 1fr; gap: 2rem; }
+  .hero-rating-card { max-width: 300px; }
+  .hero-bottom { grid-template-columns: 1fr; }
+  .hero-bottom-left { border-right: none; border-bottom: 1px solid var(--border); padding: 1.25rem 0; }
+  .hero-bottom-right { padding: 1.25rem 0; }
+  .hero-wrap { padding: 0 1.25rem; }
+}
+@media (max-width: 480px) { .hero-headline { font-size: 2.4rem; } }
 
-/* ── ABOUT ── */
-.about { padding: 5rem 1.5rem; background: var(--bg); }
-.about-inner { max-width: 800px; margin: 0 auto; }
-.about-inner h2 {
-  font-size: clamp(1.65rem, 3vw, 2.3rem); font-weight: 700;
-  letter-spacing: -0.02em; margin-bottom: 1.25rem;
+/* ══════════════════════════
+   DARK FEATURE SECTION
+══════════════════════════ */
+.feature-dark {
+  background: var(--choco);
+  padding: 4rem 0;
 }
-.about-blurb {
-  font-size: 1.1rem; line-height: 1.8; color: var(--text);
+.feature-dark-inner {
+  max-width: var(--max); margin: 0 auto; padding: 0 2rem;
+  display: grid;
+  grid-template-columns: 280px 1fr 240px;
+  gap: 2.5rem; align-items: center;
+}
+.feature-dark-left { display: flex; flex-direction: column; gap: 0.75rem; }
+.feature-tag {
+  display: inline-block;
+  font-size: 0.62rem; font-weight: 800;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--cream-mid); background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 0.3rem 0.75rem; border-radius: 999px;
+  width: fit-content;
+}
+.feature-dark-img {
+  width: 100%; aspect-ratio: 4/3;
+  object-fit: cover; border-radius: var(--r-lg);
+  background: var(--choco-mid);
+  overflow: hidden; position: relative;
+}
+.feature-dark-img-placeholder {
+  width: 100%; height: 100%;
+  background:
+    linear-gradient(135deg, var(--choco-soft) 0%, var(--choco-mid) 100%),
+    url('/assets/plumbing-hero.jpg') center/cover no-repeat;
+  border-radius: var(--r-lg);
+  min-height: 180px;
+}
+.feature-dark-headline {
+  font-family: var(--serif);
+  font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+  font-weight: 400; color: var(--white);
+  line-height: 1.1; letter-spacing: -0.02em;
+  text-align: center;
+}
+.feature-dark-headline em { font-style: italic; color: rgba(255,255,255,0.55); }
+.feature-dark-right { display: flex; flex-direction: column; gap: 1.25rem; }
+.feature-dark-body {
+  font-size: 0.88rem; color: rgba(255,255,255,0.55);
+  line-height: 1.75;
+}
+.feature-check-link {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-size: 0.72rem; font-weight: 800;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--orange);
+  border-bottom: 1px solid rgba(224,90,26,0.35);
+  padding-bottom: 2px; width: fit-content;
+  transition: border-color 0.15s;
+}
+.feature-check-link:hover { border-color: var(--orange); }
+.feature-check-link svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 860px) {
+  .feature-dark-inner { grid-template-columns: 1fr 1fr; gap: 2rem; }
+  .feature-dark-headline { text-align: left; }
+}
+@media (max-width: 560px) {
+  .feature-dark-inner { grid-template-columns: 1fr; }
+  .feature-dark-inner { padding: 0 1.25rem; }
+}
+
+/* ══════════════════════════
+   BENTO SERVICES SECTION
+══════════════════════════ */
+.services-section {
+  background: var(--cream); padding: 4rem 0;
+}
+.services-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem; align-items: end;
+  margin-bottom: 2.5rem;
+}
+.eyebrow {
+  font-size: 0.62rem; font-weight: 800;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--orange); margin-bottom: 0.65rem;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.eyebrow::before { content: ''; display: block; width: 16px; height: 1.5px; background: currentColor; flex-shrink: 0; }
+.section-title {
+  font-family: var(--serif);
+  font-size: clamp(1.9rem, 3.8vw, 3rem);
+  font-weight: 400; color: var(--text);
+  line-height: 1.05; letter-spacing: -0.02em;
+}
+.services-header-right {
+  display: flex; flex-direction: column; align-items: flex-start;
+  justify-content: flex-end; gap: 0.75rem;
+}
+.services-header-desc {
+  font-size: 0.9rem; color: var(--text-soft); line-height: 1.7;
+  max-width: 380px;
+}
+/* Bento grid */
+.bento-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 1rem;
+}
+.bento-cell {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 2rem 1.75rem;
+  display: flex; flex-direction: column; gap: 0.5rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  position: relative; overflow: hidden;
+}
+.bento-cell:hover {
+  border-color: var(--border); 
+  box-shadow: 0 8px 32px rgba(28,15,9,0.08);
+}
+.bento-cell-num {
+  font-family: var(--serif);
+  font-size: 1rem; font-weight: 400;
+  color: var(--text-muted); letter-spacing: -0.02em;
+  margin-bottom: 0.25rem;
+}
+.bento-cell-name {
+  font-family: var(--serif);
+  font-size: 1.2rem; font-weight: 400;
+  color: var(--text); line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+.bento-cell-desc {
+  font-size: 0.78rem; color: var(--text-soft); line-height: 1.6;
+  margin-top: 0.25rem;
+}
+.bento-cell-icon {
+  width: 40px; height: 40px;
+  background: var(--orange-tint);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+.bento-cell-icon svg { width: 18px; height: 18px; stroke: var(--orange); fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+/* Wide cell spans 2 cols */
+.bento-wide { grid-column: span 2; }
+/* CTA cell — dark */
+.bento-cta {
+  background: var(--choco);
+  border-color: var(--choco);
+  justify-content: space-between;
+  min-height: 180px;
+}
+.bento-cta:hover { box-shadow: 0 8px 32px rgba(28,15,9,0.2); }
+.bento-cta .bento-cell-name { color: var(--white); font-size: 1.4rem; }
+.bento-cta .bento-cell-desc { color: rgba(255,255,255,0.45); }
+.bento-cta-btn {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  background: var(--orange); color: var(--white);
+  font-size: 0.7rem; font-weight: 800;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 0.6rem 1.15rem; border-radius: var(--r);
+  width: fit-content; margin-top: 0.5rem;
+  transition: background 0.15s;
+}
+.bento-cta-btn:hover { background: var(--orange-mid); }
+.bento-cta-btn svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 900px) {
+  .bento-grid { grid-template-columns: 1fr 1fr; }
+  .bento-wide { grid-column: span 2; }
+}
+@media (max-width: 560px) {
+  .bento-grid { grid-template-columns: 1fr; }
+  .bento-wide { grid-column: span 1; }
+  .services-header { grid-template-columns: 1fr; gap: 1rem; }
+}
+
+/* ══════════════════════════
+   SIMPLE SOLUTIONS SECTION
+   (cream, two-col editorial)
+══════════════════════════ */
+.solutions-section {
+  background: var(--cream-mid);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 4rem 0;
+}
+.solutions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem; align-items: center;
+}
+.solutions-headline {
+  font-family: var(--serif);
+  font-size: clamp(2rem, 4.5vw, 3.5rem);
+  font-weight: 400; color: var(--text);
+  line-height: 1.05; letter-spacing: -0.025em;
   margin-bottom: 1.25rem;
 }
-.about-location {
-  display: flex; align-items: center; gap: 0.4rem;
-  color: var(--text-muted); font-size: 0.95rem;
+.solutions-headline em { font-style: italic; }
+.solutions-sub {
+  font-size: 0.88rem; color: var(--text-soft);
+  line-height: 1.75; margin-bottom: 2rem; max-width: 360px;
 }
-.about-location svg { width: 16px; height: 16px; stroke: var(--accent); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.solutions-right { display: flex; flex-direction: column; gap: 0; }
+.solutions-item {
+  padding: 1.35rem 0;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-start; gap: 1rem;
+}
+.solutions-item:first-child { border-top: 1px solid var(--border); }
+.sol-icon {
+  width: 34px; height: 34px; flex-shrink: 0;
+  background: var(--white); border: 1px solid var(--border);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin-top: 1px;
+}
+.sol-icon svg { width: 14px; height: 14px; stroke: var(--orange); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.sol-text strong {
+  display: block; font-size: 0.88rem; font-weight: 700;
+  color: var(--text); margin-bottom: 2px;
+}
+.sol-text p { font-size: 0.78rem; color: var(--text-soft); line-height: 1.55; }
+@media (max-width: 768px) {
+  .solutions-grid { grid-template-columns: 1fr; gap: 2.5rem; }
+}
 
-/* ── CONTACT ── */
-.contact { background: var(--accent); padding: 5.5rem 1.5rem; text-align: center; }
-.contact-inner { max-width: 680px; margin: 0 auto; }
-.contact h2 {
-  font-size: clamp(1.75rem, 4vw, 2.5rem);
-  font-weight: 800; color: #fff; letter-spacing: -0.025em; margin-bottom: 0.75rem;
+/* ══════════════════════════
+   DARK ABOUT SECTION
+   (bento stat cards)
+══════════════════════════ */
+.about-section {
+  background: var(--choco); padding: 5rem 0;
+  position: relative; overflow: hidden;
 }
-.contact-sub { color: rgba(255,255,255,0.8); font-size: 1rem; margin-bottom: 1.5rem; }
-.contact-phone {
-  display: block; font-size: clamp(2rem, 5vw, 3rem);
-  font-weight: 800; color: #fff; letter-spacing: -0.025em;
-  margin-bottom: 2rem;
+.about-section::before {
+  content: 'PLUMBING';
+  position: absolute; bottom: -2rem; right: -1rem;
+  font-family: var(--serif);
+  font-size: clamp(5rem, 14vw, 12rem);
+  font-weight: 400; color: rgba(255,255,255,0.03);
+  letter-spacing: -0.04em; line-height: 1;
+  pointer-events: none; white-space: nowrap;
+  user-select: none;
 }
-.contact-phone:hover { opacity: 0.85; }
-.contact-row { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-.btn-white { background: #fff; color: var(--accent); }
-.btn-ghost { background: transparent; color: #fff; border: 2px solid rgba(255,255,255,0.7); }
-.contact-detail { margin-top: 1.5rem; font-size: 0.875rem; color: rgba(255,255,255,0.65); }
+.about-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5rem; align-items: start;
+}
+.about-eyebrow {
+  font-size: 0.62rem; font-weight: 800;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--orange); margin-bottom: 0.75rem;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.about-eyebrow::before { content: ''; display: block; width: 16px; height: 1.5px; background: currentColor; flex-shrink: 0; }
+.about-headline {
+  font-family: var(--serif);
+  font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+  font-weight: 400; color: var(--white);
+  line-height: 1.1; letter-spacing: -0.02em;
+  margin-bottom: 1.25rem;
+}
+.about-blurb {
+  font-size: 0.9rem; color: rgba(255,255,255,0.55);
+  line-height: 1.85; margin-bottom: 1.5rem;
+}
+.about-loc {
+  display: flex; align-items: center; gap: 0.45rem;
+  font-size: 0.68rem; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: rgba(255,255,255,0.28);
+}
+.about-loc svg { width: 11px; height: 11px; stroke: var(--orange); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* Stats bento */
+.stats-bento {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 1px; background: rgba(255,255,255,0.06);
+  border-radius: var(--r-lg); overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.stat-cell {
+  background: rgba(255,255,255,0.03);
+  padding: 2rem 1.75rem;
+  transition: background 0.15s;
+}
+.stat-cell:hover { background: rgba(255,255,255,0.06); }
+.stat-num {
+  font-family: var(--serif);
+  font-size: 2.8rem; font-weight: 400;
+  color: var(--white); line-height: 1;
+  letter-spacing: -0.04em;
+}
+.stat-num sup { font-size: 1.2rem; color: var(--orange); vertical-align: super; }
+.stat-label {
+  font-size: 0.68rem; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: rgba(255,255,255,0.32); margin-top: 0.5rem;
+}
+@media (max-width: 768px) {
+  .about-grid { grid-template-columns: 1fr; gap: 3rem; }
+  .about-section::before { display: none; }
+}
 
-/* ── FOOTER ── */
-footer { background: var(--accent-dark); padding: 2rem 1.5rem; text-align: center; }
-.footer-inner { max-width: 1100px; margin: 0 auto; }
-.footer-name { font-size: 1rem; font-weight: 700; color: #fff; margin-bottom: 0.3rem; }
-.footer-loc { font-size: 0.85rem; color: rgba(255,255,255,0.55); margin-bottom: 0.3rem; }
-.footer-copy { font-size: 0.75rem; color: rgba(255,255,255,0.35); }
+/* ══════════════════════════
+   PROFESSIONAL CARE SECTION
+   (cream, two-col, big heading)
+══════════════════════════ */
+.care-section {
+  background: var(--cream); padding: 5rem 0;
+  border-top: 1px solid var(--border);
+}
+.care-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem; align-items: center;
+}
+.care-headline {
+  font-family: var(--serif);
+  font-size: clamp(2rem, 4.5vw, 3.5rem);
+  font-weight: 400; color: var(--text);
+  line-height: 1.05; letter-spacing: -0.02em;
+  margin-bottom: 1.5rem;
+}
+.care-headline em { font-style: italic; color: var(--orange); }
+.care-items { display: flex; flex-direction: column; gap: 0; }
+.care-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1.1rem 0;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s;
+  cursor: default;
+}
+.care-item:first-child { border-top: 1px solid var(--border); }
+.care-item-text { font-size: 0.92rem; font-weight: 600; color: var(--text); }
+.care-dot {
+  width: 28px; height: 28px; flex-shrink: 0;
+  background: var(--choco); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.care-dot svg { width: 11px; height: 11px; stroke: var(--white); fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.care-right { display: flex; flex-direction: column; gap: 1rem; }
+.care-contact-card {
+  background: var(--choco);
+  border-radius: var(--r-lg);
+  padding: 2.25rem 2rem;
+  display: flex; flex-direction: column; gap: 1rem;
+}
+.care-card-label {
+  font-size: 0.62rem; font-weight: 800;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: rgba(255,255,255,0.4);
+}
+.care-card-phone {
+  font-family: var(--serif);
+  font-size: 2rem; color: var(--white);
+  font-weight: 400; letter-spacing: -0.025em; line-height: 1;
+  display: block; transition: color 0.15s;
+}
+.care-card-phone:hover { color: var(--orange); }
+.care-card-note { font-size: 0.75rem; color: rgba(255,255,255,0.38); }
+.care-card-btn {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  background: var(--orange); color: var(--white);
+  font-size: 0.72rem; font-weight: 800;
+  letter-spacing: 0.09em; text-transform: uppercase;
+  padding: 0.7rem 1.35rem; border-radius: var(--r);
+  width: fit-content; transition: background 0.15s;
+}
+.care-card-btn:hover { background: var(--orange-mid); }
+.care-card-btn svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 768px) {
+  .care-grid { grid-template-columns: 1fr; gap: 3rem; }
+}
+
+/* ══════════════════════════
+   CONTACT FORM SECTION
+══════════════════════════ */
+.contact-section {
+  background: var(--cream-mid);
+  border-top: 1px solid var(--border);
+  padding: 5rem 0;
+}
+.contact-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem; align-items: start;
+}
+.contact-headline {
+  font-family: var(--serif);
+  font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+  font-weight: 400; color: var(--text);
+  line-height: 1.1; letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+.contact-sub {
+  font-size: 0.85rem; color: var(--text-soft);
+  line-height: 1.7; margin-bottom: 2rem;
+}
+.contact-phone-big {
+  font-family: var(--serif);
+  font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+  font-weight: 400; color: var(--text);
+  letter-spacing: -0.025em; line-height: 1;
+  display: block; margin-bottom: 0.35rem;
+  transition: color 0.15s;
+}
+.contact-phone-big:hover { color: var(--orange); }
+.contact-phone-note { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 2rem; }
+.contact-detail-list { display: flex; flex-direction: column; gap: 1rem; }
+.cd-item { display: flex; align-items: flex-start; gap: 0.75rem; }
+.cd-icon {
+  width: 30px; height: 30px; flex-shrink: 0;
+  background: var(--white); border: 1px solid var(--border);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.cd-icon svg { width: 12px; height: 12px; stroke: var(--orange); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.cd-text strong { display: block; font-size: 0.78rem; font-weight: 700; color: var(--text); margin-bottom: 1px; }
+.cd-text p { font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; }
+/* Form */
+.form-box {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 2.5rem;
+  box-shadow: 0 4px 40px rgba(28,15,9,0.07);
+}
+.form-title {
+  font-family: var(--serif);
+  font-size: 1.5rem; font-weight: 400;
+  color: var(--text); margin-bottom: 0.3rem;
+  letter-spacing: -0.01em;
+}
+.form-sub-note { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 1.75rem; }
+.field { margin-bottom: 1rem; }
+.field-label {
+  display: block; font-size: 0.66rem; font-weight: 800;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-soft); margin-bottom: 0.4rem;
+}
+.field-input, .field-ta {
+  width: 100%; padding: 0.7rem 1rem;
+  border: 1.5px solid var(--border-soft);
+  border-radius: var(--r); background: var(--cream);
+  font-family: var(--sans); font-size: 0.88rem;
+  color: var(--text); line-height: 1.5;
+  outline: none; -webkit-appearance: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.field-input:focus, .field-ta:focus {
+  border-color: var(--orange); background: var(--white);
+}
+.field-ta { min-height: 106px; resize: vertical; }
+.form-btn {
+  width: 100%; margin-top: 0.35rem;
+  background: var(--choco); color: var(--white);
+  font-family: var(--sans); font-size: 0.75rem; font-weight: 800;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 0.9rem 1.5rem; border: none;
+  border-radius: var(--r); cursor: pointer;
+  transition: background 0.15s;
+}
+.form-btn:hover { background: var(--orange); }
+.form-btn-note { font-size: 0.68rem; color: var(--text-muted); text-align: center; margin-top: 0.6rem; }
+@media (max-width: 768px) {
+  .contact-grid { grid-template-columns: 1fr; gap: 2.5rem; }
+}
+
+/* ══════════════════════════
+   FOOTER
+══════════════════════════ */
+footer {
+  background: var(--choco);
+  padding: 3rem 0 0;
+  position: relative; overflow: hidden;
+}
+.footer-main {
+  max-width: var(--max); margin: 0 auto; padding: 0 2rem;
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr;
+  gap: 3rem; padding-bottom: 3rem;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.footer-brand-name {
+  font-family: var(--serif);
+  font-size: 1.25rem; color: var(--white);
+  font-weight: 400; letter-spacing: -0.01em;
+  margin-bottom: 0.35rem;
+}
+.footer-brand-name em { font-style: normal; color: var(--orange); }
+.footer-brand-trade {
+  font-size: 0.62rem; font-weight: 700;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: rgba(255,255,255,0.3); margin-bottom: 1.25rem;
+}
+.footer-brand-contact {
+  font-size: 0.78rem; color: rgba(255,255,255,0.45);
+  line-height: 2; 
+}
+.footer-brand-contact a { transition: color 0.15s; }
+.footer-brand-contact a:hover { color: var(--orange); }
+.footer-col-title {
+  font-size: 0.65rem; font-weight: 800;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: rgba(255,255,255,0.35);
+  margin-bottom: 1.1rem;
+}
+.footer-links { display: flex; flex-direction: column; gap: 0.6rem; }
+.footer-link {
+  font-size: 0.82rem; color: rgba(255,255,255,0.55);
+  transition: color 0.15s;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem;
+}
+.footer-link:hover { color: var(--white); }
+.footer-link svg { width: 10px; height: 10px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: 0.5; }
+.footer-bottom {
+  max-width: var(--max); margin: 0 auto; padding: 1.25rem 2rem;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+}
+.footer-copy { font-size: 0.68rem; color: rgba(255,255,255,0.25); letter-spacing: 0.04em; }
+.footer-legal { display: flex; gap: 1.5rem; }
+.footer-legal a { font-size: 0.68rem; color: rgba(255,255,255,0.25); transition: color 0.15s; }
+.footer-legal a:hover { color: rgba(255,255,255,0.55); }
+/* Large watermark */
+.footer-watermark {
+  font-family: var(--serif);
+  font-size: clamp(3rem, 10vw, 9rem);
+  font-weight: 400; color: rgba(255,255,255,0.04);
+  letter-spacing: -0.04em; line-height: 0.85;
+  text-align: center; padding: 0 2rem 1rem;
+  overflow: hidden; white-space: nowrap;
+  user-select: none; pointer-events: none;
+}
+@media (max-width: 768px) {
+  .footer-main { grid-template-columns: 1fr 1fr; gap: 2rem; }
+}
+@media (max-width: 480px) {
+  .footer-main { grid-template-columns: 1fr; gap: 1.75rem; padding: 0 1.25rem 2rem; }
+  .footer-bottom { padding: 1rem 1.25rem; }
+}
+@media (max-width: 640px) {
+  .about-section, .care-section, .contact-section, .services-section, .solutions-section { padding: 3.5rem 0; }
+  .feature-dark { padding: 3rem 0; }
+}
+.hero-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; object-position: center;
+  opacity: 0.18; pointer-events: none; border-radius: inherit;
+  z-index: 0;
+}
 </style>
 </head>
 <body>
 
-<!-- NAV -->
+<!-- ════ NAV ════ -->
 <nav class="nav">
   <div class="nav-inner">
-    <span class="nav-logo">{{BUSINESS_NAME}}</span>
+    <div class="nav-logo">{{BUSINESS_NAME}}<em>.</em></div>
     <div class="nav-right">
-      <span class="nav-ssl">
-        <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-          <path d="M7 11V7a5 5 0 0110 0v4"/>
-        </svg>
-        <span class="ssl-label">Secure Site</span>
-      </span>
-      <a href="tel:{{PHONE}}" class="nav-phone">{{PHONE}}</a>
+      <span class="nav-phone-text">{{PHONE}}</span>
+      <a href="tel:{{PHONE}}" class="nav-cta">
+        Book Service
+        <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
+      </a>
     </div>
   </div>
 </nav>
 
-<!-- HERO -->
-<section class="hero">
-  <div class="hero-inner">
-    <h1>{{BUSINESS_NAME}}</h1>
-    <p class="hero-tagline">{{TAGLINE}}</p>
-    <a href="tel:{{PHONE}}" class="btn btn-hero">Get a Free Quote</a>
-    <p class="hero-sub">Serving {{CITY}} &amp; surrounding areas &bull; {{STATE}}</p>
+<!-- ════ HERO ════ -->
+<section class="hero-section">
+  <img src="assets/plumbing-hero.jpg" alt="Plumbing work" class="hero-img" loading="lazy">
+  <div class="hero-wrap">
+    <div class="hero-top">
+      <h1 class="hero-headline">
+        {{TAGLINE}}
+      </h1>
+      <div class="hero-right-col">
+        <div class="hero-rating-card">
+          <div>
+            <div class="hero-rating-star">&#9733;</div>
+            <div class="hero-rating-num">4.8</div>
+          </div>
+          <div>
+            <div class="hero-rating-label">Customer Rating</div>
+            <div class="hero-rating-sub">Trusted by locals across {{CITY}} &amp; surrounds</div>
+          </div>
+        </div>
+        <div class="hero-cta-row">
+          <a href="tel:{{PHONE}}" class="btn-orange">
+            <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            Schedule Now
+          </a>
+          <p class="hero-cta-note">We fix things so<br>you don&rsquo;t have to.</p>
+        </div>
+      </div>
+    </div>
+    <div class="hero-bottom">
+      <div class="hero-bottom-left">
+        <div class="hero-bottom-label">Serving</div>
+        <div class="hero-bottom-city">{{CITY}}, {{STATE}}</div>
+      </div>
+      <div class="hero-bottom-right">
+        <p class="hero-bottom-tagline">{{BUSINESS_NAME}} — fully licensed plumbers bringing comfort and quality to your door. One call, sorted.</p>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- TRUST BAR -->
-<div class="trust-bar">
-  <div class="trust-inner">
-    <div class="trust-item">
-      <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-      </svg>
-      Licensed Plumber
+<!-- ════ DARK FEATURE ════ -->
+<div class="feature-dark">
+  <div class="feature-dark-inner wrap">
+    <div class="feature-dark-left">
+      <span class="feature-tag">Local Plumbing Experts</span>
+      <div class="feature-dark-img-placeholder" style="background: linear-gradient(135deg,#2a1a10 0%,#1c0f09 100%), url('/assets/plumbing-hero.jpg') center/cover no-repeat; border-radius: 14px; min-height: 160px;"></div>
     </div>
-    <div class="trust-item">
-      <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-      </svg>
-      24/7 Emergency
-    </div>
-    <div class="trust-item">
-      <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="20 12 20 22 4 22 4 12"/>
-        <rect x="2" y="7" width="20" height="5"/>
-        <line x1="12" y1="22" x2="12" y2="7"/>
-        <path d="M12 7H7.5a2.5 2.5 0 010-5C11 2 12 7 12 7z"/>
-        <path d="M12 7h4.5a2.5 2.5 0 000-5C13 2 12 7 12 7z"/>
-      </svg>
-      Free Quotes
-    </div>
-    <div class="trust-item">
-      <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
-      </svg>
-      Fully Insured
+    <h2 class="feature-dark-headline">
+      Experience quality <em>in every corner</em> of your home
+    </h2>
+    <div class="feature-dark-right">
+      <p class="feature-dark-body">One call is all it takes. {{BUSINESS_NAME}} brings professional plumbing comfort and quality directly to your doorstep — fast, reliable, and done right.</p>
+      <a href="#contact" class="feature-check-link">
+        Book a job
+        <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
+      </a>
     </div>
   </div>
 </div>
 
-<!-- SERVICES -->
-<section class="services">
-  <div class="section-inner">
-    <div class="section-header">
-      <h2>Our Services</h2>
-      <p>Everything you need — done right, first time.</p>
+<!-- ════ BENTO SERVICES ════ -->
+<section class="services-section">
+  <div class="wrap">
+    <div class="services-header">
+      <div>
+        <div class="eyebrow">What we do</div>
+        <h2 class="section-title">Our Plumbing Services</h2>
+      </div>
+      <div class="services-header-right">
+        <p class="services-header-desc">From blocked drains to full bathroom fit-outs — done right, on time, every time.</p>
+        <a href="tel:{{PHONE}}" class="btn-orange">
+          <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.9 10.82a19.79 19.79 0 01-3.07-8.67A2 2 0 012.81 0h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.91 7.09a16 16 0 006 6l.64-.64a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 14.92z"/></svg>
+          Free Quote
+        </a>
+      </div>
     </div>
-    <div class="services-grid">
-      <div class="service-card">
-        <div class="service-icon">
-          <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-        </div>
-        <h3>{{SERVICE_1}}</h3>
+    <div class="bento-grid">
+      <div class="bento-cell">
+        <div class="bento-cell-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+        <div class="bento-cell-num">01</div>
+        <div class="bento-cell-name">{{SERVICE_1}}</div>
+        <div class="bento-cell-desc">{{SERVICE_1_DESC}}</div>
       </div>
-      <div class="service-card">
-        <div class="service-icon">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-        </div>
-        <h3>{{SERVICE_2}}</h3>
+      <div class="bento-cell">
+        <div class="bento-cell-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+        <div class="bento-cell-num">02</div>
+        <div class="bento-cell-name">{{SERVICE_2}}</div>
+        <div class="bento-cell-desc">{{SERVICE_2_DESC}}</div>
       </div>
-      <div class="service-card">
-        <div class="service-icon">
-          <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <div class="bento-cell bento-cta">
+        <div>
+          <div class="bento-cell-name">Get a free quote today</div>
+          <div class="bento-cell-desc">Fast response. No obligation. Honest pricing.</div>
         </div>
-        <h3>{{SERVICE_3}}</h3>
+        <a href="tel:{{PHONE}}" class="bento-cta-btn">
+          Call {{PHONE}}
+          <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
+        </a>
       </div>
-      <div class="service-card">
-        <div class="service-icon">
+      <div class="bento-cell bento-wide">
+        <div class="bento-cell-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+        <div class="bento-cell-num">03</div>
+        <div class="bento-cell-name">{{SERVICE_3}}</div>
+        <div class="bento-cell-desc">{{SERVICE_3_DESC}}</div>
+      </div>
+      <div class="bento-cell">
+        <div class="bento-cell-icon"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg></div>
+        <div class="bento-cell-num">04</div>
+        <div class="bento-cell-name">{{SERVICE_4}}</div>
+        <div class="bento-cell-desc">{{SERVICE_4_DESC}}</div>
+      </div>
+      <div class="bento-cell">
+        <div class="bento-cell-icon"><svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></div>
+        <div class="bento-cell-num">05</div>
+        <div class="bento-cell-name">{{SERVICE_5}}</div>
+        <div class="bento-cell-desc">{{SERVICE_5_DESC}}</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════ SOLUTIONS STRIP ════ -->
+<section class="solutions-section">
+  <div class="wrap">
+    <div class="solutions-grid">
+      <div>
+        <h2 class="solutions-headline">Making home plumbing <em>simple</em></h2>
+        <p class="solutions-sub">Your home, expertly handled. We take care of everything while you focus on what matters.</p>
+        <a href="tel:{{PHONE}}" class="btn-orange">
+          Schedule Now
+          <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
+        </a>
+      </div>
+      <div class="solutions-right">
+        <div class="solutions-item">
+          <div class="sol-icon"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          <div class="sol-text"><strong>Complete solutions</strong><p>One call for all your plumbing needs — we handle it all.</p></div>
+        </div>
+        <div class="solutions-item">
+          <div class="sol-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+          <div class="sol-text"><strong>Licensed &amp; insured</strong><p>Fully licensed plumber, public liability covered.</p></div>
+        </div>
+        <div class="solutions-item">
+          <div class="sol-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+          <div class="sol-text"><strong>Trusted &amp; local</strong><p>Based in {{CITY}}, serving the community for years.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════ ABOUT ════ -->
+<section class="about-section">
+  <div class="wrap">
+    <div class="about-grid">
+      <div>
+        <div class="about-eyebrow">About us</div>
+        <h2 class="about-headline">Your local plumbing experts in {{CITY}}</h2>
+        <p class="about-blurb">{{ABOUT_BLURB}}</p>
+        <div class="about-loc">
           <svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-        </div>
-        <h3>{{SERVICE_4}}</h3>
-      </div>
-      <div class="service-card">
-        <div class="service-icon">
-          <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-        </div>
-        <h3>{{SERVICE_5}}</h3>
-      </div>
-      <div class="service-card" style="background:var(--accent-light); border-top-color: var(--accent-dark); display:flex; align-items:center; justify-content:center;">
-        <div style="text-align:center;">
-          <div style="font-size:1.75rem; margin-bottom:0.5rem;">📞</div>
-          <p style="font-size:0.95rem; color:var(--accent-dark); font-weight:600;">Call for a free quote today</p>
-          <a href="tel:{{PHONE}}" style="display:inline-block; margin-top:0.75rem; font-size:0.9rem; font-weight:700; color:var(--accent);">{{PHONE}}</a>
+          {{CITY}}, {{STATE}} &middot; and surrounding areas
         </div>
       </div>
-    </div>
-  </div>
-</section>
-
-<!-- WEAKNESS CALLOUT -->
-<section class="weakness">
-  <div class="weakness-heading">
-    <h2>Why switch to a better website?</h2>
-    <p>Your current site may be costing you jobs. Here's the difference.</p>
-  </div>
-  <div class="weakness-grid">
-    <div class="weakness-panel weakness-before">
-      <div class="panel-label">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#92400e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
-        </svg>
-        Your current site
+      <div class="stats-bento">
+        <div class="stat-cell">
+          <div class="stat-num">10<sup>+</sup></div>
+          <div class="stat-label">Years experience</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-num">500<sup>+</sup></div>
+          <div class="stat-label">Jobs completed</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-num">100<sup>%</sup></div>
+          <div class="stat-label">Licensed &amp; insured</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-num">Free</div>
+          <div class="stat-label">Quotes, always</div>
+        </div>
       </div>
-      <div class="panel-badge">⚠ {{WEAKNESS_CALLOUT}}</div>
-      <p class="panel-sub">Potential customers are bouncing before they even call you.</p>
     </div>
-    <div class="weakness-panel weakness-after">
-      <div class="panel-label">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#166534" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="20 6 9 17 4 12"/>
-        </svg>
-        This new site
+  </div>
+</section>
+
+<!-- ════ PROFESSIONAL CARE ════ -->
+<section class="care-section">
+  <div class="wrap">
+    <div class="care-grid">
+      <div>
+        <h2 class="care-headline">Professional care <em>for your home</em></h2>
+        <div class="care-items">
+          <div class="care-item">
+            <span class="care-item-text">We make your home life easier</span>
+            <div class="care-dot"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          </div>
+          <div class="care-item">
+            <span class="care-item-text">Expert plumbing you can rely on</span>
+            <div class="care-dot"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          </div>
+          <div class="care-item">
+            <span class="care-item-text">Honest, upfront pricing — no surprises</span>
+            <div class="care-dot"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          </div>
+          <div class="care-item">
+            <span class="care-item-text">Available for emergency callouts</span>
+            <div class="care-dot"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          </div>
+          <div class="care-item">
+            <span class="care-item-text">Serving {{CITY}} &amp; surrounding areas</span>
+            <div class="care-dot"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          </div>
+        </div>
       </div>
-      <div class="panel-badge">✓ Fast, modern &amp; mobile-ready</div>
-      <p class="panel-sub">Built to convert visitors into booked jobs — on any device.</p>
+      <div class="care-right">
+        <div class="care-contact-card">
+          <div class="care-card-label">Contact our specialists</div>
+          <a href="tel:{{PHONE}}" class="care-card-phone">{{PHONE}}</a>
+          <div class="care-card-note">Free quotes &middot; Mon – Sat 7am – 6pm</div>
+          <a href="tel:{{PHONE}}" class="care-card-btn">
+            <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.9 10.82a19.79 19.79 0 01-3.07-8.67A2 2 0 012.81 0h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.91 7.09a16 16 0 006 6l.64-.64a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 14.92z"/></svg>
+            Call Now
+          </a>
+        </div>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- ABOUT -->
-<section class="about">
-  <div class="about-inner">
-    <h2>About {{BUSINESS_NAME}}</h2>
-    <p class="about-blurb">{{ABOUT_BLURB}}</p>
-    <div class="about-location">
-      <svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-      Serving {{CITY}} &amp; surrounding areas, {{STATE}}
+<!-- ════ CONTACT FORM ════ -->
+<section class="contact-section" id="contact">
+  <div class="wrap">
+    <div class="contact-grid">
+      <div>
+        <div class="eyebrow">Get in touch</div>
+        <h2 class="contact-headline">Ready to get started?</h2>
+        <p class="contact-sub">Give us a call or send a message. Free quotes, no obligation, fast response.</p>
+        <a href="tel:{{PHONE}}" class="contact-phone-big">{{PHONE}}</a>
+        <p class="contact-phone-note">Mon &ndash; Sat, 7am &ndash; 6pm &middot; Emergency available</p>
+        <div class="contact-detail-list">
+          <div class="cd-item">
+            <div class="cd-icon"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg></div>
+            <div class="cd-text"><strong>Service area</strong><p>{{CITY}}, {{STATE}} and surrounding suburbs</p></div>
+          </div>
+          <div class="cd-item">
+            <div class="cd-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+            <div class="cd-text"><strong>Licence &amp; insurance</strong><p>Fully licensed &middot; Public liability insured</p></div>
+          </div>
+        </div>
+      </div>
+      <div class="form-box">
+        <div class="form-title">Send a message</div>
+        <p class="form-sub-note">We&rsquo;ll get back to you within a few hours. No obligation.</p>
+        <form action="#" method="post">
+          <div class="field">
+            <label class="field-label" for="fn">Your name</label>
+            <input class="field-input" type="text" id="fn" name="name" placeholder="John Smith" autocomplete="name">
+          </div>
+          <div class="field">
+            <label class="field-label" for="fp">Phone number</label>
+            <input class="field-input" type="tel" id="fp" name="phone" placeholder="0400 000 000" autocomplete="tel">
+          </div>
+          <div class="field">
+            <label class="field-label" for="fm">What do you need?</label>
+            <textarea class="field-ta" id="fm" name="message" placeholder="Describe your plumbing job..."></textarea>
+          </div>
+          <button type="submit" class="form-btn">Send Message</button>
+          <p class="form-btn-note">We respond same day during business hours.</p>
+        </form>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- CONTACT -->
-<section class="contact">
-  <div class="contact-inner">
-    <h2>Ready to get started?</h2>
-    <p class="contact-sub">Give us a call — free quotes, no obligation.</p>
-    <a href="tel:{{PHONE}}" class="contact-phone">{{PHONE}}</a>
-    <div class="contact-row">
-      <a href="tel:{{PHONE}}" class="btn btn-white">Call Now</a>
-    </div>
-    <p class="contact-detail">Servicing {{CITY}}, {{STATE}}</p>
-  </div>
-</section>
-
-<!-- FOOTER -->
+<!-- ════ FOOTER ════ -->
 <footer>
-  <div class="footer-inner">
-    <p class="footer-name">{{BUSINESS_NAME}}</p>
-    <p class="footer-loc">{{CITY}}, {{STATE}}</p>
-    <p class="footer-copy">&copy; {{BUSINESS_NAME}}. All rights reserved.</p>
+  <div class="footer-main">
+    <div>
+      <div class="footer-brand-name">{{BUSINESS_NAME}}<em>.</em></div>
+      <div class="footer-brand-trade">Licensed Plumber &middot; {{CITY}}, {{STATE}}</div>
+      <div class="footer-brand-contact">
+        <a href="tel:{{PHONE}}">{{PHONE}}</a><br>
+        {{CITY}}, {{STATE}}<br>
+        ABN: XX XXX XXX XXX
+      </div>
+    </div>
+    <div>
+      <div class="footer-col-title">Company</div>
+      <div class="footer-links">
+        <a href="#" class="footer-link">About us <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+        <a href="#" class="footer-link">Services <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+        <a href="#contact" class="footer-link">Contact <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+      </div>
+    </div>
+    <div>
+      <div class="footer-col-title">Services</div>
+      <div class="footer-links">
+        <a href="#" class="footer-link">{{SERVICE_1}} <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+        <a href="#" class="footer-link">{{SERVICE_2}} <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+        <a href="#" class="footer-link">{{SERVICE_3}} <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+      </div>
+    </div>
+    <div>
+      <div class="footer-col-title">Quick links</div>
+      <div class="footer-links">
+        <a href="tel:{{PHONE}}" class="footer-link">Book a job <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+        <a href="#contact" class="footer-link">Free quote <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+        <a href="#" class="footer-link">Service areas <svg viewBox="0 0 24 24"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg></a>
+      </div>
+    </div>
+  </div>
+  <div class="footer-watermark">PLUMBING &amp; REPAIR</div>
+  <div class="footer-bottom wrap">
+    <span class="footer-copy">&copy; {{BUSINESS_NAME}}. All rights reserved.</span>
+    <div class="footer-legal">
+      <a href="#">Privacy policy</a>
+      <a href="#">Terms &amp; conditions</a>
+    </div>
   </div>
 </footer>
 
