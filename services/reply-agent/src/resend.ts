@@ -18,7 +18,7 @@ function requiredEnv(name: string): string {
 
 export async function sendWelcomeEmail(input: WelcomeEmailInput): Promise<void> {
   const resend = new Resend(requiredEnv("RESEND_API_KEY"));
-  const from = process.env.RESEND_FROM_EMAIL ?? "PrinterIQ <onboarding@printeriq.com>";
+  const from = process.env.RESEND_FROM_EMAIL ?? "PrinterIQ <onboarding@presciaiq.com>";
 
   await resend.emails.send({
     from,

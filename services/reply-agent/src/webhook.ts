@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { ProcessReplyJob } from "./types.js";
 import { stripePayments } from "./stripe.js";
+import { queries as defaultQueries } from "./db/queries.js";
 
 export type ReplyQueue = {
   add(name: string, payload: ProcessReplyJob): Promise<unknown>;
@@ -11,8 +12,13 @@ export type ReplyQueue = {
 };
 
 type BuildServerOptions = {
-  instantlySecret: string;
+  instantlyWebhookIds: {
+    reply: string;
+    bounced: string;
+    unsubbed: string;
+  };
   queue: ReplyQueue;
+  queries?: Pick<typeof defaultQueries, "recordInstantlyBounce" | "recordInstantlyUnsubscribe">;
   stripeWebhookSecret?: string;
   stripe?: {
     handleWebhook(rawBody: string | Buffer, signature: string, options?: { webhookSecret?: string }): Promise<unknown>;
@@ -70,9 +76,26 @@ function mapInstantlyPayload(payload: Record<string, unknown>): ProcessReplyJob 
   };
 }
 
+function mapInstantlyLeadEventPayload(payload: Record<string, unknown>): {
+  tenantId: string;
+  leadId: string;
+  instantlyLeadId: string;
+} {
+  const tenantId = readNestedString(payload, ["metadata", "tenant_id"]);
+  const leadId = readNestedString(payload, ["metadata", "lead_id"]);
+  const instantlyLeadId = readNestedString(payload, ["lead", "id"]);
+
+  if (!tenantId || !leadId || !instantlyLeadId) {
+    throw new Error("missing required webhook fields");
+  }
+
+  return { tenantId, leadId, instantlyLeadId };
+}
+
 export function buildServer(options: BuildServerOptions): FastifyInstance {
   const server = Fastify({ logger: false });
   const stripe = options.stripe ?? stripePayments;
+  const queries = options.queries ?? defaultQueries;
 
   server.addContentTypeParser<string>("application/json", { parseAs: "string" }, (request, body, done) => {
     (request as typeof request & { rawBody?: string }).rawBody = body;
@@ -95,17 +118,29 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
   server.post("/instantly", {
     onRequest: async (request, reply) => {
-      const providedSecret = request.headers["x-instantly-secret"];
+      return reply.code(400).send({ error: "invalid instantly webhook route" });
+    },
+  }, async () => undefined);
 
-      if (providedSecret !== options.instantlySecret) {
-        return reply.code(400).send({ error: "invalid webhook secret" });
+  server.post("/instantly/", {
+    onRequest: async (request, reply) => {
+      return reply.code(400).send({ error: "invalid instantly webhook route" });
+    },
+  }, async () => undefined);
+
+  server.post("/instantly/reply/:webhookId", {
+    onRequest: async (request, reply) => {
+      const { webhookId } = request.params as { webhookId?: string };
+
+      if (webhookId !== options.instantlyWebhookIds.reply) {
+        return reply.code(400).send({ error: "invalid webhook id" });
       }
     },
   }, async (request, reply) => {
-    const providedSecret = request.headers["x-instantly-secret"];
+    const { webhookId } = request.params as { webhookId?: string };
 
-    if (providedSecret !== options.instantlySecret) {
-      return reply.code(400).send({ error: "invalid webhook secret" });
+    if (webhookId !== options.instantlyWebhookIds.reply) {
+      return reply.code(400).send({ error: "invalid webhook id" });
     }
 
     const parsed = webhookPayloadSchema.safeParse(request.body);
@@ -122,6 +157,78 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
     try {
       await options.queue.add("process_reply", job);
+    } catch {
+      return reply.code(500).send({ error: "webhook processing failed" });
+    }
+
+    return reply.code(200).send({ ok: true });
+  });
+
+  server.post("/instantly/bounced/:webhookId", {
+    onRequest: async (request, reply) => {
+      const { webhookId } = request.params as { webhookId?: string };
+
+      if (webhookId !== options.instantlyWebhookIds.bounced) {
+        return reply.code(400).send({ error: "invalid webhook id" });
+      }
+    },
+  }, async (request, reply) => {
+    const { webhookId } = request.params as { webhookId?: string };
+
+    if (webhookId !== options.instantlyWebhookIds.bounced) {
+      return reply.code(400).send({ error: "invalid webhook id" });
+    }
+
+    const parsed = webhookPayloadSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid webhook payload" });
+    }
+
+    let event: { tenantId: string; leadId: string; instantlyLeadId: string };
+    try {
+      event = mapInstantlyLeadEventPayload(parsed.data);
+    } catch {
+      return reply.code(400).send({ error: "invalid webhook payload" });
+    }
+
+    try {
+      await queries.recordInstantlyBounce(event.tenantId, event.leadId, event.instantlyLeadId);
+    } catch {
+      return reply.code(500).send({ error: "webhook processing failed" });
+    }
+
+    return reply.code(200).send({ ok: true });
+  });
+
+  server.post("/instantly/unsubbed/:webhookId", {
+    onRequest: async (request, reply) => {
+      const { webhookId } = request.params as { webhookId?: string };
+
+      if (webhookId !== options.instantlyWebhookIds.unsubbed) {
+        return reply.code(400).send({ error: "invalid webhook id" });
+      }
+    },
+  }, async (request, reply) => {
+    const { webhookId } = request.params as { webhookId?: string };
+
+    if (webhookId !== options.instantlyWebhookIds.unsubbed) {
+      return reply.code(400).send({ error: "invalid webhook id" });
+    }
+
+    const parsed = webhookPayloadSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid webhook payload" });
+    }
+
+    let event: { tenantId: string; leadId: string; instantlyLeadId: string };
+    try {
+      event = mapInstantlyLeadEventPayload(parsed.data);
+    } catch {
+      return reply.code(400).send({ error: "invalid webhook payload" });
+    }
+
+    try {
+      await queries.recordInstantlyUnsubscribe(event.tenantId, event.leadId, event.instantlyLeadId);
     } catch {
       return reply.code(500).send({ error: "webhook processing failed" });
     }
@@ -168,19 +275,35 @@ function createQueue(): Queue<ProcessReplyJob> {
 }
 
 async function main(): Promise<void> {
-  const instantlySecret = process.env.INSTANTLY_WEBHOOK_SECRET;
-  if (!instantlySecret) {
-    throw new Error("INSTANTLY_WEBHOOK_SECRET is required");
+  const instantlyWebhookIds = {
+    reply: process.env.INSTANTLY_WEBHOOK_ID_REPLY,
+    bounced: process.env.INSTANTLY_WEBHOOK_ID_BOUNCED,
+    unsubbed: process.env.INSTANTLY_WEBHOOK_ID_UNSUBBED,
+  };
+  const missingInstantlyWebhookId = Object.entries(instantlyWebhookIds).find(([, value]) => !value)?.[0];
+  if (missingInstantlyWebhookId) {
+    throw new Error(`INSTANTLY_WEBHOOK_ID_${missingInstantlyWebhookId.toUpperCase()} is required`);
   }
 
   const queue = createQueue();
-  const server = buildServer({ instantlySecret, queue });
+  const server = buildServer({
+    instantlyWebhookIds: instantlyWebhookIds as { reply: string; bounced: string; unsubbed: string },
+    queue,
+  });
   const port = Number.parseInt(process.env.PORT ?? "3001", 10);
 
   await server.listen({ port, host: "0.0.0.0" });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function shouldStartWebhookServer(entrypointPath: string | undefined, pmId: string | undefined, moduleUrl = import.meta.url): boolean {
+  if (pmId) {
+    return true;
+  }
+
+  return Boolean(entrypointPath && moduleUrl === pathToFileURL(entrypointPath).href);
+}
+
+if (shouldStartWebhookServer(process.argv[1], process.env.pm_id)) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : "reply-agent failed to start");
     process.exit(1);

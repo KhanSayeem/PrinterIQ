@@ -5,6 +5,8 @@ import {
   fetchEscalationContext,
   hasCompletedPayment,
   insertInboundConversation,
+  recordInstantlyBounce,
+  recordInstantlyUnsubscribe,
   recordCompletedPayment,
 } from "../src/db/queries.js";
 
@@ -20,7 +22,7 @@ describe("reply-agent DB queries", () => {
       {
         instantly_lead_id: "instantly-lead-123",
         instantly_email_id: "email-uuid-123",
-        instantly_account_id: "sender@printeriq.com",
+        instantly_account_id: "sender@presciaiq.com",
       },
       { query },
     );
@@ -39,7 +41,7 @@ describe("reply-agent DB queries", () => {
       "email",
       "Hi",
       "email-uuid-123",
-      "sender@printeriq.com",
+      "sender@presciaiq.com",
       "instantly-lead-123",
     ]);
   });
@@ -55,7 +57,7 @@ describe("reply-agent DB queries", () => {
       {
         instantly_lead_id: "instantly-lead-123",
         instantly_email_id: "email-uuid-123",
-        instantly_account_id: "sender@printeriq.com",
+        instantly_account_id: "sender@presciaiq.com",
       },
       { query },
     );
@@ -71,7 +73,7 @@ describe("reply-agent DB queries", () => {
       "email",
       "Hi",
       "email-uuid-123",
-      "sender@printeriq.com",
+      "sender@presciaiq.com",
       "instantly-lead-123",
     ]);
   });
@@ -88,7 +90,7 @@ describe("reply-agent DB queries", () => {
         {
           instantly_lead_id: "instantly-lead-123",
           instantly_email_id: "email-uuid-123",
-          instantly_account_id: "sender@printeriq.com",
+          instantly_account_id: "sender@presciaiq.com",
         },
         { query },
       ),
@@ -121,6 +123,54 @@ describe("reply-agent DB queries", () => {
     expect(sql).toContain("AND id = $2");
     expect(sql).toContain("status IN ('qualified', 'contacted', 'replied')");
     expect(params).toEqual(["tenant-id", "lead-id"]);
+  });
+
+  it("records Instantly bounces against a tenant-scoped outreach send and archives the lead", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ lead_id: "lead-id" }] });
+
+    await recordInstantlyBounce("tenant-id", "lead-id", "instantly-lead-123", { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("UPDATE outreach_sends");
+    expect(sql).toMatch(/SET\s+bounced = TRUE/);
+    expect(sql).toContain("WHERE tenant_id = $1");
+    expect(sql).toContain("AND lead_id = $2");
+    expect(sql).toContain("AND instantly_lead_id = $3");
+    expect(sql).toContain("UPDATE leads");
+    expect(sql).toMatch(/SET\s+status = 'archived'/);
+    expect(sql).toContain("leads.tenant_id = $1");
+    expect(sql).toContain("leads.id = $2");
+    expect(sql).toContain("leads.status IN ('qualified', 'contacted', 'replied')");
+    expect(sql).toContain("EXISTS (SELECT 1 FROM marked_send)");
+    expect(params).toEqual(["tenant-id", "lead-id", "instantly-lead-123"]);
+  });
+
+  it("records Instantly unsubscribes against a tenant-scoped outreach send and archives the lead", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ lead_id: "lead-id" }] });
+
+    await recordInstantlyUnsubscribe("tenant-id", "lead-id", "instantly-lead-123", { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("UPDATE outreach_sends");
+    expect(sql).toMatch(/SET\s+unsubscribed = TRUE/);
+    expect(sql).toContain("WHERE tenant_id = $1");
+    expect(sql).toContain("AND lead_id = $2");
+    expect(sql).toContain("AND instantly_lead_id = $3");
+    expect(sql).toContain("UPDATE leads");
+    expect(sql).toMatch(/SET\s+status = 'archived'/);
+    expect(sql).toContain("leads.tenant_id = $1");
+    expect(sql).toContain("leads.id = $2");
+    expect(sql).toContain("leads.status IN ('qualified', 'contacted', 'replied')");
+    expect(sql).toContain("EXISTS (SELECT 1 FROM marked_send)");
+    expect(params).toEqual(["tenant-id", "lead-id", "instantly-lead-123"]);
+  });
+
+  it("fails bounce handling when no tenant-scoped Instantly send matches", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    await expect(recordInstantlyBounce("tenant-id", "lead-id", "missing-instantly-lead", { query })).rejects.toThrow(
+      "outreach send not found for tenant",
+    );
   });
 
   it("records completed payments through a tenant-scoped lead lookup and guarded onboarding update", async () => {

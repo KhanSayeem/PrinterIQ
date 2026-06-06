@@ -159,7 +159,7 @@ describe("process_reply handler", () => {
         ...processJob("Can you send the quote?"),
         instantly_lead_id: "instantly-lead-123",
         instantly_email_id: "email-uuid-123",
-        instantly_account_id: "sender@printeriq.com",
+        instantly_account_id: "sender@presciaiq.com",
       },
       {
         queries,
@@ -177,7 +177,7 @@ describe("process_reply handler", () => {
       {
         instantly_lead_id: "instantly-lead-123",
         instantly_email_id: "email-uuid-123",
-        instantly_account_id: "sender@printeriq.com",
+        instantly_account_id: "sender@presciaiq.com",
       },
     );
   });

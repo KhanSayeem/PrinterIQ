@@ -56,7 +56,7 @@ describe("escalation", () => {
         queries: createQueries(),
         sms,
         instantly,
-        dashboardUrl: "https://dashboard.printeriq.com",
+        dashboardUrl: "https://dashboard.presciaiq.com",
       },
     );
 
@@ -68,7 +68,7 @@ describe("escalation", () => {
     expect(smsBody).toContain("Brett Stone");
     expect(smsBody).toContain(`"${"x".repeat(100)}"`);
     expect(smsBody).toContain("Reason: low_confidence.");
-    expect(smsBody).toContain(`View: https://dashboard.printeriq.com/leads/${leadId}`);
+    expect(smsBody).toContain(`View: https://dashboard.presciaiq.com/leads/${leadId}`);
     expect(smsBody).not.toContain("trailing text");
     expect(vi.mocked(instantly.pauseLead).mock.invocationCallOrder[0]).toBeGreaterThan(
       vi.mocked(sms.sendSms).mock.invocationCallOrder[0]!,

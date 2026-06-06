@@ -276,6 +276,65 @@ export async function archiveLeadForSuppression(
   );
 }
 
+async function recordInstantlySuppressionEvent(
+  column: "bounced" | "unsubscribed",
+  tenantId: string,
+  leadId: string,
+  instantlyLeadId: string,
+  client?: Queryable,
+): Promise<void> {
+  const result = await db(client).query<{ lead_id: string }>(
+    `
+      WITH marked_send AS (
+        UPDATE outreach_sends
+        SET
+          ${column} = TRUE,
+          updated_at = NOW()
+        WHERE tenant_id = $1
+          AND lead_id = $2
+          AND instantly_lead_id = $3
+        RETURNING lead_id
+      ),
+      archived_lead AS (
+        UPDATE leads
+        SET
+          status = 'archived',
+          updated_at = NOW()
+        WHERE leads.tenant_id = $1
+          AND leads.id = $2
+          AND leads.status IN ('qualified', 'contacted', 'replied')
+          AND EXISTS (SELECT 1 FROM marked_send)
+        RETURNING id
+      )
+      SELECT lead_id
+      FROM marked_send
+    `,
+    [tenantId, leadId, instantlyLeadId],
+  );
+
+  if (!result.rows[0]) {
+    throw new Error("outreach send not found for tenant");
+  }
+}
+
+export async function recordInstantlyBounce(
+  tenantId: string,
+  leadId: string,
+  instantlyLeadId: string,
+  client?: Queryable,
+): Promise<void> {
+  await recordInstantlySuppressionEvent("bounced", tenantId, leadId, instantlyLeadId, client);
+}
+
+export async function recordInstantlyUnsubscribe(
+  tenantId: string,
+  leadId: string,
+  instantlyLeadId: string,
+  client?: Queryable,
+): Promise<void> {
+  await recordInstantlySuppressionEvent("unsubscribed", tenantId, leadId, instantlyLeadId, client);
+}
+
 export async function conversationExists(
   tenantId: string,
   conversationId: string,
@@ -503,6 +562,8 @@ export const queries = {
   updateConversationClassification,
   advanceLeadToReplied,
   archiveLeadForSuppression,
+  recordInstantlyBounce,
+  recordInstantlyUnsubscribe,
   conversationExists,
   fetchCheckoutLead,
   fetchEscalationContext,
