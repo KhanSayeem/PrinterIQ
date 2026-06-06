@@ -30,10 +30,12 @@ Third-party APIs
 
 | Host                            | Destination              |
 |---------------------------------|--------------------------|
-| `dashboard.printeriq.com`       | Next.js on port 3000     |
-| `webhooks.printeriq.com/instantly` | Reply agent on port 3001 |
-| `webhooks.printeriq.com/sms`    | Reply agent on port 3001 |
-| `webhooks.printeriq.com/stripe` | Reply agent on port 3001 |
+| `dashboard.presciaiq.com`       | Next.js on port 3000     |
+| `webhooks.presciaiq.com/instantly/reply/:webhookId` | Reply agent on port 3001 |
+| `webhooks.presciaiq.com/instantly/bounced/:webhookId` | Reply agent on port 3001 |
+| `webhooks.presciaiq.com/instantly/unsubbed/:webhookId` | Reply agent on port 3001 |
+| `webhooks.presciaiq.com/sms`    | Reply agent on port 3001 |
+| `webhooks.presciaiq.com/stripe` | Reply agent on port 3001 |
 
 ## Service boundaries — STRICT
 
@@ -66,8 +68,12 @@ Apollo CSV
   → Instantly sends email sequence
 
 Instantly reply webhook
-  → webhook.ts       (HTTP 200 immediately, queues process_reply job)
+  → webhook.ts       (URL-token auth, queues process_reply job)
   → handler.ts       (conversations table, Claude classification)
   → send_reply       (conversations table, Instantly send)
   → stripe.ts        (payments table on checkout.session.completed)
+
+Instantly bounced/unsubscribed webhooks
+  → webhook.ts       (URL-token auth)
+  → db/queries.ts    (marks outreach_sends event flag, archives eligible lead)
 ```

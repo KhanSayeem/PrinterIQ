@@ -1,10 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../src/webhook.js";
 import { handleRetryCheckout } from "../src/handler.js";
-import { handleStripeWebhookEvent } from "../src/stripe.js";
+import { handleStripeWebhook, handleStripeWebhookEvent } from "../src/stripe.js";
 
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const leadId = "22222222-2222-4222-8222-222222222222";
+const instantlyWebhookIds = {
+  reply: "reply-token",
+  bounced: "bounced-token",
+  unsubbed: "unsubbed-token",
+};
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function checkoutCompletedEvent(sessionId = "cs_test_123") {
   return {
@@ -137,7 +146,7 @@ describe("Stripe webhook handling", () => {
       sendWelcomeEmail: vi.fn(),
     };
     const server = buildServer({
-      instantlySecret: "expected-secret",
+      instantlyWebhookIds,
       queue: { add: vi.fn().mockResolvedValue(undefined) },
       stripeWebhookSecret: "whsec_test",
       stripe: {
@@ -163,7 +172,7 @@ describe("Stripe webhook handling", () => {
 
   it("checks Stripe signatures before JSON parsing errors", async () => {
     const server = buildServer({
-      instantlySecret: "expected-secret",
+      instantlyWebhookIds,
       queue: { add: vi.fn().mockResolvedValue(undefined) },
       stripeWebhookSecret: "whsec_test",
       stripe: {
@@ -183,6 +192,25 @@ describe("Stripe webhook handling", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "invalid stripe signature" });
+  });
+
+  it("uses the STRIPE_MODE-specific webhook secret when no explicit secret is provided", async () => {
+    vi.stubEnv("STRIPE_MODE", "live");
+    vi.stubEnv("STRIPE_LIVE_WEBHOOK_SECRET", "whsec_live");
+
+    const constructEvent = vi.fn().mockReturnValue({
+      type: "customer.created",
+      data: { object: {} },
+    });
+
+    const result = await handleStripeWebhook("{}", "signature", {
+      stripe: {
+        webhooks: { constructEvent },
+      } as never,
+    });
+
+    expect(result).toEqual({ handled: false });
+    expect(constructEvent).toHaveBeenCalledWith("{}", "signature", "whsec_live");
   });
 });
 

@@ -41,12 +41,26 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function stripeMode(): "test" | "live" {
+  return process.env.STRIPE_MODE === "test" ? "test" : "live";
+}
+
+function stripeEnv(suffix: "SECRET_KEY" | "WEBHOOK_SECRET"): string {
+  const modeSpecificName = `STRIPE_${stripeMode().toUpperCase()}_${suffix}`;
+  const modeSpecificValue = process.env[modeSpecificName];
+  if (modeSpecificValue) {
+    return modeSpecificValue;
+  }
+
+  return requiredEnv(`STRIPE_${suffix}`);
+}
+
 function stripeClient(): Stripe {
-  return new Stripe(requiredEnv("STRIPE_SECRET_KEY"));
+  return new Stripe(stripeEnv("SECRET_KEY"));
 }
 
 function checkoutUrlEnv(name: string): string {
-  return process.env[name] ?? "https://printeriq.com/checkout";
+  return process.env[name] ?? "https://presciaiq.com/checkout";
 }
 
 export async function createCheckoutSession(
@@ -138,7 +152,7 @@ export async function handleStripeWebhook(
   deps: StripeDeps = {},
 ): Promise<{ handled: boolean }> {
   const stripe = deps.stripe ?? stripeClient();
-  const secret = deps.webhookSecret ?? requiredEnv("STRIPE_WEBHOOK_SECRET");
+  const secret = deps.webhookSecret ?? stripeEnv("WEBHOOK_SECRET");
   const event = stripe.webhooks.constructEvent(rawBody, signature, secret);
 
   return handleStripeWebhookEvent(event, deps);
