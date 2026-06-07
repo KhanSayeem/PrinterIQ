@@ -13,7 +13,6 @@ import pytest
 
 from pipeline_queue.definitions import JobType
 
-
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -120,8 +119,14 @@ def _personalisation(**overrides: object) -> dict[str, object]:
             {"title": "Hot Water Repairs", "description": "Reliable help for failed systems."},
             {"title": "Leak Detection", "description": "Accurate checks before damage spreads."},
             {"title": "Tap Repairs", "description": "Clean fixes for everyday plumbing issues."},
-            {"title": "Bathroom Plumbing", "description": "Careful rough-ins and fixture installs."},
-            {"title": "Emergency Callouts", "description": "Responsive support when plumbing fails."},
+            {
+                "title": "Bathroom Plumbing",
+                "description": "Careful rough-ins and fixture installs.",
+            },
+            {
+                "title": "Emergency Callouts",
+                "description": "Responsive support when plumbing fails.",
+            },
         ],
     }
     data.update(overrides)
