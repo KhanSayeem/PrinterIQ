@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PREVIEW_TEMPLATE_DIR = REPO_ROOT / "services" / "pipeline" / "src" / "templates" / "previews"
 MANIFEST_PATH = REPO_ROOT / "image-download-manifest.json"
+NGINX_PREVIEW_CONFIG_PATH = REPO_ROOT / "nginx" / "preview.presciaiq.com.conf"
 
 EXPECTED_TOKEN_COUNT = 20
 EXPECTED_TEMPLATE_IMAGE_REFS = 15
@@ -109,6 +110,9 @@ def test_preview_templates_use_only_manifested_local_images() -> None:
         if "https://" in html:
             failures.append(f"{template_path.name}: contains external HTTPS references")
 
+        if '<meta name="robots" content="noindex, nofollow, noarchive">' not in html:
+            failures.append(f"{template_path.name}: missing noindex robots meta")
+
         if len(local_image_paths) != EXPECTED_TEMPLATE_IMAGE_REFS:
             failures.append(
                 f"{template_path.name}: expected {EXPECTED_TEMPLATE_IMAGE_REFS} local preview "
@@ -131,3 +135,9 @@ def test_preview_templates_use_only_manifested_local_images() -> None:
             )
 
     assert failures == []
+
+
+def test_preview_nginx_config_blocks_search_indexing() -> None:
+    config = NGINX_PREVIEW_CONFIG_PATH.read_text(encoding="utf-8")
+
+    assert 'add_header X-Robots-Tag "noindex, nofollow, noarchive" always;' in config

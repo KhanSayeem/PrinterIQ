@@ -16,6 +16,7 @@ from workers.schedule_outreach import (
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
+PREVIEW_URL = f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
 
 
 @dataclass
@@ -169,7 +170,7 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
             _payload(
                 channel="email",
                 send_after="2026-05-20T09:00:00+10:00",
-                preview_url=f"https://preview.presciaiq.com/{LEAD_ID}",
+                preview_url=PREVIEW_URL,
             ),
             lead_fetcher=FakeLeadFetcher(_lead()),
             qualification_fetcher=FakeQualificationFetcher(_qualification()),
@@ -193,8 +194,8 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
                     "followup_1": "Worth fixing before the next batch of quote requests.",
                     "followup_2": "Happy to show what a fast tradie site can look like.",
                     "lead_id": str(LEAD_ID),
-                    "website_preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
-                    "preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
+                    "website_preview_url": PREVIEW_URL,
+                    "preview_url": PREVIEW_URL,
                 },
             }
         ]
@@ -217,6 +218,27 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
         ]
         assert repo.updates == [(TENANT_ID, LEAD_ID)]
         assert repo.lock_released is True
+
+    asyncio.run(scenario())
+
+
+def test_preview_url_must_match_tenant_lead_canonical_url() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+        instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
+
+        with pytest.raises(ValueError, match="preview_url does not match tenant lead"):
+            await schedule_outreach(
+                _payload(preview_url="https://attacker.example/preview"),
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=repo,
+                instantly_client=instantly,
+            )
+
+        assert repo.reserved == []
+        assert repo.completed == []
+        assert instantly.calls == []
 
     asyncio.run(scenario())
 
