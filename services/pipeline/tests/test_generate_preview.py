@@ -197,6 +197,47 @@ def test_parse_personalisation_json_requires_exactly_six_services() -> None:
         module.parse_personalisation_json(json.dumps(invalid))
 
 
+def test_render_preview_html_escapes_lead_and_claude_values() -> None:
+    module = _generate_preview_module()
+    malicious = _personalisation(
+        about_blurb='Safe text <script>alert("x")</script>',
+        founder_name="Sam <img src=x onerror=alert(1)>",
+        services=[
+            {
+                "title": "Pipe <b>Repairs</b>",
+                "description": "Fixes 'quoted' leaks <script>alert(1)</script>.",
+            },
+            *_personalisation()["services"][1:],
+        ],
+    )
+
+    html = module.render_preview_html(
+        """
+        <title>{{BUSINESS_NAME}}</title>
+        <a href="mailto:{{EMAIL}}">{{EMAIL}}</a>
+        <script>const name = '{{BUSINESS_NAME}}';</script>
+        <p>{{ABOUT_BLURB}}</p>
+        <p>{{FOUNDER_NAME}}</p>
+        <h3>{{SERVICE_1_TITLE}}</h3>
+        <p>{{SERVICE_1_DESC}}</p>
+        """,
+        lead=_lead(
+            business_name="Bad Biz </script><script>alert(1)</script>",
+            email='bad" onclick="alert(1)@example.com',
+        ),
+        personalisation=malicious,
+    )
+
+    assert "<script>alert" not in html
+    assert "</script><script>" not in html
+    assert '" onclick="' not in html
+    assert "&lt;script&gt;alert" in html
+    assert "Bad Biz &lt;/script&gt;&lt;script&gt;alert" in html
+    assert "bad&quot; onclick=&quot;alert(1)@example.com" in html
+    assert "Pipe &lt;b&gt;Repairs&lt;/b&gt;" in html
+    assert "&#x27;quoted&#x27;" in html
+
+
 @pytest.mark.parametrize(
     ("industry", "expected_template"),
     [

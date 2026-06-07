@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from decimal import Decimal
+from html import escape
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
@@ -173,20 +174,22 @@ def render_preview_html(
         raise DeadLetterError("invalid preview personalisation: services must contain exactly 6")
 
     token_map = {
-        "{{BUSINESS_NAME}}": _string_value(lead, "business_name"),
-        "{{CITY}}": _string_value(lead, "city"),
-        "{{STATE}}": _string_value(lead, "state"),
-        "{{PHONE}}": _string_value(lead, "phone"),
-        "{{EMAIL}}": _string_value(lead, "email"),
-        "{{ABOUT_BLURB}}": str(personalisation["about_blurb"]),
-        "{{YEAR_FOUNDED}}": str(personalisation["year_founded"]),
-        "{{FOUNDER_NAME}}": str(personalisation["founder_name"]),
+        "{{BUSINESS_NAME}}": _escape_token(_string_value(lead, "business_name")),
+        "{{CITY}}": _escape_token(_string_value(lead, "city")),
+        "{{STATE}}": _escape_token(_string_value(lead, "state")),
+        "{{PHONE}}": _escape_token(_string_value(lead, "phone")),
+        "{{EMAIL}}": _escape_token(_string_value(lead, "email")),
+        "{{ABOUT_BLURB}}": _escape_token(str(personalisation["about_blurb"])),
+        "{{YEAR_FOUNDED}}": _escape_token(str(personalisation["year_founded"])),
+        "{{FOUNDER_NAME}}": _escape_token(str(personalisation["founder_name"])),
     }
     for index, service in enumerate(services, start=1):
         if not isinstance(service, dict):
             raise DeadLetterError("invalid preview personalisation service")
-        token_map[f"{{{{SERVICE_{index}_TITLE}}}}"] = str(service["title"])
-        token_map[f"{{{{SERVICE_{index}_DESC}}}}"] = str(service["description"])
+        token_map[f"{{{{SERVICE_{index}_TITLE}}}}"] = _escape_token(str(service["title"]))
+        token_map[f"{{{{SERVICE_{index}_DESC}}}}"] = _escape_token(
+            str(service["description"])
+        )
 
     rendered = template_source
     for token, value in token_map.items():
@@ -213,6 +216,10 @@ async def _call_claude_for_personalisation(
 def _string_value(row: dict[str, object], field_name: str) -> str:
     value = row.get(field_name)
     return "" if value is None else str(value)
+
+
+def _escape_token(value: str) -> str:
+    return escape(value, quote=True)
 
 
 def _reject_dash_substitutes(value: object) -> None:

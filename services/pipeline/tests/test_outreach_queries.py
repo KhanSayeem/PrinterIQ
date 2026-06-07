@@ -11,6 +11,7 @@ from db.queries import (
     abandon_outreach_send_reservation,
     acquire_outreach_send_lock,
     complete_outreach_send,
+    get_lead_by_id,
     get_outreach_send_by_lead_campaign_channel,
     get_qualification_by_lead_id,
     insert_outreach_send,
@@ -67,6 +68,31 @@ def test_get_qualification_by_lead_id_is_tenant_scoped() -> None:
     asyncio.run(scenario())
 
 
+def test_get_lead_by_id_includes_preview_trade_context() -> None:
+    async def scenario() -> None:
+        expected = {
+            "id": LEAD_ID,
+            "tenant_id": TENANT_ID,
+            "email": "hello@example.com",
+            "industry": "Plumbing",
+            "vertical": "tradies",
+            "keywords": "hot water, blocked drains",
+        }
+        conn = RecordingConnection(fetchrow_result=expected)
+
+        result = await get_lead_by_id(conn, tenant_id=TENANT_ID, lead_id=LEAD_ID)
+
+        assert result == expected
+        query = conn.queries[0]
+        assert "industry" in query
+        assert "vertical" in query
+        assert "keywords" in query
+        assert "tenant_id = $1" in query
+        assert "id = $2" in query
+
+    asyncio.run(scenario())
+
+
 def test_insert_website_preview_writes_tenant_scoped_metadata() -> None:
     async def scenario() -> None:
         conn = RecordingConnection(fetchval_result=PREVIEW_ID)
@@ -94,6 +120,12 @@ def test_insert_website_preview_writes_tenant_scoped_metadata() -> None:
         assert result == PREVIEW_ID
         query = conn.queries[0]
         assert "INSERT INTO website_previews" in query
+        assert "FROM leads" in query
+        assert "id = $2" in query
+        assert "tenant_id = $1" in query
+        assert "is_deleted = FALSE" in query
+        assert "ON CONFLICT (lead_id) DO UPDATE" in query
+        assert "website_previews.tenant_id = EXCLUDED.tenant_id" in query
         assert "tenant_id" in query
         assert "lead_id" in query
         assert "personalisation_data" in query

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -22,6 +23,7 @@ _PRICING: dict[str, tuple[Decimal, Decimal]] = {
 }
 
 _MAX_RETRIES = 3
+_BRACE_VARIABLE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 @dataclass(frozen=True)
@@ -44,7 +46,7 @@ class RealClaudeClient:
         model = _MODEL_MAP[prompt_name]
         prompt_path = self._prompts_dir / f"{prompt_name}.txt"
         raw_prompt = prompt_path.read_text(encoding="utf-8")
-        prompt = Template(raw_prompt).safe_substitute(variables)
+        prompt = _render_prompt(raw_prompt, variables)
 
         client = AsyncAnthropic(api_key=self._api_key)
         delay = 1.0
@@ -70,3 +72,13 @@ class RealClaudeClient:
                 delay *= 2
 
         raise RuntimeError("Unreachable")
+
+
+def _render_prompt(raw_prompt: str, variables: dict[str, str]) -> str:
+    template_rendered = Template(raw_prompt).safe_substitute(variables)
+
+    def replace_brace_variable(match: re.Match[str]) -> str:
+        variable_name = match.group(1)
+        return variables.get(variable_name, match.group(0))
+
+    return _BRACE_VARIABLE_RE.sub(replace_brace_variable, template_rendered)

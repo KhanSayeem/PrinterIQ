@@ -41,3 +41,14 @@ def test_preview_personalise_prompt_uses_haiku_model() -> None:
         claude_client._MODEL_MAP["preview-personalise-v1"]
         == "claude-haiku-4-5-20251001"
     )
+
+
+def test_claude_prompt_renderer_substitutes_brace_variables_without_json_breakage() -> None:
+    rendered = claude_client._render_prompt(
+        'Lead: {business_name}\nSchema: {"about_blurb": "string"}\nMissing: {unknown}',
+        {"business_name": "Aqua Flow"},
+    )
+
+    assert "Lead: Aqua Flow" in rendered
+    assert '{"about_blurb": "string"}' in rendered
+    assert "{unknown}" in rendered

@@ -415,7 +415,8 @@ async def get_lead_by_id(
         """
         SELECT id, tenant_id, email, website_url, technologies, status,
                phone,
-               first_name, last_name, business_name, city, state
+               first_name, last_name, business_name, city, state,
+               industry, vertical, keywords
         FROM leads
         WHERE tenant_id = $1
           AND id = $2
@@ -663,7 +664,20 @@ async def insert_website_preview(
           tenant_id, lead_id, template_used, preview_url,
           personalisation_data, prompt_version, cost_usd
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+        SELECT $1, $2, $3, $4, $5::jsonb, $6, $7
+        FROM leads
+        WHERE tenant_id = $1
+          AND id = $2
+          AND is_deleted = FALSE
+        ON CONFLICT (lead_id) DO UPDATE
+        SET tenant_id = EXCLUDED.tenant_id,
+            template_used = EXCLUDED.template_used,
+            preview_url = EXCLUDED.preview_url,
+            personalisation_data = EXCLUDED.personalisation_data,
+            prompt_version = EXCLUDED.prompt_version,
+            cost_usd = EXCLUDED.cost_usd,
+            generated_at = NOW()
+        WHERE website_previews.tenant_id = EXCLUDED.tenant_id
         RETURNING id
         """,
         preview.tenant_id,
@@ -678,6 +692,8 @@ async def insert_website_preview(
         return raw_id
     if isinstance(raw_id, str):
         return UUID(raw_id)
+    if raw_id is None:
+        raise LookupError(f"Lead {preview.lead_id} not found for tenant {preview.tenant_id}")
     raise TypeError(f"Expected website preview UUID, got {type(raw_id).__name__}")
 
 
