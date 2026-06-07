@@ -139,6 +139,13 @@ class PipelineStore:
             self._connection, tenant_id=tenant_id, lead_id=lead_id
         )
 
+    async def get_website_preview(
+        self, *, tenant_id: UUID, lead_id: UUID
+    ) -> dict[str, object] | None:
+        return await get_website_preview_by_lead_id(
+            self._connection, tenant_id=tenant_id, lead_id=lead_id
+        )
+
     async def insert_enrichment(self, enrichment: dict[str, object]) -> UUID:
         return await insert_enrichment(
             self._connection,
@@ -180,6 +187,22 @@ class PipelineStore:
                 model_sonnet=cast(str | None, q["model_sonnet"]),
                 cost_usd=cast(Decimal, q["cost_usd"]),
                 prompt_version=str(q["prompt_version"]),
+            ),
+        )
+
+    async def insert_website_preview(self, preview: dict[str, object]) -> UUID:
+        return await insert_website_preview(
+            self._connection,
+            WebsitePreviewInsert(
+                tenant_id=cast(UUID, preview["tenant_id"]),
+                lead_id=cast(UUID, preview["lead_id"]),
+                template_used=str(preview["template_used"]),
+                preview_url=str(preview["preview_url"]),
+                personalisation_data=cast(
+                    dict[str, object], preview["personalisation_data"]
+                ),
+                prompt_version=str(preview["prompt_version"]),
+                cost_usd=cast(Decimal, preview["cost_usd"]),
             ),
         )
 
@@ -616,6 +639,67 @@ async def get_qualification_by_lead_id(
     )
     if result is None:
         raise LookupError(f"Qualification for lead {lead_id} not found for tenant {tenant_id}")
+    return dict(cast(Mapping[str, object], result))
+
+
+@dataclass(frozen=True)
+class WebsitePreviewInsert:
+    tenant_id: UUID
+    lead_id: UUID
+    template_used: str
+    preview_url: str
+    personalisation_data: dict[str, object]
+    prompt_version: str
+    cost_usd: Decimal
+
+
+async def insert_website_preview(
+    connection: DatabaseConnection,
+    preview: WebsitePreviewInsert,
+) -> UUID:
+    raw_id = await connection.fetchval(
+        """
+        INSERT INTO website_previews (
+          tenant_id, lead_id, template_used, preview_url,
+          personalisation_data, prompt_version, cost_usd
+        )
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+        RETURNING id
+        """,
+        preview.tenant_id,
+        preview.lead_id,
+        preview.template_used,
+        preview.preview_url,
+        json.dumps(preview.personalisation_data),
+        preview.prompt_version,
+        preview.cost_usd,
+    )
+    if isinstance(raw_id, UUID):
+        return raw_id
+    if isinstance(raw_id, str):
+        return UUID(raw_id)
+    raise TypeError(f"Expected website preview UUID, got {type(raw_id).__name__}")
+
+
+async def get_website_preview_by_lead_id(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+) -> dict[str, object] | None:
+    result = await connection.fetchrow(
+        """
+        SELECT id, tenant_id, lead_id, template_used, preview_url,
+               personalisation_data, prompt_version, cost_usd, generated_at
+        FROM website_previews
+        WHERE tenant_id = $1
+          AND lead_id = $2
+        """,
+        tenant_id,
+        lead_id,
+    )
+    if result is None:
+        return None
     return dict(cast(Mapping[str, object], result))
 
 
