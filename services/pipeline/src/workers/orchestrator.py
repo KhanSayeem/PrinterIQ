@@ -33,6 +33,7 @@ from env import load_pipeline_env
 from pipeline_queue.definitions import JobType
 from pipeline_queue.worker_base import QueueJobRepository, run_tracked_job
 from workers.enrich import enrich_lead
+from workers.generate_preview import generate_preview
 from workers.ingest import ingest_csv_file
 from workers.qualify import qualify_lead
 from workers.schedule_outreach import SendWindowNotReachedError, schedule_outreach
@@ -120,6 +121,7 @@ class MinuteRateLimiter:
 
 def build_pipeline_handlers(
     *,
+    generate_preview_handler: PipelineHandler | None = None,
     schedule_outreach_handler: PipelineHandler | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
@@ -127,6 +129,8 @@ def build_pipeline_handlers(
         JobType.INGEST_CSV: cast(PipelineHandler, ingest_csv_file),
         JobType.ENRICH_LEAD: cast(PipelineHandler, enrich_lead),
         JobType.QUALIFY_LEAD: cast(PipelineHandler, qualify_lead),
+        JobType.GENERATE_PREVIEW: generate_preview_handler
+        or _unconfigured_generate_preview_handler,
         JobType.SCHEDULE_OUTREACH: schedule_outreach_handler
         or _unconfigured_schedule_outreach_handler,
     }
@@ -151,17 +155,24 @@ def build_production_pipeline_handlers(
     ingest_worker: FlexibleWorker | None = None,
     enrich_worker: FlexibleWorker | None = None,
     qualify_worker: FlexibleWorker | None = None,
+    generate_preview_worker: FlexibleWorker | None = None,
     schedule_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
     enrich: FlexibleWorker = enrich_worker or cast(FlexibleWorker, enrich_lead)
     qualify: FlexibleWorker = qualify_worker or cast(FlexibleWorker, qualify_lead)
+    preview: FlexibleWorker = generate_preview_worker or cast(FlexibleWorker, generate_preview)
     schedule: FlexibleWorker = schedule_worker or cast(FlexibleWorker, schedule_outreach)
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
-    limited_claude_client = (
+    qualify_claude_client = (
         RateLimitedClaudeClient(claude_client, limiters[JobType.QUALIFY_LEAD])
         if JobType.QUALIFY_LEAD in limiters
+        else claude_client
+    )
+    preview_claude_client = (
+        RateLimitedClaudeClient(claude_client, limiters[JobType.GENERATE_PREVIEW])
+        if JobType.GENERATE_PREVIEW in limiters
         else claude_client
     )
 
@@ -192,7 +203,16 @@ def build_production_pipeline_handlers(
             enrichment_fetcher=pipeline_store,
             qualification_repo=pipeline_store,
             outreach_queue=queue,
-            claude_client=limited_claude_client,
+            claude_client=qualify_claude_client,
+        )
+
+    async def handle_generate_preview(payload: dict[str, object]) -> object:
+        return await preview(
+            payload,
+            lead_fetcher=pipeline_store,
+            preview_repo=pipeline_store,
+            schedule_queue=queue,
+            claude_client=preview_claude_client,
         )
 
     schedule_handler = build_schedule_outreach_handler(
@@ -207,6 +227,7 @@ def build_production_pipeline_handlers(
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
         JobType.QUALIFY_LEAD: handle_qualify,
+        JobType.GENERATE_PREVIEW: handle_generate_preview,
         JobType.SCHEDULE_OUTREACH: schedule_handler,
     }
     schedule_limiter = (
@@ -232,18 +253,25 @@ def build_pooled_production_pipeline_handlers(
     ingest_worker: FlexibleWorker | None = None,
     enrich_worker: FlexibleWorker | None = None,
     qualify_worker: FlexibleWorker | None = None,
+    generate_preview_worker: FlexibleWorker | None = None,
     schedule_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
     enrich: FlexibleWorker = enrich_worker or cast(FlexibleWorker, enrich_lead)
     qualify: FlexibleWorker = qualify_worker or cast(FlexibleWorker, qualify_lead)
+    preview: FlexibleWorker = generate_preview_worker or cast(FlexibleWorker, generate_preview)
     schedule: FlexibleWorker = schedule_worker or cast(FlexibleWorker, schedule_outreach)
     connection_pool = cast(Any, pool)
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
-    limited_claude_client = (
+    qualify_claude_client = (
         RateLimitedClaudeClient(claude_client, limiters[JobType.QUALIFY_LEAD])
         if JobType.QUALIFY_LEAD in limiters
+        else claude_client
+    )
+    preview_claude_client = (
+        RateLimitedClaudeClient(claude_client, limiters[JobType.GENERATE_PREVIEW])
+        if JobType.GENERATE_PREVIEW in limiters
         else claude_client
     )
 
@@ -279,7 +307,18 @@ def build_pooled_production_pipeline_handlers(
                 enrichment_fetcher=pipeline_store,
                 qualification_repo=pipeline_store,
                 outreach_queue=queue,
-                claude_client=limited_claude_client,
+                claude_client=qualify_claude_client,
+            )
+
+    async def handle_generate_preview(payload: dict[str, object]) -> object:
+        async with connection_pool.acquire() as connection:
+            pipeline_store = PipelineStore(connection)
+            return await preview(
+                payload,
+                lead_fetcher=pipeline_store,
+                preview_repo=pipeline_store,
+                schedule_queue=queue,
+                claude_client=preview_claude_client,
             )
 
     async def handle_schedule(payload: dict[str, object]) -> object:
@@ -297,6 +336,7 @@ def build_pooled_production_pipeline_handlers(
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
         JobType.QUALIFY_LEAD: handle_qualify,
+        JobType.GENERATE_PREVIEW: handle_generate_preview,
         JobType.SCHEDULE_OUTREACH: handle_schedule,
     }
     schedule_limiter = (
@@ -327,6 +367,10 @@ async def _unconfigured_schedule_outreach_handler(_: dict[str, object]) -> objec
     raise RuntimeError("schedule_outreach handler is not configured with production dependencies")
 
 
+async def _unconfigured_generate_preview_handler(_: dict[str, object]) -> object:
+    raise RuntimeError("generate_preview handler is not configured with production dependencies")
+
+
 def build_schedule_outreach_handler(
     *,
     lead_fetcher: object,
@@ -350,6 +394,7 @@ def build_schedule_outreach_handler(
 def pipeline_rate_limits() -> dict[JobType, RateLimit]:
     return {
         JobType.QUALIFY_LEAD: RateLimit(CLAUDE_RATE_LIMIT_PER_MINUTE),
+        JobType.GENERATE_PREVIEW: RateLimit(CLAUDE_RATE_LIMIT_PER_MINUTE),
         JobType.SCHEDULE_OUTREACH: RateLimit(INSTANTLY_RATE_LIMIT_PER_MINUTE),
     }
 
@@ -366,6 +411,7 @@ def max_attempts_by_job_type() -> dict[JobType, int]:
         JobType.INGEST_CSV: 3,
         JobType.ENRICH_LEAD: 5,
         JobType.QUALIFY_LEAD: 3,
+        JobType.GENERATE_PREVIEW: 5,
         JobType.SCHEDULE_OUTREACH: 5,
     }
 
@@ -407,15 +453,6 @@ class PipelineQueueManager:
         payload = message.payload
 
         try:
-            delay_until = _future_send_after(payload)
-        except ValueError:
-            delay_until = None
-        if delay_until is not None:
-            await self._queue.enqueue(payload, delay_until=delay_until)
-            await self._queue.ack(message)
-            return False
-
-        try:
             job_type = JobType(str(payload["job_type"]))
         except (KeyError, ValueError):
             await self._queue.ack(message)
@@ -423,6 +460,15 @@ class PipelineQueueManager:
         if job_type not in self._handlers or job_type not in self._max_attempts:
             await self._queue.ack(message)
             return True
+        if job_type == JobType.SCHEDULE_OUTREACH:
+            try:
+                delay_until = _future_send_after(payload)
+            except ValueError:
+                delay_until = None
+            if delay_until is not None:
+                await self._queue.enqueue(payload, delay_until=delay_until)
+                await self._queue.ack(message)
+                return False
         max_attempts = self._max_attempts[job_type]
         handler = self._handlers[job_type]
         try:

@@ -12,6 +12,7 @@ class JobType(StrEnum):
     INGEST_CSV = "ingest_csv"
     ENRICH_LEAD = "enrich_lead"
     QUALIFY_LEAD = "qualify_lead"
+    GENERATE_PREVIEW = "generate_preview"
     SCHEDULE_OUTREACH = "schedule_outreach"
     PROCESS_REPLY = "process_reply"
     SEND_REPLY = "send_reply"
@@ -23,6 +24,7 @@ PIPELINE_JOB_TYPES = frozenset(
         JobType.INGEST_CSV,
         JobType.ENRICH_LEAD,
         JobType.QUALIFY_LEAD,
+        JobType.GENERATE_PREVIEW,
         JobType.SCHEDULE_OUTREACH,
     }
 )

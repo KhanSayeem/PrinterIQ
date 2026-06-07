@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from uuid import UUID
 
+import db.queries as queries
 from db.queries import (
     OutreachSendInsert,
+    WebsitePreviewInsert,
     abandon_outreach_send_reservation,
     acquire_outreach_send_lock,
     complete_outreach_send,
+    get_lead_by_id,
     get_outreach_send_by_lead_campaign_channel,
     get_qualification_by_lead_id,
     insert_outreach_send,
@@ -18,6 +22,7 @@ from db.queries import (
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
+PREVIEW_ID = UUID("30000000-0000-0000-0000-000000000004")
 
 
 class RecordingConnection:
@@ -58,6 +63,103 @@ def test_get_qualification_by_lead_id_is_tenant_scoped() -> None:
         assert "FROM qualifications" in conn.queries[0]
         assert "tenant_id = $1" in conn.queries[0]
         assert "lead_id = $2" in conn.queries[0]
+        assert conn.args[0] == (TENANT_ID, LEAD_ID)
+
+    asyncio.run(scenario())
+
+
+def test_get_lead_by_id_includes_preview_trade_context() -> None:
+    async def scenario() -> None:
+        expected = {
+            "id": LEAD_ID,
+            "tenant_id": TENANT_ID,
+            "email": "hello@example.com",
+            "industry": "Plumbing",
+            "vertical": "tradies",
+            "keywords": "hot water, blocked drains",
+        }
+        conn = RecordingConnection(fetchrow_result=expected)
+
+        result = await get_lead_by_id(conn, tenant_id=TENANT_ID, lead_id=LEAD_ID)
+
+        assert result == expected
+        query = conn.queries[0]
+        assert "industry" in query
+        assert "vertical" in query
+        assert "keywords" in query
+        assert "tenant_id = $1" in query
+        assert "id = $2" in query
+
+    asyncio.run(scenario())
+
+
+def test_insert_website_preview_writes_tenant_scoped_metadata() -> None:
+    async def scenario() -> None:
+        conn = RecordingConnection(fetchval_result=PREVIEW_ID)
+
+        assert hasattr(queries, "insert_website_preview")
+
+        result = await queries.insert_website_preview(
+            conn,
+            WebsitePreviewInsert(
+                tenant_id=TENANT_ID,
+                lead_id=LEAD_ID,
+                template_used="plumbing",
+                preview_url=f"https://preview.presciaiq.com/{LEAD_ID}",
+                personalisation_data={
+                    "about_blurb": "Aqua Flow helps Brisbane homes. Locals call for urgent jobs.",
+                    "founder_name": "Sarah Nguyen",
+                    "year_founded": 2008,
+                    "services": [],
+                },
+                prompt_version="preview-personalise-v1",
+                cost_usd=Decimal("0.000100"),
+            ),
+        )
+
+        assert result == PREVIEW_ID
+        query = conn.queries[0]
+        assert "INSERT INTO website_previews" in query
+        assert "FROM leads" in query
+        assert "id = $2" in query
+        assert "tenant_id = $1" in query
+        assert "is_deleted = FALSE" in query
+        assert "ON CONFLICT (lead_id) DO UPDATE" in query
+        assert "website_previews.tenant_id = EXCLUDED.tenant_id" in query
+        assert "tenant_id" in query
+        assert "lead_id" in query
+        assert "personalisation_data" in query
+        assert "prompt_version" in query
+        assert conn.args[0][0] == TENANT_ID
+        assert conn.args[0][1] == LEAD_ID
+
+    asyncio.run(scenario())
+
+
+def test_get_website_preview_by_lead_id_is_tenant_scoped() -> None:
+    async def scenario() -> None:
+        expected = {
+            "id": PREVIEW_ID,
+            "tenant_id": TENANT_ID,
+            "lead_id": LEAD_ID,
+            "template_used": "plumbing",
+            "preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
+        }
+        conn = RecordingConnection(fetchrow_result=expected)
+
+        assert hasattr(queries, "get_website_preview_by_lead_id")
+
+        result = await queries.get_website_preview_by_lead_id(
+            conn,
+            tenant_id=TENANT_ID,
+            lead_id=LEAD_ID,
+        )
+
+        assert result == expected
+        query = conn.queries[0]
+        assert "FROM website_previews" in query
+        assert "tenant_id = $1" in query
+        assert "lead_id = $2" in query
         assert conn.args[0] == (TENANT_ID, LEAD_ID)
 
     asyncio.run(scenario())
