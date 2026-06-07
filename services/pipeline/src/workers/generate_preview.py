@@ -68,6 +68,11 @@ class LeadFetcher(Protocol):
 
 
 class WebsitePreviewRepository(Protocol):
+    async def get_website_preview(
+        self, *, tenant_id: UUID, lead_id: UUID
+    ) -> dict[str, object] | None:
+        """Return existing preview metadata for the tenant lead when present."""
+
     async def insert_website_preview(self, preview: dict[str, object]) -> UUID:
         """Insert website preview metadata and return the row id."""
 
@@ -96,6 +101,19 @@ async def generate_preview(
     tenant_id = UUID(str(payload["tenant_id"]))
     lead_id = UUID(str(payload["lead_id"]))
 
+    existing_preview = await preview_repo.get_website_preview(
+        tenant_id=tenant_id, lead_id=lead_id
+    )
+    if existing_preview is not None:
+        await _enqueue_schedule(
+            schedule_queue,
+            payload=payload,
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            preview_url=str(existing_preview["preview_url"]),
+        )
+        return
+
     lead = await lead_fetcher.get_lead(tenant_id=tenant_id, lead_id=lead_id)
     template_key = select_template_key(lead)
     claude_resp = await _call_claude_for_personalisation(claude_client, lead)
@@ -107,11 +125,11 @@ async def generate_preview(
 
     template_source = (template_dir / f"{template_key}.html").read_text(encoding="utf-8")
     rendered_html = render_preview_html(template_source, lead=lead, personalisation=personalisation)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{lead_id}.html"
+    output_path = output_dir / str(tenant_id) / str(lead_id) / "index.html"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered_html, encoding="utf-8")
 
-    preview_url = f"{preview_base_url.rstrip('/')}/{lead_id}"
+    preview_url = _preview_url(preview_base_url, tenant_id=tenant_id, lead_id=lead_id)
     await preview_repo.insert_website_preview(
         {
             "tenant_id": tenant_id,
@@ -123,6 +141,23 @@ async def generate_preview(
             "cost_usd": claude_resp.cost_usd,
         }
     )
+    await _enqueue_schedule(
+        schedule_queue,
+        payload=payload,
+        tenant_id=tenant_id,
+        lead_id=lead_id,
+        preview_url=preview_url,
+    )
+
+
+async def _enqueue_schedule(
+    schedule_queue: ScheduleQueue,
+    *,
+    payload: dict[str, object],
+    tenant_id: UUID,
+    lead_id: UUID,
+    preview_url: str,
+) -> None:
     await schedule_queue.enqueue(
         {
             "job_type": JobType.SCHEDULE_OUTREACH.value,
@@ -134,6 +169,10 @@ async def generate_preview(
             "preview_url": preview_url,
         }
     )
+
+
+def _preview_url(preview_base_url: str, *, tenant_id: UUID, lead_id: UUID) -> str:
+    return f"{preview_base_url.rstrip('/')}/{tenant_id}/{lead_id}/"
 
 
 def select_template_key(lead: dict[str, object]) -> str:

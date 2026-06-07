@@ -4,7 +4,7 @@
 
 **Goal:** Add the `generate_preview` pipeline worker that renders a personalized preview site before outreach is scheduled.
 
-**Architecture:** `qualify_lead` will enqueue `GENERATE_PREVIEW` instead of `SCHEDULE_OUTREACH` for qualified leads. The new worker will fetch tenant-scoped lead data, select a trade template, call `preview-personalise-v1`, render the current 20-token HTML contract, write `{lead_id}.html`, insert `website_previews`, then enqueue `SCHEDULE_OUTREACH` with `preview_url`.
+**Architecture:** `qualify_lead` will enqueue `GENERATE_PREVIEW` instead of `SCHEDULE_OUTREACH` for qualified leads. The new worker will fetch tenant-scoped lead data, select a trade template, call `preview-personalise-v1`, render the current 20-token HTML contract, write `{tenant_id}/{lead_id}/index.html`, insert `website_previews`, then enqueue `SCHEDULE_OUTREACH` with `preview_url`.
 
 **Tech Stack:** Python 3.12, pytest, async worker protocols, Postgres query helpers in `services/pipeline/src/db/queries.py`, existing Claude wrapper and queue abstractions.
 
@@ -14,7 +14,7 @@
 
 Issue #38 is stale in two places. Implement the approved contract from `docs/superpowers/specs/2026-05-29-website-preview-design.md`:
 
-- Use `https://preview.presciaiq.com/{lead_id}`, not `https://preview.printeriq.com/{lead_id}`.
+- Use `https://preview.presciaiq.com/{tenant_id}/{lead_id}/`, not `https://preview.printeriq.com/{lead_id}`.
 - Do not use `tagline` or `top_weakness` in the preview prompt output.
 - Validate `about_blurb`, `founder_name`, `year_founded`, and exactly 6 service objects with `title` and `description`.
 - Render all 20 tokens already enforced by `services/pipeline/tests/test_preview_templates.py`.
@@ -152,7 +152,7 @@ async def test_insert_website_preview_writes_tenant_scoped_metadata() -> None:
             "tenant_id": TENANT_ID,
             "lead_id": LEAD_ID,
             "template_used": "plumbing",
-            "preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
+            "preview_url": f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/",
             "personalisation_data": {"about_blurb": "Aqua Flow helps Brisbane homes."},
             "prompt_version": "preview-personalise-v1",
             "cost_usd": Decimal("0.000100"),
@@ -406,18 +406,19 @@ asyncio.run(generate_preview(
 Assert:
 
 ```python
-assert (output_dir / f"{LEAD_ID}.html").exists()
-html = (output_dir / f"{LEAD_ID}.html").read_text()
+output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
+assert output_file.exists()
+html = output_file.read_text()
 assert "Aqua Flow Plumbing" in html
 assert "Brisbane" in html
 assert "+61400000001" in html
 assert "{{BUSINESS_NAME}}" not in html
 assert preview_repo.inserted[0]["tenant_id"] == TENANT_ID
 assert preview_repo.inserted[0]["template_used"] == "plumbing"
-assert preview_repo.inserted[0]["preview_url"] == f"https://preview.presciaiq.com/{LEAD_ID}"
+assert preview_repo.inserted[0]["preview_url"] == f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
 assert preview_repo.inserted[0]["prompt_version"] == "preview-personalise-v1"
 assert queue.jobs[0]["job_type"] == JobType.SCHEDULE_OUTREACH.value
-assert queue.jobs[0]["preview_url"] == f"https://preview.presciaiq.com/{LEAD_ID}"
+assert queue.jobs[0]["preview_url"] == f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
 ```
 
 Also add:
@@ -465,7 +466,7 @@ Flow:
 4. Call Claude with `business_name`, `city`, `state`, `industry`, and `keywords`.
 5. If invalid, retry once, then raise `DeadLetterError`.
 6. Render all 20 tokens.
-7. Write `output_dir / f"{lead_id}.html"` with UTF-8.
+7. Write `output_dir / str(tenant_id) / str(lead_id) / "index.html"` with UTF-8.
 8. Insert preview metadata.
 9. Enqueue schedule payload with `preview_url` plus forwarded `campaign_id`, `channel`, `send_after`.
 
@@ -492,14 +493,14 @@ Expected: PASS.
 In the existing successful schedule test, add `preview_url` to the payload:
 
 ```python
-"preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
+"preview_url": f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/",
 ```
 
 Assert Instantly custom variables include both names:
 
 ```python
-assert sent["custom_variables"]["website_preview_url"] == f"https://preview.presciaiq.com/{LEAD_ID}"
-assert sent["custom_variables"]["preview_url"] == f"https://preview.presciaiq.com/{LEAD_ID}"
+assert sent["custom_variables"]["website_preview_url"] == f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
+assert sent["custom_variables"]["preview_url"] == f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
 ```
 
 Keep `website_preview_url` as the campaign-facing variable configured in Instantly. Also include `preview_url` as an internal alias so downstream tests can assert the payload without campaign-specific naming knowledge.

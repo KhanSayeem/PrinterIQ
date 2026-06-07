@@ -46,7 +46,15 @@ class FakeLeadFetcher:
 @dataclass
 class FakePreviewRepository:
     inserted: list[dict[str, object]] = field(default_factory=list)
+    existing_preview: dict[str, object] | None = None
+    get_calls: list[tuple[UUID, UUID]] = field(default_factory=list)
     fail_insert: bool = False
+
+    async def get_website_preview(
+        self, *, tenant_id: UUID, lead_id: UUID
+    ) -> dict[str, object] | None:
+        self.get_calls.append((tenant_id, lead_id))
+        return self.existing_preview
 
     async def insert_website_preview(self, preview: dict[str, object]) -> UUID:
         if self.fail_insert:
@@ -58,8 +66,11 @@ class FakePreviewRepository:
 @dataclass
 class FakeScheduleQueue:
     jobs: list[dict[str, object]] = field(default_factory=list)
+    fail_enqueue: bool = False
 
     async def enqueue(self, payload: dict[str, object]) -> None:
+        if self.fail_enqueue:
+            raise RuntimeError("queue unavailable")
         self.jobs.append(payload)
 
 
@@ -104,6 +115,10 @@ def _payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def _preview_url() -> str:
+    return f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
 
 
 def _personalisation(**overrides: object) -> dict[str, object]:
@@ -274,7 +289,7 @@ def test_generate_preview_writes_html_inserts_row_and_enqueues_schedule(
             output_dir=output_dir,
         )
 
-        output_file = output_dir / f"{LEAD_ID}.html"
+        output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
         assert output_file.exists()
         html = output_file.read_text()
         assert "Aqua Flow Plumbing" in html
@@ -295,7 +310,7 @@ def test_generate_preview_writes_html_inserts_row_and_enqueues_schedule(
         assert preview_repo.inserted[0]["tenant_id"] == TENANT_ID
         assert preview_repo.inserted[0]["lead_id"] == LEAD_ID
         assert preview_repo.inserted[0]["template_used"] == expected_template
-        assert preview_repo.inserted[0]["preview_url"] == f"https://preview.presciaiq.com/{LEAD_ID}"
+        assert preview_repo.inserted[0]["preview_url"] == _preview_url()
         assert preview_repo.inserted[0]["prompt_version"] == "preview-personalise-v1"
         assert preview_repo.inserted[0]["cost_usd"] == HAIKU_COST
         assert queue.jobs == [
@@ -306,9 +321,110 @@ def test_generate_preview_writes_html_inserts_row_and_enqueues_schedule(
                 "campaign_id": "campaign-123",
                 "channel": "email",
                 "send_after": "2026-05-25T09:30:00+10:00",
-                "preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
+                "preview_url": _preview_url(),
             }
         ]
+
+    asyncio.run(scenario())
+
+
+def test_generate_preview_existing_preview_reenqueues_without_regeneration(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        module = _generate_preview_module()
+        template_dir = tmp_path / "templates"
+        output_dir = tmp_path / "previews"
+        _write_templates(template_dir)
+        lead_fetcher = FakeLeadFetcher(lead=_lead())
+        preview_repo = FakePreviewRepository(
+            existing_preview={
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+                "preview_url": _preview_url(),
+            }
+        )
+        queue = FakeScheduleQueue()
+        claude = FakeClaudeClient(responses=[])
+
+        await module.generate_preview(
+            _payload(),
+            lead_fetcher=lead_fetcher,
+            preview_repo=preview_repo,
+            schedule_queue=queue,
+            claude_client=claude,
+            template_dir=template_dir,
+            output_dir=output_dir,
+        )
+
+        assert preview_repo.get_calls == [(TENANT_ID, LEAD_ID)]
+        assert lead_fetcher.calls == []
+        assert claude.calls == []
+        assert preview_repo.inserted == []
+        assert not output_dir.exists()
+        assert queue.jobs == [
+            {
+                "job_type": JobType.SCHEDULE_OUTREACH.value,
+                "tenant_id": str(TENANT_ID),
+                "lead_id": str(LEAD_ID),
+                "campaign_id": "campaign-123",
+                "channel": "email",
+                "send_after": "2026-05-25T09:30:00+10:00",
+                "preview_url": _preview_url(),
+            }
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_generate_preview_existing_preview_retry_after_enqueue_failure_skips_generation(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        module = _generate_preview_module()
+        template_dir = tmp_path / "templates"
+        output_dir = tmp_path / "previews"
+        _write_templates(template_dir)
+        lead_fetcher = FakeLeadFetcher(lead=_lead())
+        preview_repo = FakePreviewRepository(
+            existing_preview={
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+                "preview_url": _preview_url(),
+            }
+        )
+        failing_queue = FakeScheduleQueue(fail_enqueue=True)
+        claude = FakeClaudeClient(responses=[])
+
+        with pytest.raises(RuntimeError, match="queue unavailable"):
+            await module.generate_preview(
+                _payload(),
+                lead_fetcher=lead_fetcher,
+                preview_repo=preview_repo,
+                schedule_queue=failing_queue,
+                claude_client=claude,
+                template_dir=template_dir,
+                output_dir=output_dir,
+            )
+
+        retry_queue = FakeScheduleQueue()
+        await module.generate_preview(
+            _payload(),
+            lead_fetcher=lead_fetcher,
+            preview_repo=preview_repo,
+            schedule_queue=retry_queue,
+            claude_client=claude,
+            template_dir=template_dir,
+            output_dir=output_dir,
+        )
+
+        assert preview_repo.get_calls == [(TENANT_ID, LEAD_ID), (TENANT_ID, LEAD_ID)]
+        assert lead_fetcher.calls == []
+        assert claude.calls == []
+        assert preview_repo.inserted == []
+        assert failing_queue.jobs == []
+        assert retry_queue.jobs[0]["preview_url"] == _preview_url()
+        assert not output_dir.exists()
 
     asyncio.run(scenario())
 
@@ -362,7 +478,7 @@ def test_generate_preview_dead_letters_after_two_bad_personalisation_responses(
 
         assert preview_repo.inserted == []
         assert queue.jobs == []
-        assert not (output_dir / f"{LEAD_ID}.html").exists()
+        assert not (output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html").exists()
 
     asyncio.run(scenario())
 
@@ -413,7 +529,7 @@ def test_generate_preview_db_insert_failure_does_not_enqueue(tmp_path: Path) -> 
                 output_dir=output_dir,
             )
 
-        assert (output_dir / f"{LEAD_ID}.html").exists()
+        assert (output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html").exists()
         assert queue.jobs == []
 
     asyncio.run(scenario())
