@@ -25,6 +25,7 @@ from workers.orchestrator import (
     build_pooled_production_pipeline_handlers,
     build_production_pipeline_handlers,
     build_schedule_outreach_handler,
+    max_attempts_by_job_type,
     pipeline_rate_limiters,
     smoke_check,
 )
@@ -123,6 +124,7 @@ def test_pipeline_handlers_register_all_pipeline_job_types() -> None:
         JobType.INGEST_CSV,
         JobType.ENRICH_LEAD,
         JobType.QUALIFY_LEAD,
+        JobType.GENERATE_PREVIEW,
         JobType.SCHEDULE_OUTREACH,
     }
 
@@ -152,6 +154,9 @@ def test_production_pipeline_handlers_inject_worker_dependencies() -> None:
         async def qualify_handler(payload: dict[str, object], **deps: object) -> None:
             calls.append(("qualify", (payload, deps)))
 
+        async def generate_preview_handler(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("generate_preview", (payload, deps)))
+
         async def schedule_handler(payload: dict[str, object], **deps: object) -> None:
             calls.append(("schedule", (payload, deps)))
 
@@ -172,6 +177,7 @@ def test_production_pipeline_handlers_inject_worker_dependencies() -> None:
             ingest_worker=ingest_handler,
             enrich_worker=enrich_handler,
             qualify_worker=qualify_handler,
+            generate_preview_worker=generate_preview_handler,
             schedule_worker=schedule_handler,
             rate_limits={},
         )
@@ -197,10 +203,16 @@ def test_production_pipeline_handlers_inject_worker_dependencies() -> None:
             "tenant_id": str(TENANT_ID),
             "lead_id": str(LEAD_ID),
         }
+        generate_preview_payload = {
+            "job_type": JobType.GENERATE_PREVIEW.value,
+            "tenant_id": str(TENANT_ID),
+            "lead_id": str(LEAD_ID),
+        }
 
         await handlers[JobType.INGEST_CSV](ingest_payload)
         await handlers[JobType.ENRICH_LEAD](enrich_payload)
         await handlers[JobType.QUALIFY_LEAD](qualify_payload)
+        await handlers[JobType.GENERATE_PREVIEW](generate_preview_payload)
         await handlers[JobType.SCHEDULE_OUTREACH](
             schedule_payload
         )
@@ -239,6 +251,18 @@ def test_production_pipeline_handlers_inject_worker_dependencies() -> None:
             ),
         )
         assert calls[3] == (
+            "generate_preview",
+            (
+                generate_preview_payload,
+                {
+                    "lead_fetcher": pipeline_store,
+                    "preview_repo": pipeline_store,
+                    "schedule_queue": queue,
+                    "claude_client": claude_client,
+                },
+            ),
+        )
+        assert calls[4] == (
             "schedule",
             (
                 schedule_payload,
@@ -786,7 +810,15 @@ def test_orchestrator_config_matches_pipeline_limits() -> None:
 def test_pipeline_rate_limiters_builds_production_limiters() -> None:
     rate_limiters = pipeline_rate_limiters()
 
-    assert set(rate_limiters) == {JobType.QUALIFY_LEAD, JobType.SCHEDULE_OUTREACH}
+    assert set(rate_limiters) == {
+        JobType.QUALIFY_LEAD,
+        JobType.GENERATE_PREVIEW,
+        JobType.SCHEDULE_OUTREACH,
+    }
+
+
+def test_generate_preview_uses_five_attempts() -> None:
+    assert max_attempts_by_job_type()[JobType.GENERATE_PREVIEW] == 5
 
 
 def test_minute_rate_limiter_waits_between_calls() -> None:

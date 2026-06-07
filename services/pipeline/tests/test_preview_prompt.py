@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import clients.claude_client as claude_client
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROMPT_PATH = REPO_ROOT / "prompts" / "preview-personalise-v1.txt"
@@ -33,3 +34,10 @@ def test_preview_personalise_prompt_matches_current_template_contract() -> None:
     assert "top_weakness" not in prompt
     assert "em-dash" in prompt
     assert "\u2014" not in prompt
+
+
+def test_preview_personalise_prompt_uses_haiku_model() -> None:
+    assert (
+        claude_client._MODEL_MAP["preview-personalise-v1"]
+        == "claude-haiku-4-5-20251001"
+    )

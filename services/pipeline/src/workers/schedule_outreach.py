@@ -141,6 +141,7 @@ async def schedule_outreach(
             qualification=qualification,
             opener=opener,
             lead_id=lead_id,
+            preview_url=_preview_url(payload),
         )
         try:
             result = await instantly_client.add_lead_to_campaign(instantly_payload)
@@ -214,6 +215,16 @@ def _required_text(row: dict[str, object], field_name: str) -> str:
     return value
 
 
+def _preview_url(payload: dict[str, object]) -> str | None:
+    raw_preview_url = payload.get("preview_url")
+    if raw_preview_url is None:
+        return None
+    preview_url = str(raw_preview_url).strip()
+    if not preview_url:
+        raise ValueError("preview_url cannot be blank")
+    return preview_url
+
+
 def _instantly_payload(
     *,
     campaign_id: str,
@@ -221,7 +232,19 @@ def _instantly_payload(
     qualification: dict[str, object],
     opener: str,
     lead_id: UUID,
+    preview_url: str | None,
 ) -> dict[str, object]:
+    custom_variables = {
+        "opener": opener,
+        "weakness": str(qualification.get("top_weakness", "")),
+        "followup_1": str(qualification.get("followup_1", "")),
+        "followup_2": str(qualification.get("followup_2", "")),
+        "lead_id": str(lead_id),
+    }
+    if preview_url is not None:
+        custom_variables["website_preview_url"] = preview_url
+        custom_variables["preview_url"] = preview_url
+
     return {
         "campaign": campaign_id,
         "email": str(lead["email"]),
@@ -231,13 +254,7 @@ def _instantly_payload(
         "last_name": str(lead.get("last_name", "")),
         "company_name": str(lead.get("business_name", "")),
         "phone": str(lead.get("phone", "")),
-        "custom_variables": {
-            "opener": opener,
-            "weakness": str(qualification.get("top_weakness", "")),
-            "followup_1": str(qualification.get("followup_1", "")),
-            "followup_2": str(qualification.get("followup_2", "")),
-            "lead_id": str(lead_id),
-        },
+        "custom_variables": custom_variables,
     }
 
 

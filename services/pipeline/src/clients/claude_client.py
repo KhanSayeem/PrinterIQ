@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 _MODEL_MAP: dict[str, str] = {
     "qualify-v1": "claude-haiku-4-5-20251001",
+    "preview-personalise-v1": "claude-haiku-4-5-20251001",
     "opener-v1": "claude-sonnet-4-6",
 }
 

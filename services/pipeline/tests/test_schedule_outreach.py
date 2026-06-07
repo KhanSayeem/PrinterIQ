@@ -166,7 +166,11 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
         instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
 
         await schedule_outreach(
-            _payload(channel="email", send_after="2026-05-20T09:00:00+10:00"),
+            _payload(
+                channel="email",
+                send_after="2026-05-20T09:00:00+10:00",
+                preview_url=f"https://preview.presciaiq.com/{LEAD_ID}",
+            ),
             lead_fetcher=FakeLeadFetcher(_lead()),
             qualification_fetcher=FakeQualificationFetcher(_qualification()),
             outreach_repo=repo,
@@ -189,6 +193,8 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
                     "followup_1": "Worth fixing before the next batch of quote requests.",
                     "followup_2": "Happy to show what a fast tradie site can look like.",
                     "lead_id": str(LEAD_ID),
+                    "website_preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
+                    "preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
                 },
             }
         ]
