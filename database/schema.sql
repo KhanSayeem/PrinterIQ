@@ -97,6 +97,24 @@ CREATE TABLE qualifications (
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE website_previews (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id            UUID NOT NULL REFERENCES tenants(tenant_id),
+  -- Phase 1: one preview per lead.
+  -- If regeneration is added in a future phase, replace with
+  -- soft-delete versioning before removing this constraint.
+  lead_id              UUID NOT NULL UNIQUE REFERENCES leads(id),
+  template_used        TEXT NOT NULL,
+  preview_url          TEXT NOT NULL,
+  personalisation_data JSONB NOT NULL,
+  prompt_version       TEXT NOT NULL,
+  cost_usd             NUMERIC(10,6) NOT NULL,
+  generated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_website_previews_tenant_lead
+ON website_previews (tenant_id, lead_id);
+
 CREATE TABLE outreach_sends (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id               UUID NOT NULL REFERENCES leads(id),
