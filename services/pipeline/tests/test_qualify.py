@@ -253,7 +253,7 @@ def test_above_threshold_qualifies_lead_calls_sonnet_enqueues_outreach(
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
         assert len(queue.jobs) == 1
         outreach_payload = queue.jobs[0]
-        assert outreach_payload["job_type"] == JobType.SCHEDULE_OUTREACH.value
+        assert outreach_payload["job_type"] == JobType.GENERATE_PREVIEW.value
         assert outreach_payload["tenant_id"] == str(TENANT_ID)
         assert outreach_payload["lead_id"] == str(LEAD_ID)
         assert outreach_payload["campaign_id"] == "campaign-from-env"
@@ -302,6 +302,7 @@ def test_outreach_send_after_preserves_qualify_payload_value() -> None:
             ),
         )
 
+        assert queue.jobs[0]["job_type"] == JobType.GENERATE_PREVIEW.value
         assert queue.jobs[0]["send_after"] == send_after
 
     asyncio.run(scenario())

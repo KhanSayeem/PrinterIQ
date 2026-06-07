@@ -195,7 +195,7 @@ async def qualify_lead(
     )
     await outreach_queue.enqueue(
         {
-            "job_type": JobType.SCHEDULE_OUTREACH.value,
+            "job_type": JobType.GENERATE_PREVIEW.value,
             "tenant_id": str(tenant_id),
             "lead_id": str(lead_id),
             "campaign_id": _campaign_id(payload),
