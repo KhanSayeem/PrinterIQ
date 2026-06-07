@@ -121,6 +121,10 @@ def _preview_url() -> str:
     return f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
 
 
+def _legacy_preview_url() -> str:
+    return f"https://preview.presciaiq.com/{LEAD_ID}"
+
+
 def _personalisation(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
         "about_blurb": (
@@ -344,6 +348,9 @@ def test_generate_preview_existing_preview_reenqueues_without_regeneration(
                 "preview_url": _preview_url(),
             }
         )
+        output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
+        output_file.parent.mkdir(parents=True)
+        output_file.write_text("existing preview")
         queue = FakeScheduleQueue()
         claude = FakeClaudeClient(responses=[])
 
@@ -361,7 +368,7 @@ def test_generate_preview_existing_preview_reenqueues_without_regeneration(
         assert lead_fetcher.calls == []
         assert claude.calls == []
         assert preview_repo.inserted == []
-        assert not output_dir.exists()
+        assert output_file.read_text() == "existing preview"
         assert queue.jobs == [
             {
                 "job_type": JobType.SCHEDULE_OUTREACH.value,
@@ -393,6 +400,9 @@ def test_generate_preview_existing_preview_retry_after_enqueue_failure_skips_gen
                 "preview_url": _preview_url(),
             }
         )
+        output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
+        output_file.parent.mkdir(parents=True)
+        output_file.write_text("existing preview")
         failing_queue = FakeScheduleQueue(fail_enqueue=True)
         claude = FakeClaudeClient(responses=[])
 
@@ -424,7 +434,46 @@ def test_generate_preview_existing_preview_retry_after_enqueue_failure_skips_gen
         assert preview_repo.inserted == []
         assert failing_queue.jobs == []
         assert retry_queue.jobs[0]["preview_url"] == _preview_url()
-        assert not output_dir.exists()
+        assert output_file.read_text() == "existing preview"
+
+    asyncio.run(scenario())
+
+
+def test_generate_preview_regenerates_existing_preview_with_legacy_url(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        module = _generate_preview_module()
+        template_dir = tmp_path / "templates"
+        output_dir = tmp_path / "previews"
+        _write_templates(template_dir)
+        lead_fetcher = FakeLeadFetcher(lead=_lead())
+        preview_repo = FakePreviewRepository(
+            existing_preview={
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+                "preview_url": _legacy_preview_url(),
+            }
+        )
+        queue = FakeScheduleQueue()
+        claude = FakeClaudeClient(responses=[_claude_response()])
+
+        await module.generate_preview(
+            _payload(),
+            lead_fetcher=lead_fetcher,
+            preview_repo=preview_repo,
+            schedule_queue=queue,
+            claude_client=claude,
+            template_dir=template_dir,
+            output_dir=output_dir,
+        )
+
+        assert preview_repo.get_calls == [(TENANT_ID, LEAD_ID)]
+        assert lead_fetcher.calls == [(TENANT_ID, LEAD_ID)]
+        assert len(claude.calls) == 1
+        assert preview_repo.inserted[0]["preview_url"] == _preview_url()
+        assert queue.jobs[0]["preview_url"] == _preview_url()
+        assert (output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html").exists()
 
     asyncio.run(scenario())
 
@@ -518,6 +567,8 @@ def test_generate_preview_db_insert_failure_does_not_enqueue(tmp_path: Path) -> 
         _write_templates(template_dir)
         queue = FakeScheduleQueue()
 
+        final_output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
+
         with pytest.raises(RuntimeError, match="database unavailable"):
             await module.generate_preview(
                 _payload(),
@@ -529,7 +580,7 @@ def test_generate_preview_db_insert_failure_does_not_enqueue(tmp_path: Path) -> 
                 output_dir=output_dir,
             )
 
-        assert (output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html").exists()
+        assert not final_output_file.exists()
         assert queue.jobs == []
 
     asyncio.run(scenario())

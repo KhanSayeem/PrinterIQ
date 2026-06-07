@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from dataclasses import dataclass
 from decimal import Decimal
 from html import escape
@@ -100,17 +101,23 @@ async def generate_preview(
 ) -> None:
     tenant_id = UUID(str(payload["tenant_id"]))
     lead_id = UUID(str(payload["lead_id"]))
+    preview_url = _preview_url(preview_base_url, tenant_id=tenant_id, lead_id=lead_id)
+    output_path = _output_path(output_dir, tenant_id=tenant_id, lead_id=lead_id)
 
     existing_preview = await preview_repo.get_website_preview(
         tenant_id=tenant_id, lead_id=lead_id
     )
-    if existing_preview is not None:
+    if (
+        existing_preview is not None
+        and str(existing_preview["preview_url"]) == preview_url
+        and output_path.exists()
+    ):
         await _enqueue_schedule(
             schedule_queue,
             payload=payload,
             tenant_id=tenant_id,
             lead_id=lead_id,
-            preview_url=str(existing_preview["preview_url"]),
+            preview_url=preview_url,
         )
         return
 
@@ -125,22 +132,28 @@ async def generate_preview(
 
     template_source = (template_dir / f"{template_key}.html").read_text(encoding="utf-8")
     rendered_html = render_preview_html(template_source, lead=lead, personalisation=personalisation)
-    output_path = output_dir / str(tenant_id) / str(lead_id) / "index.html"
+    pending_path = _pending_output_path(output_dir, tenant_id=tenant_id, lead_id=lead_id)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(rendered_html, encoding="utf-8")
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    pending_path.write_text(rendered_html, encoding="utf-8")
 
-    preview_url = _preview_url(preview_base_url, tenant_id=tenant_id, lead_id=lead_id)
-    await preview_repo.insert_website_preview(
-        {
-            "tenant_id": tenant_id,
-            "lead_id": lead_id,
-            "template_used": template_key,
-            "preview_url": preview_url,
-            "personalisation_data": personalisation,
-            "prompt_version": _PROMPT_VERSION,
-            "cost_usd": claude_resp.cost_usd,
-        }
-    )
+    try:
+        await preview_repo.insert_website_preview(
+            {
+                "tenant_id": tenant_id,
+                "lead_id": lead_id,
+                "template_used": template_key,
+                "preview_url": preview_url,
+                "personalisation_data": personalisation,
+                "prompt_version": _PROMPT_VERSION,
+                "cost_usd": claude_resp.cost_usd,
+            }
+        )
+        pending_path.replace(output_path)
+    except Exception:
+        with suppress(FileNotFoundError):
+            pending_path.unlink()
+        raise
     await _enqueue_schedule(
         schedule_queue,
         payload=payload,
@@ -173,6 +186,20 @@ async def _enqueue_schedule(
 
 def _preview_url(preview_base_url: str, *, tenant_id: UUID, lead_id: UUID) -> str:
     return f"{preview_base_url.rstrip('/')}/{tenant_id}/{lead_id}/"
+
+
+def _output_path(output_dir: Path, *, tenant_id: UUID, lead_id: UUID) -> Path:
+    return output_dir / str(tenant_id) / str(lead_id) / "index.html"
+
+
+def _pending_output_path(output_dir: Path, *, tenant_id: UUID, lead_id: UUID) -> Path:
+    return (
+        output_dir.parent
+        / f".{output_dir.name}-pending"
+        / str(tenant_id)
+        / str(lead_id)
+        / "index.html"
+    )
 
 
 def select_template_key(lead: dict[str, object]) -> str:

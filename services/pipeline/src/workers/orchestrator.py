@@ -453,15 +453,6 @@ class PipelineQueueManager:
         payload = message.payload
 
         try:
-            delay_until = _future_send_after(payload)
-        except ValueError:
-            delay_until = None
-        if delay_until is not None:
-            await self._queue.enqueue(payload, delay_until=delay_until)
-            await self._queue.ack(message)
-            return False
-
-        try:
             job_type = JobType(str(payload["job_type"]))
         except (KeyError, ValueError):
             await self._queue.ack(message)
@@ -469,6 +460,15 @@ class PipelineQueueManager:
         if job_type not in self._handlers or job_type not in self._max_attempts:
             await self._queue.ack(message)
             return True
+        if job_type == JobType.SCHEDULE_OUTREACH:
+            try:
+                delay_until = _future_send_after(payload)
+            except ValueError:
+                delay_until = None
+            if delay_until is not None:
+                await self._queue.enqueue(payload, delay_until=delay_until)
+                await self._queue.ack(message)
+                return False
         max_attempts = self._max_attempts[job_type]
         handler = self._handlers[job_type]
         try:

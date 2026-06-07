@@ -474,6 +474,38 @@ def test_pipeline_queue_manager_requeues_future_send_after_without_handling() ->
     asyncio.run(scenario())
 
 
+def test_pipeline_queue_manager_handles_generate_preview_despite_future_send_after() -> None:
+    async def scenario() -> None:
+        future = datetime.now(UTC) + timedelta(hours=1)
+        payload = {
+            "job_type": JobType.GENERATE_PREVIEW.value,
+            "tenant_id": str(TENANT_ID),
+            "lead_id": str(LEAD_ID),
+            "send_after": future.isoformat(),
+        }
+        transport = FakeQueueTransport(payloads=[payload])
+        store = FakeQueueStore()
+        handled: list[dict[str, object]] = []
+
+        async def handler(payload: dict[str, object]) -> None:
+            handled.append(payload)
+
+        manager = PipelineQueueManager(
+            queue=transport,
+            store=store,
+            handlers={JobType.GENERATE_PREVIEW: handler},
+        )
+
+        processed = await manager.run_once()
+
+        assert processed is True
+        assert handled == [payload]
+        assert transport.enqueued == []
+        assert store.updates[0].status == "completed"
+
+    asyncio.run(scenario())
+
+
 def test_pipeline_queue_manager_retries_locked_outreach_with_incremented_attempt() -> None:
     async def scenario() -> None:
         payload = {
