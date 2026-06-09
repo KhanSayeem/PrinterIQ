@@ -16,8 +16,8 @@ from pipeline_queue.definitions import JobType
 logger = logging.getLogger(__name__)
 
 _HAIKU_PROMPT = "qualify-v1"
-_SONNET_PROMPT = "opener-v1"
-_PROMPT_VERSION = "qualify-v1"
+_SONNET_PROMPT = "opener-v2"
+_PROMPT_VERSION = "opener-v2"
 _DEFAULT_CHANNEL = "email"
 _SEND_WINDOW_TZ = ZoneInfo("Australia/Sydney")
 _SEND_WINDOW_START = time(hour=9)
