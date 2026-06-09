@@ -39,6 +39,11 @@ class OutreachRepository(Protocol):
     ) -> dict[str, object] | None:
         """Return an existing outreach_sends row for this campaign send, if any."""
 
+    async def get_website_preview(
+        self, *, tenant_id: UUID, lead_id: UUID
+    ) -> dict[str, object] | None:
+        """Return existing preview metadata for this tenant lead when present."""
+
     async def insert_outreach_send(self, send: dict[str, object]) -> UUID:
         """Insert one outreach_sends row."""
 
@@ -93,7 +98,12 @@ async def schedule_outreach(
     campaign_id = _campaign_id(payload)
     channel = str(payload.get("channel", "email"))
     _ensure_send_after_due(payload)
-    preview_url = _preview_url(payload, tenant_id=tenant_id, lead_id=lead_id)
+    preview_url = await _preview_url(
+        payload,
+        tenant_id=tenant_id,
+        lead_id=lead_id,
+        preview_fetcher=outreach_repo,
+    )
 
     lead = await lead_fetcher.get_lead(tenant_id=tenant_id, lead_id=lead_id)
     existing_send = await outreach_repo.get_outreach_send(
@@ -218,11 +228,12 @@ def _required_text(row: dict[str, object], field_name: str) -> str:
     return value
 
 
-def _preview_url(
+async def _preview_url(
     payload: dict[str, object],
     *,
     tenant_id: UUID,
     lead_id: UUID,
+    preview_fetcher: OutreachRepository,
 ) -> str | None:
     raw_preview_url = payload.get("preview_url")
     if raw_preview_url is None:
@@ -230,9 +241,13 @@ def _preview_url(
     preview_url = str(raw_preview_url).strip()
     if not preview_url:
         raise ValueError("preview_url cannot be blank")
-    expected_preview_url = f"{_PREVIEW_BASE_URL}/{tenant_id}/{lead_id}/"
-    if preview_url != expected_preview_url:
-        raise ValueError("preview_url does not match tenant lead")
+    preview = await preview_fetcher.get_website_preview(
+        tenant_id=tenant_id,
+        lead_id=lead_id,
+    )
+    expected_preview_url = None if preview is None else preview.get("preview_url")
+    if preview_url != str(expected_preview_url or "").strip():
+        raise ValueError("preview_url does not match tenant preview")
     return preview_url
 
 

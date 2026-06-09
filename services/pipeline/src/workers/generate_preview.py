@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from contextlib import suppress
 from dataclasses import dataclass
 from decimal import Decimal
@@ -101,12 +102,13 @@ async def generate_preview(
 ) -> None:
     tenant_id = UUID(str(payload["tenant_id"]))
     lead_id = UUID(str(payload["lead_id"]))
-    preview_url = _preview_url(preview_base_url, tenant_id=tenant_id, lead_id=lead_id)
-    output_path = _output_path(output_dir, tenant_id=tenant_id, lead_id=lead_id)
 
     existing_preview = await preview_repo.get_website_preview(
         tenant_id=tenant_id, lead_id=lead_id
     )
+    preview_slug = _preview_slug(existing_preview) or _new_preview_slug()
+    preview_url = _preview_url(preview_base_url, preview_slug=preview_slug)
+    output_path = _output_path(output_dir, preview_slug=preview_slug)
     if (
         existing_preview is not None
         and str(existing_preview["preview_url"]) == preview_url
@@ -132,7 +134,7 @@ async def generate_preview(
 
     template_source = (template_dir / f"{template_key}.html").read_text(encoding="utf-8")
     rendered_html = render_preview_html(template_source, lead=lead, personalisation=personalisation)
-    pending_path = _pending_output_path(output_dir, tenant_id=tenant_id, lead_id=lead_id)
+    pending_path = _pending_output_path(output_dir, preview_slug=preview_slug)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     pending_path.parent.mkdir(parents=True, exist_ok=True)
     pending_path.write_text(rendered_html, encoding="utf-8")
@@ -143,6 +145,7 @@ async def generate_preview(
                 "tenant_id": tenant_id,
                 "lead_id": lead_id,
                 "template_used": template_key,
+                "preview_slug": preview_slug,
                 "preview_url": preview_url,
                 "personalisation_data": personalisation,
                 "prompt_version": _PROMPT_VERSION,
@@ -184,20 +187,33 @@ async def _enqueue_schedule(
     )
 
 
-def _preview_url(preview_base_url: str, *, tenant_id: UUID, lead_id: UUID) -> str:
-    return f"{preview_base_url.rstrip('/')}/{tenant_id}/{lead_id}/"
+def _preview_slug(existing_preview: dict[str, object] | None) -> str | None:
+    if existing_preview is None:
+        return None
+    raw_slug = existing_preview.get("preview_slug")
+    if not isinstance(raw_slug, str) or not raw_slug.strip():
+        return None
+    return raw_slug.strip()
 
 
-def _output_path(output_dir: Path, *, tenant_id: UUID, lead_id: UUID) -> Path:
-    return output_dir / str(tenant_id) / str(lead_id) / "index.html"
+def _new_preview_slug() -> str:
+    return secrets.token_urlsafe(24)
 
 
-def _pending_output_path(output_dir: Path, *, tenant_id: UUID, lead_id: UUID) -> Path:
+def _preview_url(preview_base_url: str, *, preview_slug: str) -> str:
+    return f"{preview_base_url.rstrip('/')}/p/{preview_slug}/"
+
+
+def _output_path(output_dir: Path, *, preview_slug: str) -> Path:
+    return output_dir / "p" / preview_slug / "index.html"
+
+
+def _pending_output_path(output_dir: Path, *, preview_slug: str) -> Path:
     return (
         output_dir.parent
         / f".{output_dir.name}-pending"
-        / str(tenant_id)
-        / str(lead_id)
+        / "p"
+        / preview_slug
         / "index.html"
     )
 
@@ -213,7 +229,7 @@ def select_template_key(lead: dict[str, object]) -> str:
 
 def parse_personalisation_json(text: str) -> dict[str, object]:
     try:
-        raw = json.loads(text)
+        raw = json.loads(_strip_json_code_fence(text))
     except (json.JSONDecodeError, ValueError) as exc:
         raise DeadLetterError("invalid preview personalisation JSON") from exc
     if not isinstance(raw, dict):
@@ -227,6 +243,17 @@ def parse_personalisation_json(text: str) -> dict[str, object]:
         raise DeadLetterError("invalid preview personalisation schema") from exc
     _reject_dash_substitutes(raw)
     return raw
+
+
+def _strip_json_code_fence(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+
+    lines = stripped.splitlines()
+    if len(lines) >= 3 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
 
 
 def render_preview_html(

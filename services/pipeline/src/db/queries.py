@@ -197,6 +197,7 @@ class PipelineStore:
                 tenant_id=cast(UUID, preview["tenant_id"]),
                 lead_id=cast(UUID, preview["lead_id"]),
                 template_used=str(preview["template_used"]),
+                preview_slug=str(preview["preview_slug"]),
                 preview_url=str(preview["preview_url"]),
                 personalisation_data=cast(
                     dict[str, object], preview["personalisation_data"]
@@ -648,6 +649,7 @@ class WebsitePreviewInsert:
     tenant_id: UUID
     lead_id: UUID
     template_used: str
+    preview_slug: str
     preview_url: str
     personalisation_data: dict[str, object]
     prompt_version: str
@@ -661,10 +663,10 @@ async def insert_website_preview(
     raw_id = await connection.fetchval(
         """
         INSERT INTO website_previews (
-          tenant_id, lead_id, template_used, preview_url,
+          tenant_id, lead_id, template_used, preview_slug, preview_url,
           personalisation_data, prompt_version, cost_usd
         )
-        SELECT $1, $2, $3, $4, $5::jsonb, $6, $7
+        SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8
         FROM leads
         WHERE tenant_id = $1
           AND id = $2
@@ -672,6 +674,7 @@ async def insert_website_preview(
         ON CONFLICT (lead_id) DO UPDATE
         SET tenant_id = EXCLUDED.tenant_id,
             template_used = EXCLUDED.template_used,
+            preview_slug = EXCLUDED.preview_slug,
             preview_url = EXCLUDED.preview_url,
             personalisation_data = EXCLUDED.personalisation_data,
             prompt_version = EXCLUDED.prompt_version,
@@ -683,6 +686,7 @@ async def insert_website_preview(
         preview.tenant_id,
         preview.lead_id,
         preview.template_used,
+        preview.preview_slug,
         preview.preview_url,
         json.dumps(preview.personalisation_data),
         preview.prompt_version,
@@ -705,7 +709,7 @@ async def get_website_preview_by_lead_id(
 ) -> dict[str, object] | None:
     result = await connection.fetchrow(
         """
-        SELECT id, tenant_id, lead_id, template_used, preview_url,
+        SELECT id, tenant_id, lead_id, template_used, preview_slug, preview_url,
                personalisation_data, prompt_version, cost_usd, generated_at
         FROM website_previews
         WHERE tenant_id = $1

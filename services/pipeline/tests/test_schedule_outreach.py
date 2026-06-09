@@ -16,7 +16,7 @@ from workers.schedule_outreach import (
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
-PREVIEW_URL = f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
+PREVIEW_URL = "https://preview.presciaiq.com/p/preview-token-1234567890abcdef/"
 
 
 @dataclass
@@ -48,6 +48,10 @@ class FakeOutreachRepository:
     abandoned: list[dict[str, object]] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
     existing: dict[str, object] | None = None
+    website_preview: dict[str, object] | None = field(
+        default_factory=lambda: {"preview_url": PREVIEW_URL}
+    )
+    preview_gets: list[tuple[UUID, UUID]] = field(default_factory=list)
     lock_acquired: bool = False
     lock_released: bool = False
 
@@ -60,6 +64,12 @@ class FakeOutreachRepository:
         channel: str,
     ) -> dict[str, object] | None:
         return self.existing
+
+    async def get_website_preview(
+        self, *, tenant_id: UUID, lead_id: UUID
+    ) -> dict[str, object] | None:
+        self.preview_gets.append((tenant_id, lead_id))
+        return self.website_preview
 
     async def insert_outreach_send(self, send: dict[str, object]) -> UUID:
         assert self.lock_acquired is True
@@ -217,17 +227,18 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
             }
         ]
         assert repo.updates == [(TENANT_ID, LEAD_ID)]
+        assert repo.preview_gets == [(TENANT_ID, LEAD_ID)]
         assert repo.lock_released is True
 
     asyncio.run(scenario())
 
 
-def test_preview_url_must_match_tenant_lead_canonical_url() -> None:
+def test_preview_url_must_match_tenant_scoped_preview_row() -> None:
     async def scenario() -> None:
         repo = FakeOutreachRepository()
         instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
 
-        with pytest.raises(ValueError, match="preview_url does not match tenant lead"):
+        with pytest.raises(ValueError, match="preview_url does not match tenant preview"):
             await schedule_outreach(
                 _payload(preview_url="https://attacker.example/preview"),
                 lead_fetcher=FakeLeadFetcher(_lead()),
@@ -238,6 +249,29 @@ def test_preview_url_must_match_tenant_lead_canonical_url() -> None:
 
         assert repo.reserved == []
         assert repo.completed == []
+        assert repo.preview_gets == [(TENANT_ID, LEAD_ID)]
+        assert instantly.calls == []
+
+    asyncio.run(scenario())
+
+
+def test_preview_url_requires_existing_tenant_scoped_preview_row() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository(website_preview=None)
+        instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
+
+        with pytest.raises(ValueError, match="preview_url does not match tenant preview"):
+            await schedule_outreach(
+                _payload(preview_url=PREVIEW_URL),
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=repo,
+                instantly_client=instantly,
+            )
+
+        assert repo.reserved == []
+        assert repo.completed == []
+        assert repo.preview_gets == [(TENANT_ID, LEAD_ID)]
         assert instantly.calls == []
 
     asyncio.run(scenario())
