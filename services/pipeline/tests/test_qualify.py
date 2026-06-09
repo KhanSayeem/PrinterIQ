@@ -261,7 +261,7 @@ def test_above_threshold_qualifies_lead_calls_sonnet_enqueues_outreach(
         assert isinstance(outreach_payload["send_after"], str)
         datetime.fromisoformat(outreach_payload["send_after"])
         assert len(client.calls) == 2
-        assert client.calls[1][0] == "opener-v1"
+        assert client.calls[1][0] == "opener-v2"
 
     asyncio.run(scenario())
 
@@ -360,7 +360,7 @@ def test_cost_usd_sums_haiku_and_sonnet() -> None:
     asyncio.run(scenario())
 
 
-def test_prompt_version_is_qualify_v1_on_every_haiku_call() -> None:
+def test_prompt_version_is_opener_v2_on_every_qualification_row() -> None:
     async def scenario() -> None:
         fetcher = FakeLeadFetcher(lead=_make_lead())
         enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
@@ -377,7 +377,7 @@ def test_prompt_version_is_qualify_v1_on_every_haiku_call() -> None:
             claude_client=client,
         )
 
-        assert repo.inserted[0]["prompt_version"] == "qualify-v1"
+        assert repo.inserted[0]["prompt_version"] == "opener-v2"
 
     asyncio.run(scenario())
 
