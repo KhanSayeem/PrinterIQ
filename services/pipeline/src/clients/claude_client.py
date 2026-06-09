@@ -62,7 +62,7 @@ class RealClaudeClient:
                     Decimal(message.usage.input_tokens) * input_rate
                     + Decimal(message.usage.output_tokens) * output_rate
                 )
-                text = message.content[0].text if message.content else ""
+                text = _extract_text_content(message.content)
                 return ClaudeResponse(text=text, cost_usd=cost, model=model)
             except (RateLimitError, APIStatusError) as exc:
                 if attempt == _MAX_RETRIES:
@@ -72,6 +72,16 @@ class RealClaudeClient:
                 delay *= 2
 
         raise RuntimeError("Unreachable")
+
+
+def _extract_text_content(content: object) -> str:
+    if not isinstance(content, list):
+        return ""
+    for block in content:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            return text
+    return ""
 
 
 def _render_prompt(raw_prompt: str, variables: dict[str, str]) -> str:

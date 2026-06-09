@@ -15,6 +15,7 @@ from pipeline_queue.definitions import JobType
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
+PREVIEW_SLUG = "preview-token-1234567890abcdef"
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 HAIKU_COST = Decimal("0.000100")
 TEMPLATE_KEYS = ["plumbing", "electrical", "hvac", "concreting", "landscaping", "general"]
@@ -118,11 +119,15 @@ def _payload(**overrides: object) -> dict[str, object]:
 
 
 def _preview_url() -> str:
-    return f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
+    return f"https://preview.presciaiq.com/p/{PREVIEW_SLUG}/"
 
 
 def _legacy_preview_url() -> str:
-    return f"https://preview.presciaiq.com/{LEAD_ID}"
+    return f"https://preview.presciaiq.com/{TENANT_ID}/{LEAD_ID}/"
+
+
+def _preview_output_file(output_dir: Path) -> Path:
+    return output_dir / "p" / PREVIEW_SLUG / "index.html"
 
 
 def _personalisation(**overrides: object) -> dict[str, object]:
@@ -208,6 +213,15 @@ def test_parse_personalisation_json_rejects_invalid_json() -> None:
         module.parse_personalisation_json("not json")
 
 
+def test_parse_personalisation_json_accepts_fenced_json() -> None:
+    module = _generate_preview_module()
+    data = _personalisation()
+
+    parsed = module.parse_personalisation_json(f"```json\n{json.dumps(data)}\n```")
+
+    assert parsed == data
+
+
 def test_parse_personalisation_json_requires_exactly_six_services() -> None:
     module = _generate_preview_module()
     invalid = _personalisation(services=[{"title": "Blocked Drains", "description": "Fast help."}])
@@ -272,9 +286,11 @@ def test_generate_preview_writes_html_inserts_row_and_enqueues_schedule(
     tmp_path: Path,
     industry: str,
     expected_template: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
         module = _generate_preview_module()
+        monkeypatch.setattr(module, "_new_preview_slug", lambda: PREVIEW_SLUG)
         template_dir = tmp_path / "templates"
         output_dir = tmp_path / "previews"
         _write_templates(template_dir)
@@ -293,8 +309,9 @@ def test_generate_preview_writes_html_inserts_row_and_enqueues_schedule(
             output_dir=output_dir,
         )
 
-        output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
+        output_file = _preview_output_file(output_dir)
         assert output_file.exists()
+        assert not (output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html").exists()
         html = output_file.read_text()
         assert "Aqua Flow Plumbing" in html
         assert "Brisbane" in html
@@ -314,6 +331,7 @@ def test_generate_preview_writes_html_inserts_row_and_enqueues_schedule(
         assert preview_repo.inserted[0]["tenant_id"] == TENANT_ID
         assert preview_repo.inserted[0]["lead_id"] == LEAD_ID
         assert preview_repo.inserted[0]["template_used"] == expected_template
+        assert preview_repo.inserted[0]["preview_slug"] == PREVIEW_SLUG
         assert preview_repo.inserted[0]["preview_url"] == _preview_url()
         assert preview_repo.inserted[0]["prompt_version"] == "preview-personalise-v1"
         assert preview_repo.inserted[0]["cost_usd"] == HAIKU_COST
@@ -345,10 +363,11 @@ def test_generate_preview_existing_preview_reenqueues_without_regeneration(
             existing_preview={
                 "tenant_id": TENANT_ID,
                 "lead_id": LEAD_ID,
+                "preview_slug": PREVIEW_SLUG,
                 "preview_url": _preview_url(),
             }
         )
-        output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
+        output_file = _preview_output_file(output_dir)
         output_file.parent.mkdir(parents=True)
         output_file.write_text("existing preview")
         queue = FakeScheduleQueue()
@@ -397,10 +416,11 @@ def test_generate_preview_existing_preview_retry_after_enqueue_failure_skips_gen
             existing_preview={
                 "tenant_id": TENANT_ID,
                 "lead_id": LEAD_ID,
+                "preview_slug": PREVIEW_SLUG,
                 "preview_url": _preview_url(),
             }
         )
-        output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
+        output_file = _preview_output_file(output_dir)
         output_file.parent.mkdir(parents=True)
         output_file.write_text("existing preview")
         failing_queue = FakeScheduleQueue(fail_enqueue=True)
@@ -440,10 +460,11 @@ def test_generate_preview_existing_preview_retry_after_enqueue_failure_skips_gen
 
 
 def test_generate_preview_regenerates_existing_preview_with_legacy_url(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
         module = _generate_preview_module()
+        monkeypatch.setattr(module, "_new_preview_slug", lambda: PREVIEW_SLUG)
         template_dir = tmp_path / "templates"
         output_dir = tmp_path / "previews"
         _write_templates(template_dir)
@@ -472,15 +493,20 @@ def test_generate_preview_regenerates_existing_preview_with_legacy_url(
         assert lead_fetcher.calls == [(TENANT_ID, LEAD_ID)]
         assert len(claude.calls) == 1
         assert preview_repo.inserted[0]["preview_url"] == _preview_url()
+        assert preview_repo.inserted[0]["preview_slug"] == PREVIEW_SLUG
         assert queue.jobs[0]["preview_url"] == _preview_url()
-        assert (output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html").exists()
+        assert _preview_output_file(output_dir).exists()
+        assert not (output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html").exists()
 
     asyncio.run(scenario())
 
 
-def test_generate_preview_retries_bad_personalisation_once(tmp_path: Path) -> None:
+def test_generate_preview_retries_bad_personalisation_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     async def scenario() -> None:
         module = _generate_preview_module()
+        monkeypatch.setattr(module, "_new_preview_slug", lambda: PREVIEW_SLUG)
         template_dir = tmp_path / "templates"
         output_dir = tmp_path / "previews"
         _write_templates(template_dir)
@@ -504,10 +530,11 @@ def test_generate_preview_retries_bad_personalisation_once(tmp_path: Path) -> No
 
 
 def test_generate_preview_dead_letters_after_two_bad_personalisation_responses(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
         module = _generate_preview_module()
+        monkeypatch.setattr(module, "_new_preview_slug", lambda: PREVIEW_SLUG)
         template_dir = tmp_path / "templates"
         output_dir = tmp_path / "previews"
         _write_templates(template_dir)
@@ -532,9 +559,12 @@ def test_generate_preview_dead_letters_after_two_bad_personalisation_responses(
     asyncio.run(scenario())
 
 
-def test_generate_preview_disk_write_failure_does_not_insert_or_enqueue(tmp_path: Path) -> None:
+def test_generate_preview_disk_write_failure_does_not_insert_or_enqueue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     async def scenario() -> None:
         module = _generate_preview_module()
+        monkeypatch.setattr(module, "_new_preview_slug", lambda: PREVIEW_SLUG)
         template_dir = tmp_path / "templates"
         output_dir = tmp_path / "not-a-directory"
         output_dir.write_text("blocking file")
@@ -559,15 +589,18 @@ def test_generate_preview_disk_write_failure_does_not_insert_or_enqueue(tmp_path
     asyncio.run(scenario())
 
 
-def test_generate_preview_db_insert_failure_does_not_enqueue(tmp_path: Path) -> None:
+def test_generate_preview_db_insert_failure_does_not_enqueue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     async def scenario() -> None:
         module = _generate_preview_module()
+        monkeypatch.setattr(module, "_new_preview_slug", lambda: PREVIEW_SLUG)
         template_dir = tmp_path / "templates"
         output_dir = tmp_path / "previews"
         _write_templates(template_dir)
         queue = FakeScheduleQueue()
 
-        final_output_file = output_dir / str(TENANT_ID) / str(LEAD_ID) / "index.html"
+        final_output_file = _preview_output_file(output_dir)
 
         with pytest.raises(RuntimeError, match="database unavailable"):
             await module.generate_preview(

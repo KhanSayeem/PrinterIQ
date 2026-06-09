@@ -105,6 +105,7 @@ def test_insert_website_preview_writes_tenant_scoped_metadata() -> None:
                 tenant_id=TENANT_ID,
                 lead_id=LEAD_ID,
                 template_used="plumbing",
+                preview_slug="tokenized-preview-slug",
                 preview_url=f"https://preview.presciaiq.com/{LEAD_ID}",
                 personalisation_data={
                     "about_blurb": "Aqua Flow helps Brisbane homes. Locals call for urgent jobs.",
@@ -128,10 +129,12 @@ def test_insert_website_preview_writes_tenant_scoped_metadata() -> None:
         assert "website_previews.tenant_id = EXCLUDED.tenant_id" in query
         assert "tenant_id" in query
         assert "lead_id" in query
+        assert "preview_slug" in query
         assert "personalisation_data" in query
         assert "prompt_version" in query
         assert conn.args[0][0] == TENANT_ID
         assert conn.args[0][1] == LEAD_ID
+        assert conn.args[0][3] == "tokenized-preview-slug"
 
     asyncio.run(scenario())
 
@@ -143,6 +146,7 @@ def test_get_website_preview_by_lead_id_is_tenant_scoped() -> None:
             "tenant_id": TENANT_ID,
             "lead_id": LEAD_ID,
             "template_used": "plumbing",
+            "preview_slug": "tokenized-preview-slug",
             "preview_url": f"https://preview.presciaiq.com/{LEAD_ID}",
         }
         conn = RecordingConnection(fetchrow_result=expected)
@@ -158,6 +162,7 @@ def test_get_website_preview_by_lead_id_is_tenant_scoped() -> None:
         assert result == expected
         query = conn.queries[0]
         assert "FROM website_previews" in query
+        assert "preview_slug" in query
         assert "tenant_id = $1" in query
         assert "lead_id = $2" in query
         assert conn.args[0] == (TENANT_ID, LEAD_ID)

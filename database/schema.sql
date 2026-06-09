@@ -47,7 +47,8 @@ CREATE TABLE leads (
   is_deleted          BOOLEAN NOT NULL DEFAULT FALSE,
   imported_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT leads_tenant_id_id_key UNIQUE (tenant_id, id)
 );
 
 CREATE TABLE enrichments (
@@ -103,13 +104,16 @@ CREATE TABLE website_previews (
   -- Phase 1: one preview per lead.
   -- If regeneration is added in a future phase, replace with
   -- soft-delete versioning before removing this constraint.
-  lead_id              UUID NOT NULL UNIQUE REFERENCES leads(id),
+  lead_id              UUID NOT NULL UNIQUE,
   template_used        TEXT NOT NULL,
+  preview_slug         TEXT NOT NULL UNIQUE,
   preview_url          TEXT NOT NULL,
   personalisation_data JSONB NOT NULL,
   prompt_version       TEXT NOT NULL,
   cost_usd             NUMERIC(10,6) NOT NULL,
-  generated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  generated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_website_previews_lead_tenant
+    FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id)
 );
 
 CREATE INDEX idx_website_previews_tenant_lead

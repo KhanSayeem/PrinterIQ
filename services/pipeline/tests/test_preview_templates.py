@@ -140,4 +140,10 @@ def test_preview_templates_use_only_manifested_local_images() -> None:
 def test_preview_nginx_config_blocks_search_indexing() -> None:
     config = NGINX_PREVIEW_CONFIG_PATH.read_text(encoding="utf-8")
 
+    assert "listen 443 ssl;" in config
+    assert "return 301 https://preview.presciaiq.com$request_uri;" in config
     assert 'add_header X-Robots-Tag "noindex, nofollow, noarchive" always;' in config
+    assert "location /p/" in config
+    assert "location /assets/" in config
+    assert "location / {\n        return 404;" in config
+    assert "try_files $uri $uri/ $uri.html =404;" in config
