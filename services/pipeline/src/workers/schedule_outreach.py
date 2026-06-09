@@ -266,9 +266,9 @@ def _instantly_payload(
         "followup_1": str(qualification.get("followup_1", "")),
         "followup_2": str(qualification.get("followup_2", "")),
         "lead_id": str(lead_id),
+        "website_preview_url": preview_url or "",
     }
     if preview_url is not None:
-        custom_variables["website_preview_url"] = preview_url
         custom_variables["preview_url"] = preview_url
 
     return {
