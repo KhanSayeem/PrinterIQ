@@ -48,6 +48,8 @@ Rules:
 - Casual Aussie tone.
 - State the price upfront as $$1,500 flat in the opener.
 - The opener must include [Check it out]({preview_url}) exactly as a Markdown hyperlink.
+- The opener value must contain the literal substring [Check it out]({preview_url}).
+- Do not rewrite, remove, or replace {preview_url}; keep the braces exactly.
 - Do not output the preview URL as a raw URL.
 - Use the first name and business name from the lead profile JSON.
 - Use the website weakness identified above as the specific weakness.

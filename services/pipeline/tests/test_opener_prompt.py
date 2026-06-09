@@ -22,6 +22,8 @@ def test_opener_v2_prompt_contract_mentions_preview_hook_and_output_schema() -> 
     assert "Do not include prose before or after the JSON" in prompt
     assert "{preview_url}" in prompt
     assert "[Check it out]({preview_url})" in prompt
+    assert "literal substring [Check it out]({preview_url})" in prompt
+    assert "Do not rewrite, remove, or replace {preview_url}" in prompt
     assert "[Check it out]({preview_url})" in rendered
     assert "$$1,500 flat" in prompt
     assert "$1,500 flat" in rendered
