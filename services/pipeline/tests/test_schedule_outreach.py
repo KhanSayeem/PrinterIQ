@@ -316,6 +316,27 @@ def test_successful_job_reserves_outreach_before_calling_instantly() -> None:
     asyncio.run(scenario())
 
 
+def test_successful_job_defaults_website_preview_url_when_preview_payload_missing() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+        instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
+
+        await schedule_outreach(
+            _payload(),
+            lead_fetcher=FakeLeadFetcher(_lead()),
+            qualification_fetcher=FakeQualificationFetcher(_qualification()),
+            outreach_repo=repo,
+            instantly_client=instantly,
+        )
+
+        custom_variables = instantly.calls[0]["custom_variables"]
+        assert isinstance(custom_variables, dict)
+        assert custom_variables["website_preview_url"] == ""
+        assert repo.preview_gets == []
+
+    asyncio.run(scenario())
+
+
 def test_pending_outreach_reservation_does_not_call_instantly_again() -> None:
     async def scenario() -> None:
         repo = FakeOutreachRepository(
