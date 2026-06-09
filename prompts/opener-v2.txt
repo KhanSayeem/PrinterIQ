@@ -11,7 +11,10 @@ Website weakness identified:
 Qualification rationale:
 {rationale}
 
-Respond ONLY with valid JSON matching this schema:
+Return raw JSON only.
+Do not wrap the JSON in Markdown fences.
+Do not include prose before or after the JSON.
+Respond with valid JSON matching this schema:
 {
   "subject_line": "string",
   "opener": "string",

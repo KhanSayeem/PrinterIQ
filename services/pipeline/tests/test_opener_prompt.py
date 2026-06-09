@@ -17,6 +17,9 @@ def test_opener_v2_prompt_contract_mentions_preview_hook_and_output_schema() -> 
     assert '"opener"' in prompt
     assert '"followup_1"' in prompt
     assert '"followup_2"' in prompt
+    assert "Return raw JSON only" in prompt
+    assert "Do not wrap the JSON in Markdown fences" in prompt
+    assert "Do not include prose before or after the JSON" in prompt
     assert "{preview_url}" in prompt
     assert "[Check it out]({preview_url})" in prompt
     assert "[Check it out]({preview_url})" in rendered
