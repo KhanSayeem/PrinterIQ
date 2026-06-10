@@ -17,26 +17,31 @@ export async function GET(request: NextRequest) {
 
   const filters = parseLeadListParams(Object.fromEntries(request.nextUrl.searchParams.entries()));
 
-  const [counts, leadPage] = await Promise.all([
-    getLeadFilterCounts({ tenantId }),
-    getLeadListPage({
-      tenantId,
-      status: filters.status,
-      state: filters.state,
-      tradeType: filters.tradeType,
-      scoreMin: filters.scoreMin,
-      scoreMax: filters.scoreMax,
-      page: filters.page,
-      pageSize: 25,
-    }),
-  ]);
+  try {
+    const [counts, leadPage] = await Promise.all([
+      getLeadFilterCounts({ tenantId }),
+      getLeadListPage({
+        tenantId,
+        status: filters.status,
+        state: filters.state,
+        tradeType: filters.tradeType,
+        scoreMin: filters.scoreMin,
+        scoreMax: filters.scoreMax,
+        page: filters.page,
+        pageSize: 25,
+      }),
+    ]);
 
-  return NextResponse.json({
-    rows: leadPage.rows,
-    counts,
-    total: leadPage.total,
-    page: leadPage.page,
-    totalPages: leadPage.totalPages,
-    pageSize: leadPage.pageSize,
-  });
+    return NextResponse.json({
+      rows: leadPage.rows,
+      counts,
+      total: leadPage.total,
+      page: leadPage.page,
+      totalPages: leadPage.totalPages,
+      pageSize: leadPage.pageSize,
+    });
+  } catch (error) {
+    console.error("Failed to load leads", { message: error instanceof Error ? error.message : "Unknown error" });
+    return NextResponse.json({ error: "Failed to load leads" }, { status: 500 });
+  }
 }
