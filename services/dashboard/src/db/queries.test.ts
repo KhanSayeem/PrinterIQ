@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildAiCostByModelQuery,
   buildLatestConversationsForLeadsQuery,
+  buildLeadFilterCountsQuery,
   buildLeadDetailQuery,
+  buildLeadListCountQuery,
   buildLeadListQuery,
   buildInsertOperatorConversationQuery,
   buildLeadStatusTransitionCheckQuery,
@@ -20,6 +22,8 @@ import {
   buildUpdateLeadStatusQuery,
   buildDeleteOperatorNoteQuery,
   normalizeWebsitePreview,
+  normalizeLeadFilterCounts,
+  normalizeLeadListPageMeta,
   normalizePipelineAnalytics,
   normalizePipelineStage,
 } from "./queries";
@@ -50,6 +54,86 @@ describe("dashboard lead queries", () => {
     expect(query.sql).toContain('"leads"."state" =');
     expect(query.sql).toContain('"leads"."vertical" =');
     expect(query.params).toContain(tenantId);
+  });
+
+  it("orders lead list queries by the most recently updated lead first", () => {
+    const query = buildLeadListQuery(db, {
+      tenantId,
+      page: 2,
+      pageSize: 25,
+    }).toSQL();
+
+    expect(query.sql).toContain('order by "leads"."updated_at" desc');
+    expect(query.sql).toContain("limit");
+    expect(query.sql).toContain("offset");
+  });
+
+  it("counts lead filter pills from tenant-scoped active leads only", () => {
+    const query = buildLeadFilterCountsQuery(db, { tenantId }).toSQL();
+
+    expect(query.sql).toContain('"leads"."tenant_id" =');
+    expect(query.sql).toContain('"leads"."is_deleted" =');
+    expect(query.sql).toContain('group by "leads"."status"');
+    expect(query.sql).not.toContain('join "conversations"');
+    expect(query.sql).not.toContain("limit");
+    expect(query.params).toContain(tenantId);
+  });
+
+  it("normalizes lead filter counts with an all total and zero-filled visible statuses", () => {
+    expect(
+      normalizeLeadFilterCounts([
+        { status: "imported", count: "3" },
+        { status: "qualified", count: 2 },
+        { status: "paid", count: "1" },
+      ]),
+    ).toEqual({
+      all: 6,
+      qualified: 2,
+      replied: 0,
+      paid: 1,
+      archived: 0,
+    });
+  });
+
+  it("counts filtered lead-list totals without applying page limits", () => {
+    const query = buildLeadListCountQuery(db, {
+      tenantId,
+      status: "qualified",
+      state: "NSW",
+      tradeType: "tradies",
+      scoreMin: 50,
+      scoreMax: 90,
+      page: 3,
+      pageSize: 25,
+    }).toSQL();
+
+    expect(query.sql).toContain('count(*)');
+    expect(query.sql).toContain('"leads"."tenant_id" =');
+    expect(query.sql).toContain('"leads"."is_deleted" =');
+    expect(query.sql).toContain('"leads"."status" =');
+    expect(query.sql).toContain('"leads"."state" =');
+    expect(query.sql).toContain('"leads"."vertical" =');
+    expect(query.sql).toContain('"qualifications"."score" >=');
+    expect(query.sql).toContain('"qualifications"."score" <=');
+    expect(query.sql).not.toContain("limit");
+    expect(query.sql).not.toContain("offset");
+    expect(query.params).toContain(tenantId);
+  });
+
+  it("clamps lead-list pagination metadata to the available page range", () => {
+    expect(normalizeLeadListPageMeta({ total: 73, page: 999, pageSize: 25 })).toEqual({
+      total: 73,
+      page: 3,
+      pageSize: 25,
+      totalPages: 3,
+    });
+
+    expect(normalizeLeadListPageMeta({ total: 0, page: 4, pageSize: 25 })).toEqual({
+      total: 0,
+      page: 1,
+      pageSize: 25,
+      totalPages: 1,
+    });
   });
 
   it("scopes latest conversation lookups by tenant_id and visible lead ids", () => {
