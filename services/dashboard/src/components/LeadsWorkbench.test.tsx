@@ -131,6 +131,33 @@ describe("LeadsWorkbench", () => {
     expect(window.location.search).toBe("?status=replied");
   });
 
+  it("selects the first fetched row when filtering from an empty initial list", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[0]],
+        counts,
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        pageSize: 25,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} leads={[]} filters={{ status: "paid" }} total={0} totalPages={1} />);
+
+    fireEvent.click(screen.getByText("Qualified"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("Select a lead to preview details.")).not.toBeInTheDocument();
+    expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview Darren Smith" }).closest("tr")).toHaveClass("selected");
+  });
+
   it("requests the next page without navigation when pagination is clicked", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
