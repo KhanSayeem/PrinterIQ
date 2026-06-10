@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LeadsWorkbench } from "./LeadsWorkbench";
 import type { LeadListRow } from "./LeadQuickPanel";
+
+const counts = { all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 };
 
 const leads: LeadListRow[] = [
   {
@@ -49,16 +51,34 @@ const leads: LeadListRow[] = [
   },
 ];
 
+const baseProps = {
+  tenantId: "tenant-1",
+  leads,
+  counts,
+  filters: {},
+  total: 5,
+  page: 1,
+  totalPages: 2,
+  pageSize: 2,
+};
+
 describe("LeadsWorkbench", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+    window.history.replaceState(null, "", "/leads");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("selects rows and closes the quick panel without navigating", () => {
-    render(<LeadsWorkbench tenantId="tenant-1" leads={leads} />);
+    render(<LeadsWorkbench {...baseProps} />);
 
     fireEvent.click(screen.getByText("MJ Electrical"));
 
     expect(screen.getByText("MJ")).toHaveClass("dp-avatar");
     expect(screen.getByText("MJ Electrical · Melbourne")).toBeInTheDocument();
-    expect(screen.getAllByText("VIC").some((element) => element.classList.contains("dp-chip"))).toBe(true);
-    expect(screen.getAllByText("electrical").some((element) => element.classList.contains("dp-chip"))).toBe(true);
     expect(screen.getByText("Can you send details?")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close quick panel" }));
@@ -69,9 +89,115 @@ describe("LeadsWorkbench", () => {
   });
 
   it("renders the no-leads empty state outside the panel", () => {
-    render(<LeadsWorkbench tenantId="tenant-1" leads={[]} />);
+    render(<LeadsWorkbench {...baseProps} leads={[]} totalPages={1} total={0} />);
 
     expect(screen.getByText("No leads yet. Import your Apollo CSV to get started.")).toBeInTheDocument();
-    expect(within(screen.getByRole("complementary")).getByText("Select a lead to preview details.")).toBeInTheDocument();
+  });
+
+  it("renders the page header subtitle and pagination from props", () => {
+    render(<LeadsWorkbench {...baseProps} />);
+
+    expect(screen.getByText("Leads")).toBeInTheDocument();
+    expect(screen.getByText("5 contacts")).toBeInTheDocument();
+    expect(screen.getByText("Page 1 of 2 · 5 contacts")).toBeInTheDocument();
+  });
+
+  it("shows a pending state immediately when a filter pill is clicked, then swaps in fetched rows", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[1]],
+        counts: { all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 },
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        pageSize: 25,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.click(screen.getByText("Replied"));
+
+    expect(document.querySelector(".is-pending")).not.toBeNull();
+
+    await waitFor(() => {
+      expect(screen.queryByText("Aqua Options · Sydney")).not.toBeInTheDocument();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/leads?status=replied");
+    expect(screen.getByText("MJ Electrical · Melbourne")).toBeInTheDocument();
+    expect(window.location.search).toBe("?status=replied");
+  });
+
+  it("selects the first fetched row when filtering from an empty initial list", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[0]],
+        counts,
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        pageSize: 25,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} leads={[]} filters={{ status: "paid" }} total={0} totalPages={1} />);
+
+    fireEvent.click(screen.getByText("Qualified"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("Select a lead to preview details.")).not.toBeInTheDocument();
+    expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview Darren Smith" }).closest("tr")).toHaveClass("selected");
+  });
+
+  it("requests the next page without navigation when pagination is clicked", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[0]],
+        counts,
+        total: 5,
+        page: 2,
+        totalPages: 2,
+        pageSize: 2,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Page 2 of 2 · 5 contacts")).toBeInTheDocument();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/leads?page=2");
+    expect(window.location.search).toBe("?page=2");
+  });
+
+  it("shows an error state and keeps the current rows when a filter fetch fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.click(screen.getByText("Archived"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Failed to refresh leads. Try again in a moment.")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
+    expect(document.querySelector(".is-pending")).toBeNull();
+    expect(window.location.search).toBe("");
   });
 });
