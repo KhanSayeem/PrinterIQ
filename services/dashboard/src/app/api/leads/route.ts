@@ -3,7 +3,27 @@ import { createSupabaseServerClient } from "@/auth/server";
 import { getLeadFilterCounts, getLeadListPage } from "@/db/queries";
 import { parseLeadListParams } from "@/lib/lead-list-params";
 
-const tenantId = process.env.TENANT_ID ?? "10000000-0000-0000-0000-000000000001";
+const defaultTenantId = "10000000-0000-0000-0000-000000000001";
+
+function getDashboardTenantId() {
+  if (process.env.TENANT_ID) {
+    return process.env.TENANT_ID;
+  }
+
+  return process.env.NODE_ENV === "production" ? null : defaultTenantId;
+}
+
+function isAuthorizedOperator(user: { email?: string | null }) {
+  const allowedEmails = process.env.DASHBOARD_OPERATOR_EMAILS?.split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (allowedEmails?.length) {
+    return user.email ? allowedEmails.includes(user.email.toLowerCase()) : false;
+  }
+
+  return process.env.NODE_ENV !== "production";
+}
 
 export async function GET(request: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -13,6 +33,15 @@ export async function GET(request: NextRequest) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (!isAuthorizedOperator(user)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const tenantId = getDashboardTenantId();
+  if (!tenantId) {
+    return NextResponse.json({ error: "Dashboard tenant not configured" }, { status: 500 });
   }
 
   const filters = parseLeadListParams(Object.fromEntries(request.nextUrl.searchParams.entries()));

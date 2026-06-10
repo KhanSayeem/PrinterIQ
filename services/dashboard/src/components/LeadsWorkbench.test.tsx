@@ -156,4 +156,21 @@ describe("LeadsWorkbench", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/leads?page=2");
     expect(window.location.search).toBe("?page=2");
   });
+
+  it("shows an error state and keeps the current rows when a filter fetch fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.click(screen.getByText("Archived"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Failed to refresh leads. Try again in a moment.")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
+    expect(document.querySelector(".is-pending")).toBeNull();
+    expect(window.location.search).toBe("");
+  });
 });

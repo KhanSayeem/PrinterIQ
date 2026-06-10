@@ -13,4 +13,15 @@ describe("dashboard auth middleware rules", () => {
     expect(redirect?.pathname).toBe("/login");
     expect(redirect?.searchParams.get("redirectedFrom")).toBe("/leads");
   });
+
+  it("allows API route handlers to return their own unauthenticated response", () => {
+    expect(getAuthRedirect(new URL("http://localhost:3000/api/leads"), null)).toBeNull();
+  });
+
+  it("does not broadly exempt unknown API routes from auth redirects", () => {
+    const redirect = getAuthRedirect(new URL("http://localhost:3000/api/other"), null);
+
+    expect(redirect?.pathname).toBe("/login");
+    expect(redirect?.searchParams.get("redirectedFrom")).toBe("/api/other");
+  });
 });

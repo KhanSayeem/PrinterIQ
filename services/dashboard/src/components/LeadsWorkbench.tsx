@@ -100,6 +100,7 @@ export function LeadsWorkbench({
   const [data, setData] = useState<LeadListResponse>({ rows: leads, counts, total, page, totalPages, pageSize });
   const [activeFilters, setActiveFilters] = useState<LeadListFilters>(filters);
   const [pending, setPending] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(leads[0]?.id ?? null);
 
   const selectedLead = useMemo(
@@ -109,6 +110,7 @@ export function LeadsWorkbench({
 
   async function loadPage(nextFilters: LeadListFilters, nextPage: number) {
     setPending(true);
+    setLoadError(null);
 
     try {
       const query = buildLeadListQuery(nextFilters, nextPage);
@@ -125,6 +127,8 @@ export function LeadsWorkbench({
       );
       setActiveFilters(nextFilters);
       window.history.replaceState(null, "", query.toString() ? `/leads?${query}` : "/leads");
+    } catch {
+      setLoadError("Failed to refresh leads. Try again in a moment.");
     } finally {
       setPending(false);
     }
@@ -152,6 +156,7 @@ export function LeadsWorkbench({
       />
       <div className="leads-screen">
         <section className={`leads-list${pending ? " is-pending" : ""}`} aria-busy={pending}>
+          {loadError ? <div className="error-state inline-error" role="alert">{loadError}</div> : null}
           {data.rows.length ? (
             <LeadTable leads={data.rows} selectedLeadId={selectedLeadId} onSelectLead={setSelectedLeadId} />
           ) : (

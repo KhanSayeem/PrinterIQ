@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getUserMock, getLeadFilterCountsMock, getLeadListPageMock } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
@@ -27,12 +27,40 @@ describe("GET /api/leads", () => {
     getLeadListPageMock.mockReset();
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("returns 401 when there is no authenticated user", async () => {
     getUserMock.mockResolvedValue({ data: { user: null } });
 
     const response = await GET(new NextRequest("http://localhost/api/leads"));
 
     expect(response.status).toBe(401);
+    expect(getLeadListPageMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when the authenticated user is not in the operator allowlist", async () => {
+    vi.stubEnv("DASHBOARD_OPERATOR_EMAILS", "operator@presciaiq.com");
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "intruder@example.com" } } });
+
+    const response = await GET(new NextRequest("http://localhost/api/leads"));
+
+    expect(response.status).toBe(403);
+    expect(getLeadFilterCountsMock).not.toHaveBeenCalled();
+    expect(getLeadListPageMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before DB reads when TENANT_ID is missing in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("DASHBOARD_OPERATOR_EMAILS", "operator@presciaiq.com");
+    vi.stubEnv("TENANT_ID", "");
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+
+    const response = await GET(new NextRequest("http://localhost/api/leads"));
+
+    expect(response.status).toBe(500);
+    expect(getLeadFilterCountsMock).not.toHaveBeenCalled();
     expect(getLeadListPageMock).not.toHaveBeenCalled();
   });
 
