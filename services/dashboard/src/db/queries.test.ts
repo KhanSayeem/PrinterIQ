@@ -19,6 +19,7 @@ import {
   buildRevenuePaymentsSummaryQuery,
   buildUpdateLeadStatusQuery,
   buildDeleteOperatorNoteQuery,
+  normalizeWebsitePreview,
   normalizePipelineAnalytics,
   normalizePipelineStage,
 } from "./queries";
@@ -70,8 +71,53 @@ describe("dashboard lead queries", () => {
 
     expect(query.sql).toContain('"leads"."tenant_id" =');
     expect(query.sql).toContain('"leads"."id" =');
+    expect(query.sql).toContain('left join "website_previews"');
+    expect(query.sql).toContain('"website_previews"."tenant_id" =');
+    expect(query.sql).toContain('"website_previews"."lead_id" =');
+    expect(query.sql).toContain('"website_previews"."template_used"');
+    expect(query.sql).toContain('"website_previews"."preview_url"');
+    expect(query.sql).toContain('"website_previews"."personalisation_data"');
+    expect(query.sql).toContain('"website_previews"."prompt_version"');
+    expect(query.sql).toContain('"website_previews"."cost_usd"');
+    expect(query.sql).toContain('"website_previews"."generated_at"');
     expect(query.params).toContain(tenantId);
     expect(query.params).toContain(leadId);
+  });
+
+  it("normalizes missing lead preview rows to null", () => {
+    expect(normalizeWebsitePreview(null)).toBeNull();
+    expect(
+      normalizeWebsitePreview({
+        templateUsed: null,
+        previewUrl: null,
+        personalisationData: null,
+        promptVersion: null,
+        costUsd: null,
+        generatedAt: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("normalizes populated lead preview rows to the dashboard contract", () => {
+    const generatedAt = new Date("2026-06-10T08:30:00.000Z");
+
+    expect(
+      normalizeWebsitePreview({
+        templateUsed: "plumbing",
+        previewUrl: "https://preview.presciaiq.com/p/demo-preview/",
+        personalisationData: { business_name: "Aqua Options" },
+        promptVersion: "preview-personalise-v1",
+        costUsd: "0.000100",
+        generatedAt,
+      }),
+    ).toEqual({
+      templateUsed: "plumbing",
+      previewUrl: "https://preview.presciaiq.com/p/demo-preview/",
+      personalisationData: { business_name: "Aqua Options" },
+      promptVersion: "preview-personalise-v1",
+      costUsd: "0.000100",
+      generatedAt,
+    });
   });
 
   it("scopes related tab data by the same tenant_id and lead id", () => {

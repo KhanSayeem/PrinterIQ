@@ -1,5 +1,6 @@
 import {
   boolean,
+  foreignKey,
   integer,
   jsonb,
   numeric,
@@ -95,6 +96,34 @@ export const qualifications = pgTable("qualifications", {
   qualifiedAt: timestamp("qualified_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const websitePreviews = pgTable(
+  "website_previews",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leadId: uuid("lead_id")
+      .notNull()
+      .unique()
+      .references(() => leads.id),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.tenantId),
+    templateUsed: text("template_used").notNull(),
+    previewSlug: text("preview_slug").notNull().unique(),
+    previewUrl: text("preview_url").notNull(),
+    personalisationData: jsonb("personalisation_data").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    costUsd: numeric("cost_usd", { precision: 10, scale: 6 }).notNull(),
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.leadId],
+      foreignColumns: [leads.tenantId, leads.id],
+      name: "fk_website_previews_lead_tenant",
+    }),
+  ],
+);
 
 export const outreachSends = pgTable("outreach_sends", {
   id: uuid("id").primaryKey().defaultRandom(),

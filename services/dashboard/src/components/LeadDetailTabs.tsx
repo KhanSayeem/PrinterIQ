@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConversationThread } from "./ConversationThread";
+import { WebsitePreviewCard, type WebsitePreviewDetail } from "./WebsitePreviewCard";
 
 type Lead = { email: string; phone: string | null; websiteUrl: string | null; linkedinUrl: string | null };
 type Enrichment = { cmsDetected: string | null; techSource: string; loadMs: number | null; hasSsl: boolean | null; weaknesses: unknown } | null;
@@ -19,6 +20,7 @@ export function LeadDetailTabs({
   conversations,
   outreachSends,
   payment,
+  websitePreview,
   now,
   onDeleteNote,
 }: {
@@ -28,10 +30,12 @@ export function LeadDetailTabs({
   conversations: Conversation[];
   outreachSends: Outreach[];
   payment: Payment;
+  websitePreview: WebsitePreviewDetail | null;
   now?: Date;
   onDeleteNote?: (conversationId: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>("Overview");
+  const outreachSent = outreachSends.some((send) => send.step === 1 && send.sentAt !== null);
 
   return (
     <>
@@ -78,6 +82,7 @@ export function LeadDetailTabs({
                 <div className="empty-state">No qualification data yet.</div>
               )}
             </div>
+            <WebsitePreviewCard websitePreview={websitePreview} outreachSent={outreachSent} />
           </>
         ) : null}
         {activeTab === "Conversation" ? (

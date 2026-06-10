@@ -9,6 +9,7 @@ import {
   outreachSends,
   payments,
   qualifications,
+  websitePreviews,
 } from "./schema";
 
 const schemaSql = readFileSync(resolve(process.cwd(), "../../database/schema.sql"), "utf8");
@@ -83,6 +84,18 @@ const requiredColumns = {
     "paid_at",
     "created_at",
   ],
+  website_previews: [
+    "id",
+    "lead_id",
+    "tenant_id",
+    "template_used",
+    "preview_slug",
+    "preview_url",
+    "personalisation_data",
+    "prompt_version",
+    "cost_usd",
+    "generated_at",
+  ],
 };
 
 const drizzleTables = {
@@ -92,6 +105,7 @@ const drizzleTables = {
   conversations,
   outreach_sends: outreachSends,
   payments,
+  website_previews: websitePreviews,
 };
 
 describe("dashboard Drizzle schema", () => {

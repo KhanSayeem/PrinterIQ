@@ -10,6 +10,7 @@ import {
   outreachSends,
   payments,
   qualifications,
+  websitePreviews,
 } from "./schema";
 
 type DashboardDb = ReturnType<typeof getDb>;
@@ -65,6 +66,15 @@ const STATUS_TRANSITION_ALLOWED_FROM: Record<LeadStatusUpdateInput["status"], Pi
 export type InstantlyReplyMetadata = {
   instantlyEmailId: string;
   instantlyAccountId: string;
+};
+
+export type WebsitePreviewDetail = {
+  templateUsed: string;
+  previewUrl: string;
+  personalisationData: Record<string, unknown>;
+  promptVersion: string;
+  costUsd: string;
+  generatedAt: Date | string;
 };
 
 export type DeleteOperatorNoteInput = LeadIdentity & {
@@ -325,6 +335,14 @@ export function buildLeadDetailQuery(db: DashboardDb, identity: LeadIdentity) {
       lead: leads,
       enrichment: enrichments,
       qualification: qualifications,
+      websitePreview: {
+        templateUsed: websitePreviews.templateUsed,
+        previewUrl: websitePreviews.previewUrl,
+        personalisationData: websitePreviews.personalisationData,
+        promptVersion: websitePreviews.promptVersion,
+        costUsd: websitePreviews.costUsd,
+        generatedAt: websitePreviews.generatedAt,
+      },
     })
     .from(leads)
     .leftJoin(
@@ -334,6 +352,10 @@ export function buildLeadDetailQuery(db: DashboardDb, identity: LeadIdentity) {
     .leftJoin(
       qualifications,
       and(eq(qualifications.leadId, leads.id), eq(qualifications.tenantId, identity.tenantId)),
+    )
+    .leftJoin(
+      websitePreviews,
+      and(eq(websitePreviews.leadId, leads.id), eq(websitePreviews.tenantId, identity.tenantId)),
     )
     .where(and(eq(leads.tenantId, identity.tenantId), eq(leads.id, identity.leadId)))
     .limit(1);
@@ -922,5 +944,32 @@ export async function getLeadDetail(identity: LeadIdentity) {
     payment: paymentRows[0] ?? null,
     enrichment: leadBundle.enrichment ?? enrichmentRows[0] ?? null,
     qualification: leadBundle.qualification ?? qualificationRows[0] ?? null,
+    websitePreview: normalizeWebsitePreview(leadBundle.websitePreview),
   };
+}
+
+export function normalizeWebsitePreview(preview: {
+  templateUsed: string | null;
+  previewUrl: string | null;
+  personalisationData: unknown;
+  promptVersion: string | null;
+  costUsd: string | null;
+  generatedAt: Date | string | null;
+} | null): WebsitePreviewDetail | null {
+  if (!preview?.previewUrl || !preview.templateUsed || !preview.promptVersion || !preview.generatedAt) {
+    return null;
+  }
+
+  return {
+    templateUsed: preview.templateUsed,
+    previewUrl: preview.previewUrl,
+    personalisationData: isRecord(preview.personalisationData) ? preview.personalisationData : {},
+    promptVersion: preview.promptVersion,
+    costUsd: preview.costUsd ?? "0",
+    generatedAt: preview.generatedAt,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

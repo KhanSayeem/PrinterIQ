@@ -22,6 +22,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
         conversations={detail.conversations}
         outreachSends={detail.outreachSends}
         payment={detail.payment}
+        websitePreview={detail.websitePreview}
       />
     </div>
   );

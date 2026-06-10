@@ -6,6 +6,7 @@ import { deleteNote, type LeadActionState } from "@/app/actions/lead-actions";
 import { initialLeadActionState } from "@/app/actions/lead-actions-core";
 import { LeadDetailTabs } from "./LeadDetailTabs";
 import { OperatorActionButtons } from "./OperatorActionButtons";
+import type { WebsitePreviewDetail } from "./WebsitePreviewCard";
 
 type Lead = {
   id: string;
@@ -43,6 +44,7 @@ export function LeadDetailView({
   conversations: initialConversations,
   outreachSends,
   payment,
+  websitePreview,
   actions = { deleteNote },
   now,
 }: {
@@ -53,6 +55,7 @@ export function LeadDetailView({
   conversations: Conversation[];
   outreachSends: Outreach[];
   payment: Payment;
+  websitePreview: WebsitePreviewDetail | null;
   actions?: Partial<Actions>;
   now?: Date;
 }) {
@@ -109,6 +112,7 @@ export function LeadDetailView({
         conversations={conversations}
         outreachSends={outreachSends}
         payment={payment}
+        websitePreview={websitePreview}
         now={now}
         onDeleteNote={handleDeleteNote}
       />
