@@ -43,6 +43,14 @@ export type LeadListFilters = {
   pageSize?: number;
 };
 
+export type LeadFilterCounts = {
+  all: number;
+  qualified: number;
+  replied: number;
+  paid: number;
+  archived: number;
+};
+
 export type LeadIdentity = {
   tenantId: string;
   leadId: string;
@@ -184,6 +192,44 @@ function labelForStatus(status: PipelineStatus) {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+function normalizeLeadPagination(filters: LeadListFilters) {
+  return {
+    page: Math.max(filters.page ?? 1, 1),
+    pageSize: Math.min(Math.max(filters.pageSize ?? 25, 1), 100),
+  };
+}
+
+export function normalizeLeadListPageMeta({
+  total,
+  page,
+  pageSize,
+}: {
+  total: number;
+  page: number;
+  pageSize: number;
+}) {
+  const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+
+  return {
+    total,
+    page: Math.min(Math.max(page, 1), totalPages),
+    pageSize,
+    totalPages,
+  };
+}
+
+function buildLeadListWhere(filters: LeadListFilters) {
+  return [
+    eq(leads.tenantId, filters.tenantId),
+    eq(leads.isDeleted, false),
+    filters.status ? eq(leads.status, filters.status) : undefined,
+    filters.state ? eq(leads.state, filters.state) : undefined,
+    filters.tradeType ? eq(leads.vertical, filters.tradeType) : undefined,
+    filters.scoreMin === undefined ? undefined : gte(qualifications.score, filters.scoreMin),
+    filters.scoreMax === undefined ? undefined : lte(qualifications.score, filters.scoreMax),
+  ].filter(Boolean);
+}
+
 export function normalizePipelineStage(stage: string | undefined): PipelineStatus {
   return PIPELINE_STATUSES.includes(stage as PipelineStatus) ? (stage as PipelineStatus) : "imported";
 }
@@ -261,17 +307,8 @@ export function getRevenuePeriodStart(period: RevenuePeriod, now = new Date()) {
 export function buildLeadListQuery(db: DashboardDb, filters: LeadListFilters) {
   requireTenantId(filters.tenantId);
 
-  const page = Math.max(filters.page ?? 1, 1);
-  const pageSize = Math.min(Math.max(filters.pageSize ?? 25, 1), 100);
-  const where = [
-    eq(leads.tenantId, filters.tenantId),
-    eq(leads.isDeleted, false),
-    filters.status ? eq(leads.status, filters.status) : undefined,
-    filters.state ? eq(leads.state, filters.state) : undefined,
-    filters.tradeType ? eq(leads.vertical, filters.tradeType) : undefined,
-    filters.scoreMin === undefined ? undefined : gte(qualifications.score, filters.scoreMin),
-    filters.scoreMax === undefined ? undefined : lte(qualifications.score, filters.scoreMax),
-  ].filter(Boolean);
+  const { page, pageSize } = normalizeLeadPagination(filters);
+  const where = buildLeadListWhere(filters);
 
   return db
     .select({
@@ -306,6 +343,35 @@ export function buildLeadListQuery(db: DashboardDb, filters: LeadListFilters) {
     .orderBy(desc(leads.updatedAt))
     .limit(pageSize)
     .offset((page - 1) * pageSize);
+}
+
+export function buildLeadListCountQuery(db: DashboardDb, filters: LeadListFilters) {
+  requireTenantId(filters.tenantId);
+  const where = buildLeadListWhere(filters);
+
+  return db
+    .select({
+      total: sql<string>`count(*)`,
+    })
+    .from(leads)
+    .leftJoin(
+      qualifications,
+      and(eq(qualifications.leadId, leads.id), eq(qualifications.tenantId, filters.tenantId)),
+    )
+    .where(and(...where));
+}
+
+export function buildLeadFilterCountsQuery(db: DashboardDb, identity: { tenantId: string }) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      status: leads.status,
+      count: sql<string>`count(*)`,
+    })
+    .from(leads)
+    .where(and(eq(leads.tenantId, identity.tenantId), eq(leads.isDeleted, false)))
+    .groupBy(leads.status);
 }
 
 export function buildLatestConversationsForLeadsQuery(
@@ -646,6 +712,33 @@ export function buildAiCostByModelQuery(
 export async function getLeadList(filters: LeadListFilters) {
   const db = getDb();
   const rows = await buildLeadListQuery(db, filters);
+  return addLatestConversationsToLeadRows(db, filters.tenantId, rows);
+}
+
+export async function getLeadListPage(filters: LeadListFilters) {
+  const db = getDb();
+  const { page, pageSize } = normalizeLeadPagination(filters);
+  const totalRows = await buildLeadListCountQuery(db, filters);
+  const total = toNumber(totalRows[0]?.total);
+  const meta = normalizeLeadListPageMeta({ total, page, pageSize });
+  const pageRows = await buildLeadListQuery(db, { ...filters, page: meta.page, pageSize });
+
+  return {
+    rows: await addLatestConversationsToLeadRows(db, filters.tenantId, pageRows),
+    ...meta,
+  };
+}
+
+export async function getLeadFilterCounts(identity: { tenantId: string }) {
+  const db = getDb();
+  return normalizeLeadFilterCounts(await buildLeadFilterCountsQuery(db, identity));
+}
+
+async function addLatestConversationsToLeadRows<T extends { id: string; weaknesses: unknown }>(
+  db: DashboardDb,
+  tenantId: string,
+  rows: T[],
+) {
   const leadIds = rows.map((row) => row.id);
 
   if (leadIds.length === 0) {
@@ -653,7 +746,7 @@ export async function getLeadList(filters: LeadListFilters) {
   }
 
   const latestRows = await buildLatestConversationsForLeadsQuery(db, {
-    tenantId: filters.tenantId,
+    tenantId,
     leadIds,
   });
   const latestByLeadId = new Map<string, LeadLatestConversation>();
@@ -667,6 +760,21 @@ export async function getLeadList(filters: LeadListFilters) {
     ...normalizeLeadListRow(row),
     latestConversation: latestByLeadId.get(row.id) ?? null,
   }));
+}
+
+export function normalizeLeadFilterCounts(
+  rows: Array<{ status: string | null; count: number | string }>,
+): LeadFilterCounts {
+  const counts = new Map(rows.map((row) => [row.status, toNumber(row.count)]));
+  const all = rows.reduce((sum, row) => sum + toNumber(row.count), 0);
+
+  return {
+    all,
+    qualified: counts.get("qualified") ?? 0,
+    replied: counts.get("replied") ?? 0,
+    paid: counts.get("paid") ?? 0,
+    archived: counts.get("archived") ?? 0,
+  };
 }
 
 export async function getPipelineAnalytics(identity: { tenantId: string; selectedStage?: string }) {
