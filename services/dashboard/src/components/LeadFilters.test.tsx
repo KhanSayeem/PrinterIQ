@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { LeadFilters } from "./LeadFilters";
 
 describe("LeadFilters", () => {
@@ -8,6 +8,7 @@ describe("LeadFilters", () => {
       <LeadFilters
         activeStatus="qualified"
         counts={{ all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 }}
+        onSelect={() => {}}
       />,
     );
 
@@ -19,5 +20,35 @@ describe("LeadFilters", () => {
     expect(screen.queryByText("imported")).not.toBeInTheDocument();
     expect(screen.queryByText("enriched")).not.toBeInTheDocument();
     expect(screen.queryByText("contacted")).not.toBeInTheDocument();
+  });
+
+  it("calls onSelect with the pill's status without navigating", () => {
+    const onSelect = vi.fn();
+    render(
+      <LeadFilters
+        activeStatus={undefined}
+        counts={{ all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 }}
+        onSelect={onSelect}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Qualified"));
+    expect(onSelect).toHaveBeenCalledWith("qualified");
+
+    fireEvent.click(screen.getByText("All"));
+    expect(onSelect).toHaveBeenCalledWith(undefined);
+  });
+
+  it("disables the pills while a fetch is pending", () => {
+    render(
+      <LeadFilters
+        activeStatus={undefined}
+        counts={{ all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 }}
+        onSelect={() => {}}
+        pending
+      />,
+    );
+
+    expect(screen.getByText("Qualified").closest("button")).toBeDisabled();
   });
 });

@@ -1,4 +1,4 @@
-import Link from "next/link";
+"use client";
 
 type LeadFilterCounts = {
   all: number;
@@ -19,9 +19,13 @@ const filters = [
 export function LeadFilters({
   activeStatus,
   counts,
+  pending,
+  onSelect,
 }: {
   activeStatus?: string;
   counts: LeadFilterCounts;
+  pending?: boolean;
+  onSelect: (status?: string) => void;
 }) {
   return (
     <div className="filters">
@@ -29,14 +33,16 @@ export function LeadFilters({
       {filters.map((filter) => {
         const active = filter.status ? activeStatus === filter.status : !activeStatus;
         return (
-          <Link
+          <button
             key={filter.key}
+            type="button"
             className={`pill ${active ? "active" : ""}`}
-            href={filter.status ? `/leads?status=${filter.status}` : "/leads"}
+            onClick={() => onSelect(filter.status)}
+            disabled={pending}
           >
             {filter.label}
             <span className="filter-count">{counts[filter.key]}</span>
-          </Link>
+          </button>
         );
       })}
     </div>
