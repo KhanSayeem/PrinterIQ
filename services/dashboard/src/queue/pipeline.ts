@@ -147,7 +147,7 @@ export async function hasActiveIngestCsvJob(tenantId: string) {
       }
     }
 
-    return hasRawTenantImportRetry(queue, tenantId);
+    return await hasRawTenantImportRetry(queue, tenantId);
   } finally {
     try {
       await queue.close();

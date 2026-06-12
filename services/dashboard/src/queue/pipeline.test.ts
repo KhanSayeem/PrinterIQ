@@ -145,6 +145,43 @@ describe("enqueueIngestCsvJob", () => {
     expect(closeMock).toHaveBeenCalledOnce();
   });
 
+  it("waits for raw queued import checks before closing the queue", async () => {
+    let queueClosed = false;
+    closeMock.mockImplementation(async () => {
+      queueClosed = true;
+    });
+    lrangeMock.mockImplementation(async (key: string) => {
+      await Promise.resolve();
+      if (queueClosed) {
+        throw new Error("Connection is closed.");
+      }
+      if (key === "bull:pipeline:wait") {
+        return [
+          JSON.stringify({
+            job_type: "ingest_csv",
+            tenant_id: "tenant-1",
+            file_path: "C:\\printeriq\\uploads\\retry.csv",
+            source_file: "retry.csv",
+          }),
+        ];
+      }
+      return [];
+    });
+    zrangeMock.mockImplementation(async () => {
+      await Promise.resolve();
+      if (queueClosed) {
+        throw new Error("Connection is closed.");
+      }
+      return [];
+    });
+
+    const result = await hasActiveIngestCsvJob("tenant-1");
+
+    expect(result).toBe(true);
+    expect(addMock).not.toHaveBeenCalled();
+    expect(closeMock).toHaveBeenCalledOnce();
+  });
+
   it("returns acquired=false when a Python retry for the tenant import is already queued", async () => {
     lrangeMock.mockImplementation(async (key: string) => {
       if (key === "bull:pipeline:wait") {
