@@ -79,12 +79,15 @@ class FakeRedis:
         self.active_key = "bull:pipeline:active"
         self.delayed_key = "bull:pipeline:delayed"
         self.dead_key = "bull:pipeline:dead"
+        self.job_key_prefix = "bull:pipeline:"
         self.lists: dict[str, list[str]] = {
             self.wait_key: [],
             self.active_key: [],
             self.dead_key: [],
         }
         self.sorted_sets: dict[str, dict[str, int]] = {self.delayed_key: {}}
+        self.hashes: dict[str, dict[str, str]] = {}
+        self.deleted_keys: list[str] = []
 
     async def rpoplpush(self, source: str, destination: str) -> str | None:
         if not self.lists[source]:
@@ -114,7 +117,17 @@ class FakeRedis:
         self.sorted_sets.setdefault(key, {}).update(mapping)
 
     async def hgetall(self, key: str) -> dict[str, str]:
-        return {}
+        return self.hashes.get(key, {})
+
+    async def scan_iter(self, *, match: str) -> object:
+        prefix = match.removesuffix("*")
+        for key in self.hashes:
+            if key.startswith(prefix):
+                yield key
+
+    async def delete(self, key: str) -> None:
+        self.deleted_keys.append(key)
+        self.hashes.pop(key, None)
 
 
 def test_pipeline_handlers_register_all_pipeline_job_types() -> None:
@@ -912,6 +925,33 @@ def test_redis_pipeline_queue_moves_undecodable_item_to_dead_list() -> None:
         assert redis.lists[redis.wait_key] == []
         assert redis.lists[redis.active_key] == []
         assert redis.lists[redis.dead_key] == ["missing-bullmq-job-id"]
+
+    asyncio.run(scenario())
+
+
+def test_redis_pipeline_queue_reads_bullmq_hash_job_when_wait_list_is_absent() -> None:
+    async def scenario() -> None:
+        redis = FakeRedis()
+        job_key = "bull:pipeline:import-csv-tenant-1"
+        redis.hashes[job_key] = {
+            "data": (
+                '{"job_type":"ingest_csv","tenant_id":"'
+                + str(TENANT_ID)
+                + '","file_path":"/uploads/apollo.csv","source_file":"apollo.csv"}'
+            )
+        }
+        queue = RedisPipelineQueue(redis)
+
+        message = await queue.pop()
+
+        assert message is not None
+        assert message.payload["job_type"] == JobType.INGEST_CSV.value
+        assert message.payload["file_path"] == "/uploads/apollo.csv"
+
+        await queue.ack(message)
+
+        assert redis.deleted_keys == [job_key]
+        assert job_key not in redis.hashes
 
     asyncio.run(scenario())
 
