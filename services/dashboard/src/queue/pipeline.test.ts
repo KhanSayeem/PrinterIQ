@@ -1,18 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { addMock, closeMock, getJobMock, getStateMock, removeMock, queueConstructorMock } = vi.hoisted(() => ({
+const {
+  addMock,
+  closeMock,
+  getJobMock,
+  getStateMock,
+  lrangeMock,
+  removeMock,
+  queueConstructorMock,
+  zrangeMock,
+} = vi.hoisted(() => ({
   addMock: vi.fn(),
   closeMock: vi.fn(),
   getJobMock: vi.fn(),
   getStateMock: vi.fn(),
+  lrangeMock: vi.fn(),
   removeMock: vi.fn(),
   queueConstructorMock: vi.fn(),
+  zrangeMock: vi.fn(),
 }));
 
 vi.mock("bullmq", () => ({
   Queue: queueConstructorMock.mockImplementation(function Queue() {
     return {
       add: addMock,
+      client: Promise.resolve({
+        lrange: lrangeMock,
+        zrange: zrangeMock,
+      }),
       close: closeMock,
       getJob: getJobMock,
     };
@@ -28,11 +43,32 @@ describe("enqueueIngestCsvJob", () => {
     closeMock.mockReset();
     getJobMock.mockReset();
     getStateMock.mockReset();
+    lrangeMock.mockReset();
     removeMock.mockReset();
+    zrangeMock.mockReset();
     queueConstructorMock.mockClear();
     addMock.mockResolvedValue({ id: "import-csv-tenant-1" });
     closeMock.mockResolvedValue(undefined);
     getJobMock.mockResolvedValue(null);
+    lrangeMock.mockResolvedValue([]);
+    zrangeMock.mockResolvedValue([]);
+  });
+
+  it("fails closed in production when REDIS_URL is missing", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("REDIS_URL", "");
+
+    await expect(
+      enqueueIngestCsvJob({
+        tenantId: "tenant-1",
+        filePath: "C:\\printeriq\\uploads\\apollo.csv",
+        sourceFile: "apollo.csv",
+        vertical: "tradies",
+        dryRun: false,
+      }),
+    ).rejects.toThrow("Missing env var: REDIS_URL");
+
+    expect(queueConstructorMock).not.toHaveBeenCalled();
   });
 
   it("adds the documented ingest_csv payload to the pipeline BullMQ queue", async () => {
@@ -80,6 +116,34 @@ describe("enqueueIngestCsvJob", () => {
     getJobMock.mockResolvedValue({
       id: "import-csv-tenant-1",
       getState: getStateMock,
+    });
+
+    const result = await enqueueIngestCsvJob({
+      tenantId: "tenant-1",
+      filePath: "C:\\printeriq\\uploads\\apollo.csv",
+      sourceFile: "apollo.csv",
+      vertical: "tradies",
+      dryRun: false,
+    });
+
+    expect(result).toEqual({ id: "import-csv-tenant-1", acquired: false });
+    expect(addMock).not.toHaveBeenCalled();
+    expect(closeMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns acquired=false when a Python retry for the tenant import is already queued", async () => {
+    lrangeMock.mockImplementation(async (key: string) => {
+      if (key === "bull:pipeline:wait") {
+        return [
+          JSON.stringify({
+            job_type: "ingest_csv",
+            tenant_id: "tenant-1",
+            file_path: "C:\\printeriq\\uploads\\retry.csv",
+            source_file: "retry.csv",
+          }),
+        ];
+      }
+      return [];
     });
 
     const result = await enqueueIngestCsvJob({
