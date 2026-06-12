@@ -1,9 +1,10 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getUserMock, enqueueIngestCsvJobMock, mkdirMock, writeFileMock, unlinkMock } = vi.hoisted(() => ({
+const { getUserMock, enqueueIngestCsvJobMock, hasActiveIngestCsvJobMock, mkdirMock, writeFileMock, unlinkMock } = vi.hoisted(() => ({
   getUserMock: vi.fn(),
   enqueueIngestCsvJobMock: vi.fn(),
+  hasActiveIngestCsvJobMock: vi.fn(),
   mkdirMock: vi.fn(),
   writeFileMock: vi.fn(),
   unlinkMock: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("@/auth/server", () => ({
 
 vi.mock("@/queue/pipeline", () => ({
   enqueueIngestCsvJob: enqueueIngestCsvJobMock,
+  hasActiveIngestCsvJob: hasActiveIngestCsvJobMock,
 }));
 
 vi.mock("fs/promises", () => ({
@@ -82,10 +84,12 @@ describe("POST /api/import-csv", () => {
     vi.stubEnv("DASHBOARD_OPERATOR_EMAILS", "operator@presciaiq.com");
     getUserMock.mockReset();
     enqueueIngestCsvJobMock.mockReset();
+    hasActiveIngestCsvJobMock.mockReset();
     mkdirMock.mockReset();
     writeFileMock.mockReset();
     unlinkMock.mockReset();
     enqueueIngestCsvJobMock.mockResolvedValue({ id: "job-1", acquired: true });
+    hasActiveIngestCsvJobMock.mockResolvedValue(false);
     mkdirMock.mockResolvedValue(undefined);
     writeFileMock.mockResolvedValue(undefined);
     unlinkMock.mockResolvedValue(undefined);
@@ -165,14 +169,74 @@ describe("POST /api/import-csv", () => {
   it("rejects oversized uploads before writing files", async () => {
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
     const request = requestWithUpload("apollo.csv", "Email\nlead@example.com\n");
-    request.headers.set("content-length", String(11 * 1024 * 1024));
+    request.headers.set("content-length", String(52 * 1024 * 1024));
 
     const response = await POST(request);
 
     expect(response.status).toBe(413);
-    expect(await response.json()).toEqual({ error: "CSV file must be 10MB or smaller" });
+    expect(await response.json()).toEqual({ error: "CSV file must be 50MB or smaller" });
     expect(writeFileMock).not.toHaveBeenCalled();
     expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
+  });
+
+  it("uses DASHBOARD_MAX_CSV_UPLOAD_BYTES for the upload limit message", async () => {
+    vi.stubEnv("DASHBOARD_MAX_CSV_UPLOAD_BYTES", String(12 * 1024 * 1024));
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+    const request = requestWithUpload("apollo.csv", "Email\nlead@example.com\n");
+    request.headers.set("content-length", String(14 * 1024 * 1024));
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "CSV file must be 12MB or smaller" });
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the default upload limit when DASHBOARD_MAX_CSV_UPLOAD_BYTES is above the bounded ceiling", async () => {
+    vi.stubEnv("DASHBOARD_MAX_CSV_UPLOAD_BYTES", String(200 * 1024 * 1024));
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+    const request = requestWithUpload("apollo.csv", "Email\nlead@example.com\n");
+    request.headers.set("content-length", String(52 * 1024 * 1024));
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "CSV file must be 50MB or smaller" });
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
+  });
+
+  it("queues valid uploads that are above the old hardcoded 10MB cap but under the configured cap", async () => {
+    vi.stubEnv("DASHBOARD_MAX_CSV_UPLOAD_BYTES", String(12 * 1024 * 1024));
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+    const csvContents = `Email\n${"a".repeat(11 * 1024 * 1024)}@example.com\n`;
+    const request = requestWithUpload("apollo.csv", csvContents);
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      message: "Import queued",
+      jobId: "job-1",
+      sourceFile: "apollo.csv",
+    });
+    expect(writeFileMock).toHaveBeenCalledOnce();
+    expect(Buffer.byteLength(writeFileMock.mock.calls[0]?.[1] as Buffer)).toBeGreaterThan(10 * 1024 * 1024);
+    expect(enqueueIngestCsvJobMock).toHaveBeenCalledOnce();
+  });
+
+  it("allows multipart overhead above the configured CSV file limit", async () => {
+    vi.stubEnv("DASHBOARD_MAX_CSV_UPLOAD_BYTES", String(1024));
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+    const request = requestWithUpload("apollo.csv", `Email\n${"a".repeat(900)}@example.com\n`);
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(202);
+    expect(writeFileMock).toHaveBeenCalledOnce();
+    expect(Buffer.byteLength(writeFileMock.mock.calls[0]?.[1] as Buffer)).toBeLessThanOrEqual(1024);
+    expect(Number(request.headers.get("content-length"))).toBeGreaterThan(1024);
   });
 
   it("rejects uploads without a valid content length before parsing", async () => {
@@ -186,6 +250,40 @@ describe("POST /api/import-csv", () => {
 
     expect(response.status).toBe(411);
     expect(await response.json()).toEqual({ error: "Content-Length header is required" });
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a duplicate active import before parsing the multipart body", async () => {
+    vi.stubEnv("TENANT_ID", "11111111-1111-4111-8111-111111111111");
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+    hasActiveIngestCsvJobMock.mockResolvedValue(true);
+    const request = requestWithUpload("apollo.csv", "Email\nlead@example.com\n");
+    const formDataSpy = vi.spyOn(request, "formData");
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "An import is already queued or running",
+      jobId: "import-csv-11111111-1111-4111-8111-111111111111",
+    });
+    expect(formDataSpy).not.toHaveBeenCalled();
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
+  });
+
+  it("returns JSON when the active import preflight fails before parsing the multipart body", async () => {
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+    hasActiveIngestCsvJobMock.mockRejectedValue(new Error("redis unavailable"));
+    const request = requestWithUpload("apollo.csv", "Email\nlead@example.com\n");
+    const formDataSpy = vi.spyOn(request, "formData");
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Failed to queue import" });
+    expect(formDataSpy).not.toHaveBeenCalled();
     expect(writeFileMock).not.toHaveBeenCalled();
     expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
   });

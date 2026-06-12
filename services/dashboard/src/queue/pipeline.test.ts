@@ -34,7 +34,7 @@ vi.mock("bullmq", () => ({
   }),
 }));
 
-import { enqueueIngestCsvJob } from "./pipeline";
+import { enqueueIngestCsvJob, hasActiveIngestCsvJob } from "./pipeline";
 
 describe("enqueueIngestCsvJob", () => {
   beforeEach(() => {
@@ -127,6 +127,20 @@ describe("enqueueIngestCsvJob", () => {
     });
 
     expect(result).toEqual({ id: "import-csv-tenant-1", acquired: false });
+    expect(addMock).not.toHaveBeenCalled();
+    expect(closeMock).toHaveBeenCalledOnce();
+  });
+
+  it("reports an active tenant import without adding a new job", async () => {
+    getStateMock.mockResolvedValue("active");
+    getJobMock.mockResolvedValue({
+      id: "import-csv-tenant-1",
+      getState: getStateMock,
+    });
+
+    const result = await hasActiveIngestCsvJob("tenant-1");
+
+    expect(result).toBe(true);
     expect(addMock).not.toHaveBeenCalled();
     expect(closeMock).toHaveBeenCalledOnce();
   });
