@@ -64,8 +64,21 @@ describe("GET /api/leads", () => {
     expect(getLeadListPageMock).not.toHaveBeenCalled();
   });
 
+  it("fails closed before DB reads when TENANT_ID is not a UUID", async () => {
+    vi.stubEnv("DASHBOARD_OPERATOR_EMAILS", "operator@presciaiq.com");
+    vi.stubEnv("TENANT_ID", "not-a-uuid");
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+
+    const response = await GET(new NextRequest("http://localhost/api/leads"));
+
+    expect(response.status).toBe(500);
+    expect(getLeadFilterCountsMock).not.toHaveBeenCalled();
+    expect(getLeadListPageMock).not.toHaveBeenCalled();
+  });
+
   it("scopes the lead list by the server-derived tenant id, ignoring any client tenant param", async () => {
-    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    vi.stubEnv("DASHBOARD_OPERATOR_EMAILS", "operator@presciaiq.com");
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
     getLeadFilterCountsMock.mockResolvedValue({ all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 });
     getLeadListPageMock.mockResolvedValue({
       rows: [],

@@ -1,12 +1,11 @@
 import Link from "next/link";
+import { getDashboardTenantId } from "@/auth/tenant";
 import {
   getRevenueAnalytics,
   normalizeRevenuePeriod,
   type RevenueAnalytics,
   type RevenuePeriod,
 } from "@/db/queries";
-
-const tenantId = process.env.TENANT_ID ?? "10000000-0000-0000-0000-000000000001";
 
 const periodLabels: Record<RevenuePeriod, string> = {
   today: "Today",
@@ -31,6 +30,11 @@ export default async function RevenuePage({
   const period = normalizeRevenuePeriod(params.period);
 
   try {
+    const tenantId = getDashboardTenantId();
+    if (!tenantId) {
+      throw new Error("Dashboard tenant not configured");
+    }
+
     const analytics = await getRevenueAnalytics({ tenantId, period });
 
     return (

@@ -1,8 +1,7 @@
 import { PipelineFunnel } from "@/components/PipelineFunnel";
 import { PipelineStagePanel } from "@/components/PipelineStagePanel";
+import { getDashboardTenantId } from "@/auth/tenant";
 import { getPipelineAnalytics } from "@/db/queries";
-
-const tenantId = process.env.TENANT_ID ?? "10000000-0000-0000-0000-000000000001";
 
 function getPipelineLoadErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -20,6 +19,11 @@ export default async function PipelinePage({
   const params = await searchParams;
 
   try {
+    const tenantId = getDashboardTenantId();
+    if (!tenantId) {
+      throw new Error("Dashboard tenant not configured");
+    }
+
     const analytics = await getPipelineAnalytics({ tenantId, selectedStage: params.stage });
 
     return (

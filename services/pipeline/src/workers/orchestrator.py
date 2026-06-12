@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import logging
 import os
 import sys
 import time
@@ -41,6 +42,7 @@ from workers.schedule_outreach import SendWindowNotReachedError, schedule_outrea
 PIPELINE_CONCURRENCY = 5
 INSTANTLY_RATE_LIMIT_PER_MINUTE = 50
 CLAUDE_RATE_LIMIT_PER_MINUTE = 50
+logger = logging.getLogger(__name__)
 
 PipelineHandler = Callable[[dict[str, object]], Awaitable[object]]
 Clock = Callable[[], float]
@@ -177,8 +179,9 @@ def build_production_pipeline_handlers(
     )
 
     async def handle_ingest(payload: dict[str, object]) -> object:
-        return await ingest(
-            Path(str(payload["file_path"])),
+        file_path = Path(str(payload["file_path"]))
+        result = await ingest(
+            file_path,
             tenant_id=UUID(str(payload["tenant_id"])),
             source_file=str(payload["source_file"]),
             vertical=str(payload.get("vertical", "tradies")),
@@ -186,6 +189,8 @@ def build_production_pipeline_handlers(
             queue=queue,
             dry_run=bool(payload.get("dry_run", False)),
         )
+        _delete_uploaded_csv(file_path)
+        return result
 
     async def handle_enrich(payload: dict[str, object]) -> object:
         return await enrich(
@@ -276,9 +281,10 @@ def build_pooled_production_pipeline_handlers(
     )
 
     async def handle_ingest(payload: dict[str, object]) -> object:
+        file_path = Path(str(payload["file_path"]))
         async with connection_pool.acquire() as connection:
-            return await ingest(
-                Path(str(payload["file_path"])),
+            result = await ingest(
+                file_path,
                 tenant_id=UUID(str(payload["tenant_id"])),
                 source_file=str(payload["source_file"]),
                 vertical=str(payload.get("vertical", "tradies")),
@@ -286,6 +292,8 @@ def build_pooled_production_pipeline_handlers(
                 queue=queue,
                 dry_run=bool(payload.get("dry_run", False)),
             )
+        _delete_uploaded_csv(file_path)
+        return result
 
     async def handle_enrich(payload: dict[str, object]) -> object:
         async with connection_pool.acquire() as connection:
@@ -361,6 +369,17 @@ def build_limited_handler(
         return await handler(payload)
 
     return limited
+
+
+def _delete_uploaded_csv(file_path: Path) -> None:
+    try:
+        file_path.unlink(missing_ok=True)
+    except OSError as error:
+        logger.warning(
+            "Failed to delete uploaded CSV after ingest",
+            extra={"error_name": error.__class__.__name__},
+        )
+        raise
 
 
 async def _unconfigured_schedule_outreach_handler(_: dict[str, object]) -> object:

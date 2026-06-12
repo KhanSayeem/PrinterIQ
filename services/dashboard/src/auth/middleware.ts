@@ -1,7 +1,7 @@
 import type { User } from "@supabase/supabase-js";
 
 const PUBLIC_ROUTES = ["/login"];
-const HANDLER_AUTH_ROUTES = ["/api/leads"];
+const HANDLER_AUTH_ROUTES = ["/api/import-csv", "/api/leads"];
 
 function hasHandlerAuth(pathname: string) {
   return HANDLER_AUTH_ROUTES.includes(pathname);

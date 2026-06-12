@@ -16,6 +16,7 @@ describe("dashboard auth middleware rules", () => {
 
   it("allows API route handlers to return their own unauthenticated response", () => {
     expect(getAuthRedirect(new URL("http://localhost:3000/api/leads"), null)).toBeNull();
+    expect(getAuthRedirect(new URL("http://localhost:3000/api/import-csv"), null)).toBeNull();
   });
 
   it("does not broadly exempt unknown API routes from auth redirects", () => {
