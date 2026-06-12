@@ -278,6 +278,114 @@ def test_production_pipeline_handlers_inject_worker_dependencies() -> None:
     asyncio.run(scenario())
 
 
+def test_production_ingest_handler_deletes_uploaded_csv_after_success(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        csv_path = tmp_path / "leads.csv"
+        csv_path.write_text("Email\nlead@example.com\n", encoding="utf-8")
+
+        async def ingest_handler(file_path: Path, **_: object) -> None:
+            assert file_path == csv_path
+            assert csv_path.exists()
+
+        handlers = build_production_pipeline_handlers(
+            lead_repository=object(),
+            pipeline_store=object(),
+            queue=object(),
+            auditor=object(),
+            claude_client=object(),
+            instantly_client=object(),
+            ingest_worker=ingest_handler,
+            rate_limits={},
+        )
+
+        await handlers[JobType.INGEST_CSV](
+            {
+                "job_type": JobType.INGEST_CSV.value,
+                "tenant_id": str(TENANT_ID),
+                "file_path": str(csv_path),
+                "source_file": "leads.csv",
+            }
+        )
+
+        assert not csv_path.exists()
+
+    asyncio.run(scenario())
+
+
+def test_production_ingest_handler_keeps_uploaded_csv_after_failure(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        csv_path = tmp_path / "leads.csv"
+        csv_path.write_text("Email\nlead@example.com\n", encoding="utf-8")
+
+        async def ingest_handler(file_path: Path, **_: object) -> None:
+            assert file_path == csv_path
+            raise RuntimeError("ingest failed")
+
+        handlers = build_production_pipeline_handlers(
+            lead_repository=object(),
+            pipeline_store=object(),
+            queue=object(),
+            auditor=object(),
+            claude_client=object(),
+            instantly_client=object(),
+            ingest_worker=ingest_handler,
+            rate_limits={},
+        )
+
+        with pytest.raises(RuntimeError, match="ingest failed"):
+            await handlers[JobType.INGEST_CSV](
+                {
+                    "job_type": JobType.INGEST_CSV.value,
+                    "tenant_id": str(TENANT_ID),
+                    "file_path": str(csv_path),
+                    "source_file": "leads.csv",
+                }
+            )
+
+        assert csv_path.exists()
+
+    asyncio.run(scenario())
+
+
+def test_production_ingest_handler_fails_when_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        csv_path = tmp_path / "leads.csv"
+        csv_path.write_text("Email\nlead@example.com\n", encoding="utf-8")
+
+        async def ingest_handler(file_path: Path, **_: object) -> None:
+            assert file_path == csv_path
+
+        def fail_unlink(self: Path, *, missing_ok: bool = False) -> None:
+            raise PermissionError("locked")
+
+        monkeypatch.setattr(Path, "unlink", fail_unlink)
+
+        handlers = build_production_pipeline_handlers(
+            lead_repository=object(),
+            pipeline_store=object(),
+            queue=object(),
+            auditor=object(),
+            claude_client=object(),
+            instantly_client=object(),
+            ingest_worker=ingest_handler,
+            rate_limits={},
+        )
+
+        with pytest.raises(PermissionError, match="locked"):
+            await handlers[JobType.INGEST_CSV](
+                {
+                    "job_type": JobType.INGEST_CSV.value,
+                    "tenant_id": str(TENANT_ID),
+                    "file_path": str(csv_path),
+                    "source_file": "leads.csv",
+                }
+            )
+
+    asyncio.run(scenario())
+
+
 def test_production_pipeline_handlers_limit_each_claude_call_not_each_qualify_job() -> None:
     async def scenario() -> None:
         events: list[str] = []

@@ -102,6 +102,76 @@ describe("LeadsWorkbench", () => {
     expect(screen.getByText("Page 1 of 2 · 5 contacts")).toBeInTheDocument();
   });
 
+  it("uploads a selected CSV file and shows the queued import state", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        message: "Import queued",
+        jobId: "job-1",
+        sourceFile: "apollo.csv",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByLabelText("Import CSV"), {
+      target: { files: [new File(["Email\nlead@example.com\n"], "apollo.csv", { type: "text/csv" })] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("apollo.csv queued for import. Pipeline processing will start shortly.")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("5 contacts")).toBeInTheDocument();
+    expect(screen.getByText("Page 1 of 2 · 5 contacts")).toBeInTheDocument();
+    expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
+    expect(screen.getByText("Maya Jones")).toBeInTheDocument();
+    expect(screen.getByText("MJ Electrical")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/import-csv",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.any(FormData),
+      }),
+    );
+    const body = (fetchMock.mock.calls[0]?.[1] as RequestInit).body as FormData;
+    expect(body.get("file")).toBeInstanceOf(File);
+    expect(body.get("sourceFile")).toBeNull();
+  });
+
+  it("shows a loading state while the CSV upload is queued", () => {
+    const fetchMock = vi.fn(() => new Promise(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByLabelText("Import CSV"), {
+      target: { files: [new File(["Email\nlead@example.com\n"], "apollo.csv", { type: "text/csv" })] },
+    });
+
+    expect(screen.getByText("Queueing...")).toBeInTheDocument();
+    expect(screen.getByLabelText("Import CSV")).toBeDisabled();
+  });
+
+  it("shows the API validation message when CSV upload fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: "Upload an Apollo CSV file" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByLabelText("Import CSV"), {
+      target: { files: [new File(["bad"], "apollo.txt", { type: "text/plain" })] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Upload an Apollo CSV file")).toBeInTheDocument();
+    });
+  });
+
   it("shows a pending state immediately when a filter pill is clicked, then swaps in fetched rows", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

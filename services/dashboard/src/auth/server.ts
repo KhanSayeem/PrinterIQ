@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getSupabaseBrowserEnv } from "./env";
+import { isAuthorizedOperator } from "./operators";
 
 export async function createSupabaseServerClient() {
   const cookieStore = await cookies();
@@ -28,6 +29,16 @@ export async function requireUser() {
   } = await supabase.auth.getUser();
 
   if (!user) {
+    redirect("/login");
+  }
+
+  return user;
+}
+
+export async function requireOperator() {
+  const user = await requireUser();
+
+  if (!isAuthorizedOperator(user)) {
     redirect("/login");
   }
 

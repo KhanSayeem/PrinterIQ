@@ -1,11 +1,15 @@
 import { notFound } from "next/navigation";
+import { getDashboardTenantId } from "@/auth/tenant";
 import { getLeadDetail } from "@/db/queries";
 import { LeadDetailView } from "@/components/LeadDetailView";
 
-const tenantId = process.env.TENANT_ID ?? "10000000-0000-0000-0000-000000000001";
-
 export default async function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const tenantId = getDashboardTenantId();
+  if (!tenantId) {
+    return <div className="error-state">Failed to load lead. Dashboard tenant not configured.</div>;
+  }
+
   const detail = await getLeadDetail({ tenantId, leadId: id });
 
   if (!detail) {

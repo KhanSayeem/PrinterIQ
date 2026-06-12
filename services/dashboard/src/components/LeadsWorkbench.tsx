@@ -1,7 +1,7 @@
 "use client";
 
 import { Upload } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type ChangeEvent, useMemo, useState } from "react";
 import type { LeadFilterCounts } from "@/db/queries";
 import type { LeadListFilterParams } from "@/lib/lead-list-params";
 import { LeadFilters } from "./LeadFilters";
@@ -17,6 +17,13 @@ type LeadListResponse = {
   page: number;
   totalPages: number;
   pageSize: number;
+};
+
+type ImportCsvResponse = {
+  message?: string;
+  jobId?: string;
+  sourceFile?: string;
+  error?: string;
 };
 
 function buildLeadListQuery(filters: LeadListFilters, page: number) {
@@ -101,6 +108,9 @@ export function LeadsWorkbench({
   const [activeFilters, setActiveFilters] = useState<LeadListFilters>(filters);
   const [pending, setPending] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [importPending, setImportPending] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(leads[0]?.id ?? null);
 
   const selectedLead = useMemo(
@@ -134,6 +144,39 @@ export function LeadsWorkbench({
     }
   }
 
+  async function handleImportCsv(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    setImportPending(true);
+    setImportMessage(null);
+    setImportError(null);
+
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+
+      const response = await fetch("/api/import-csv", {
+        method: "POST",
+        body: formData,
+      });
+      const body = (await response.json().catch(() => ({}))) as ImportCsvResponse;
+
+      if (!response.ok) {
+        throw new Error(body.error || `Failed to queue import: ${response.status}`);
+      }
+
+      const sourceFile = body.sourceFile || file.name;
+      setImportMessage(`${sourceFile} queued for import. Pipeline processing will start shortly.`);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Failed to queue import");
+    } finally {
+      setImportPending(false);
+      input.value = "";
+    }
+  }
+
   return (
     <>
       <div className="page-header">
@@ -142,12 +185,22 @@ export function LeadsWorkbench({
           <div className="page-subtitle">{buildSubtitle(data.total, data.counts.all)}</div>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" type="button" disabled title="Available in Pipeline B1">
+          <label className={`btn btn-primary import-csv-control${importPending ? " is-disabled" : ""}`}>
             <Upload size={14} />
-            Import CSV
-          </button>
+            {importPending ? "Queueing..." : "Import CSV"}
+            <input
+              aria-label="Import CSV"
+              className="visually-hidden"
+              type="file"
+              accept=".csv,text/csv"
+              disabled={importPending}
+              onChange={handleImportCsv}
+            />
+          </label>
         </div>
       </div>
+      {importMessage ? <div className="import-status success" role="status">{importMessage}</div> : null}
+      {importError ? <div className="import-status error" role="alert">{importError}</div> : null}
       <LeadFilters
         activeStatus={activeFilters.status}
         counts={data.counts}

@@ -1,9 +1,8 @@
 import { getLeadFilterCounts, getLeadListPage } from "@/db/queries";
 import type { LeadListRow } from "@/components/LeadQuickPanel";
 import { LeadsWorkbench } from "@/components/LeadsWorkbench";
+import { getDashboardTenantId } from "@/auth/tenant";
 import { parseLeadListParams } from "@/lib/lead-list-params";
-
-const tenantId = process.env.TENANT_ID ?? "10000000-0000-0000-0000-000000000001";
 
 function getLeadLoadErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -27,8 +26,15 @@ export default async function LeadsPage({
   let page = requestedPage;
   let totalPages = 1;
   let pageSize = 25;
+  let tenantId: string;
 
   try {
+    const resolvedTenantId = getDashboardTenantId();
+    if (!resolvedTenantId) {
+      throw new Error("Dashboard tenant not configured");
+    }
+    tenantId = resolvedTenantId;
+
     const [filterCounts, leadPage] = await Promise.all([
       getLeadFilterCounts({ tenantId }),
       getLeadListPage({
