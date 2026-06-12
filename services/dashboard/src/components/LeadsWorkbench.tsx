@@ -26,6 +26,8 @@ type ImportCsvResponse = {
   error?: string;
 };
 
+const defaultMaxCsvUploadMegabytes = 50;
+
 function buildLeadListQuery(filters: LeadListFilters, page: number) {
   const query = new URLSearchParams();
   if (filters.status) query.set("status", filters.status);
@@ -41,6 +43,26 @@ function buildSubtitle(total: number, allCount: number) {
   return total === allCount
     ? `${allCount.toLocaleString()} contacts`
     : `${total.toLocaleString()} of ${allCount.toLocaleString()} contacts`;
+}
+
+function readMaxCsvUploadMegabytes() {
+  const configured = process.env.NEXT_PUBLIC_DASHBOARD_MAX_CSV_UPLOAD_MB;
+  if (!configured) return defaultMaxCsvUploadMegabytes;
+
+  const value = Number(configured);
+  return Number.isFinite(value) && value > 0 ? value : defaultMaxCsvUploadMegabytes;
+}
+
+function formatUploadLimitMegabytes(megabytes: number) {
+  if (Number.isInteger(megabytes)) {
+    return String(megabytes);
+  }
+
+  return megabytes.toFixed(1).replace(/\.0$/, "");
+}
+
+function maxCsvUploadMessage(maxCsvUploadMegabytes = readMaxCsvUploadMegabytes()) {
+  return `CSV file must be ${formatUploadLimitMegabytes(maxCsvUploadMegabytes)}MB or smaller`;
 }
 
 function LeadPagination({
@@ -149,9 +171,19 @@ export function LeadsWorkbench({
     const file = input.files?.[0];
     if (!file) return;
 
-    setImportPending(true);
     setImportMessage(null);
     setImportError(null);
+
+    const maxCsvUploadMegabytes = readMaxCsvUploadMegabytes();
+    const maxCsvUploadBytes = maxCsvUploadMegabytes * 1024 * 1024;
+
+    if (file.size > maxCsvUploadBytes) {
+      setImportError(maxCsvUploadMessage(maxCsvUploadMegabytes));
+      input.value = "";
+      return;
+    }
+
+    setImportPending(true);
 
     try {
       const formData = new FormData();
@@ -164,6 +196,9 @@ export function LeadsWorkbench({
       const body = (await response.json().catch(() => ({}))) as ImportCsvResponse;
 
       if (!response.ok) {
+        if (response.status === 413 && !body.error) {
+          throw new Error(maxCsvUploadMessage(maxCsvUploadMegabytes));
+        }
         throw new Error(body.error || `Failed to queue import: ${response.status}`);
       }
 

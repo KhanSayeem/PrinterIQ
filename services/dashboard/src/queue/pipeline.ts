@@ -133,3 +133,28 @@ export async function enqueueIngestCsvJob(input: IngestCsvJobInput): Promise<Que
     }
   }
 }
+
+export async function hasActiveIngestCsvJob(tenantId: string) {
+  const queue = createPipelineQueue();
+  const jobId = importJobId(tenantId);
+
+  try {
+    const existingJob = await queue.getJob(jobId);
+    if (existingJob) {
+      const state = await existingJob.getState();
+      if (activeImportStates.has(state)) {
+        return true;
+      }
+    }
+
+    return hasRawTenantImportRetry(queue, tenantId);
+  } finally {
+    try {
+      await queue.close();
+    } catch (error) {
+      console.error("Failed to close pipeline queue", {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+}

@@ -70,6 +70,7 @@ describe("LeadsWorkbench", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("selects rows and closes the quick panel without navigating", () => {
@@ -170,6 +171,70 @@ describe("LeadsWorkbench", () => {
     await waitFor(() => {
       expect(screen.getByText("Upload an Apollo CSV file")).toBeInTheDocument();
     });
+  });
+
+  it("rejects a locally oversized CSV before calling the import API", async () => {
+    vi.stubEnv("NEXT_PUBLIC_DASHBOARD_MAX_CSV_UPLOAD_MB", "1");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByLabelText("Import CSV"), {
+      target: {
+        files: [
+          new File([new Uint8Array(1024 * 1024 + 1)], "apollo.csv", {
+            type: "text/csv",
+          }),
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("CSV file must be 1MB or smaller")).toBeInTheDocument();
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a clear size message for non-JSON 413 upload responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 413,
+      json: async () => {
+        throw new SyntaxError("Unexpected token '<'");
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByLabelText("Import CSV"), {
+      target: { files: [new File(["Email\nlead@example.com\n"], "apollo.csv", { type: "text/csv" })] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("CSV file must be 50MB or smaller")).toBeInTheDocument();
+    });
+  });
+
+  it("shows the API message for JSON 413 upload responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 413,
+      json: async () => ({ error: "CSV file must be 12MB or smaller" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByLabelText("Import CSV"), {
+      target: { files: [new File(["Email\nlead@example.com\n"], "apollo.csv", { type: "text/csv" })] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("CSV file must be 12MB or smaller")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("CSV file must be 50MB or smaller")).not.toBeInTheDocument();
   });
 
   it("shows a pending state immediately when a filter pill is clicked, then swaps in fetched rows", async () => {

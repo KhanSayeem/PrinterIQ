@@ -5,13 +5,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { isAuthorizedOperator } from "@/auth/operators";
 import { createSupabaseServerClient } from "@/auth/server";
 import { getDashboardTenantId } from "@/auth/tenant";
-import { enqueueIngestCsvJob } from "@/queue/pipeline";
+import { enqueueIngestCsvJob, hasActiveIngestCsvJob } from "@/queue/pipeline";
 
 export const runtime = "nodejs";
 
-const maxCsvUploadBytes = 10 * 1024 * 1024;
+const defaultMaxCsvUploadBytes = 50 * 1024 * 1024;
+const maxAllowedCsvUploadBytes = 75 * 1024 * 1024;
+const maxMultipartOverheadBytes = 1024 * 1024;
 const maxCsvFileNameLength = 120;
-const maxCsvUploadMessage = "CSV file must be 10MB or smaller";
 const contentLengthRequiredMessage = "Content-Length header is required";
 
 function uploadRoot() {
@@ -39,6 +40,36 @@ function toPathSafeCsvFileName(fileName: string) {
 
 function isCsvFileName(fileName: string) {
   return fileName.toLowerCase().endsWith(".csv");
+}
+
+function readMaxCsvUploadBytes() {
+  const configured = process.env.DASHBOARD_MAX_CSV_UPLOAD_BYTES;
+  if (!configured) return defaultMaxCsvUploadBytes;
+  if (!/^[1-9][0-9]*$/.test(configured)) return defaultMaxCsvUploadBytes;
+
+  const value = Number(configured);
+  if (!Number.isSafeInteger(value) || value > maxAllowedCsvUploadBytes) {
+    return defaultMaxCsvUploadBytes;
+  }
+
+  return value;
+}
+
+function maxRequestUploadBytes(maxCsvUploadBytes: number) {
+  return maxCsvUploadBytes + maxMultipartOverheadBytes;
+}
+
+function formatUploadLimitMegabytes(bytes: number) {
+  const megabytes = bytes / (1024 * 1024);
+  if (Number.isInteger(megabytes)) {
+    return String(megabytes);
+  }
+
+  return megabytes.toFixed(1).replace(/\.0$/, "");
+}
+
+function maxCsvUploadMessage(maxCsvUploadBytes: number) {
+  return `CSV file must be ${formatUploadLimitMegabytes(maxCsvUploadBytes)}MB or smaller`;
 }
 
 function isUploadedFile(value: FormDataEntryValue | null): value is File {
@@ -73,6 +104,7 @@ async function cleanupUploadedFile(filePath: string) {
 }
 
 export async function POST(request: NextRequest) {
+  const maxCsvUploadBytes = readMaxCsvUploadBytes();
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
@@ -96,8 +128,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: contentLengthRequiredMessage }, { status: 411 });
   }
 
-  if (contentLength > maxCsvUploadBytes) {
-    return NextResponse.json({ error: maxCsvUploadMessage }, { status: 413 });
+  if (contentLength > maxRequestUploadBytes(maxCsvUploadBytes)) {
+    return NextResponse.json({ error: maxCsvUploadMessage(maxCsvUploadBytes) }, { status: 413 });
+  }
+
+  try {
+    if (await hasActiveIngestCsvJob(tenantId)) {
+      return NextResponse.json(
+        {
+          error: "An import is already queued or running",
+          jobId: `import-csv-${tenantId}`,
+        },
+        { status: 409 },
+      );
+    }
+  } catch (error) {
+    console.error("Failed to check active CSV import", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    return NextResponse.json({ error: "Failed to queue import" }, { status: 500 });
   }
 
   let writtenFilePath: string | null = null;
@@ -111,7 +160,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (file.size > maxCsvUploadBytes) {
-      return NextResponse.json({ error: maxCsvUploadMessage }, { status: 413 });
+      return NextResponse.json({ error: maxCsvUploadMessage(maxCsvUploadBytes) }, { status: 413 });
     }
 
     const sourceFile = normalizeCsvFileName(file.name);
