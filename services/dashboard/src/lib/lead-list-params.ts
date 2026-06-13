@@ -4,6 +4,7 @@ export type LeadListFilterParams = {
   status?: string;
   state?: string;
   tradeType?: string;
+  search?: string;
   scoreMin?: number;
   scoreMax?: number;
   page: number;
@@ -15,11 +16,17 @@ function asNumber(value: string | undefined) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function asSearch(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
 export function parseLeadListParams(params: LeadListSearchParams): LeadListFilterParams {
   return {
     status: params.status || undefined,
     state: params.state || undefined,
     tradeType: params.trade_type || undefined,
+    search: asSearch(params.q ?? params.search),
     scoreMin: asNumber(params.score_min),
     scoreMax: asNumber(params.score_max),
     page: Math.max(asNumber(params.page) ?? 1, 1),

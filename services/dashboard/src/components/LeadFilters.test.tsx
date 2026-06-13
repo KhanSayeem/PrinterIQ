@@ -7,8 +7,10 @@ describe("LeadFilters", () => {
     render(
       <LeadFilters
         activeStatus="qualified"
+        searchValue=""
         counts={{ all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 }}
         onSelect={() => {}}
+        onSearchChange={() => {}}
       />,
     );
 
@@ -27,8 +29,10 @@ describe("LeadFilters", () => {
     render(
       <LeadFilters
         activeStatus={undefined}
+        searchValue=""
         counts={{ all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 }}
         onSelect={onSelect}
+        onSearchChange={() => {}}
       />,
     );
 
@@ -43,12 +47,33 @@ describe("LeadFilters", () => {
     render(
       <LeadFilters
         activeStatus={undefined}
+        searchValue=""
         counts={{ all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 }}
         onSelect={() => {}}
+        onSearchChange={() => {}}
         pending
       />,
     );
 
     expect(screen.getByText("Qualified").closest("button")).toBeDisabled();
+  });
+
+  it("shows the current search value and reports search changes", () => {
+    const onSearchChange = vi.fn();
+    render(
+      <LeadFilters
+        activeStatus={undefined}
+        searchValue="kurt"
+        counts={{ all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 }}
+        onSelect={() => {}}
+        onSearchChange={onSearchChange}
+      />,
+    );
+
+    const input = screen.getByPlaceholderText("Search leads");
+    expect(input).toHaveValue("kurt");
+
+    fireEvent.change(input, { target: { value: "coolcats" } });
+    expect(onSearchChange).toHaveBeenCalledWith("coolcats");
   });
 });

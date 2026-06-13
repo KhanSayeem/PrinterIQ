@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { getDb } from "./client";
 import {
@@ -37,6 +37,7 @@ export type LeadListFilters = {
   status?: string;
   state?: string;
   tradeType?: string;
+  search?: string;
   scoreMin?: number;
   scoreMax?: number;
   page?: number;
@@ -219,12 +220,27 @@ export function normalizeLeadListPageMeta({
 }
 
 function buildLeadListWhere(filters: LeadListFilters) {
+  const search = filters.search?.trim();
+  const searchPattern = search ? `%${search}%` : undefined;
+
   return [
     eq(leads.tenantId, filters.tenantId),
     eq(leads.isDeleted, false),
     filters.status ? eq(leads.status, filters.status) : undefined,
     filters.state ? eq(leads.state, filters.state) : undefined,
     filters.tradeType ? eq(leads.vertical, filters.tradeType) : undefined,
+    searchPattern
+      ? or(
+          ilike(leads.firstName, searchPattern),
+          ilike(leads.lastName, searchPattern),
+          sql`${leads.firstName} || ' ' || ${leads.lastName} ilike ${searchPattern}`,
+          ilike(leads.email, searchPattern),
+          ilike(leads.businessName, searchPattern),
+          ilike(leads.websiteUrl, searchPattern),
+          ilike(leads.city, searchPattern),
+          ilike(leads.state, searchPattern),
+        )
+      : undefined,
     filters.scoreMin === undefined ? undefined : gte(qualifications.score, filters.scoreMin),
     filters.scoreMax === undefined ? undefined : lte(qualifications.score, filters.scoreMax),
   ].filter(Boolean);

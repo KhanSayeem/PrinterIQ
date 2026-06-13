@@ -1,7 +1,7 @@
 "use client";
 
 import { Upload } from "lucide-react";
-import { type ChangeEvent, useMemo, useState } from "react";
+import { type ChangeEvent, useMemo, useRef, useState } from "react";
 import type { LeadFilterCounts } from "@/db/queries";
 import type { LeadListFilterParams } from "@/lib/lead-list-params";
 import { LeadFilters } from "./LeadFilters";
@@ -33,10 +33,15 @@ function buildLeadListQuery(filters: LeadListFilters, page: number) {
   if (filters.status) query.set("status", filters.status);
   if (filters.state) query.set("state", filters.state);
   if (filters.tradeType) query.set("trade_type", filters.tradeType);
+  if (filters.search) query.set("q", filters.search);
   if (filters.scoreMin !== undefined) query.set("score_min", String(filters.scoreMin));
   if (filters.scoreMax !== undefined) query.set("score_max", String(filters.scoreMax));
   if (page > 1) query.set("page", String(page));
   return query;
+}
+
+function normalizeSearch(value: string) {
+  return value.trim() || undefined;
 }
 
 function buildSubtitle(total: number, allCount: number) {
@@ -128,12 +133,14 @@ export function LeadsWorkbench({
 }) {
   const [data, setData] = useState<LeadListResponse>({ rows: leads, counts, total, page, totalPages, pageSize });
   const [activeFilters, setActiveFilters] = useState<LeadListFilters>(filters);
+  const [searchInput, setSearchInput] = useState(filters.search ?? "");
   const [pending, setPending] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(leads[0]?.id ?? null);
+  const latestLeadRequestId = useRef(0);
 
   const selectedLead = useMemo(
     () => data.rows.find((lead) => lead.id === selectedLeadId) ?? null,
@@ -141,6 +148,8 @@ export function LeadsWorkbench({
   );
 
   async function loadPage(nextFilters: LeadListFilters, nextPage: number) {
+    const requestId = latestLeadRequestId.current + 1;
+    latestLeadRequestId.current = requestId;
     setPending(true);
     setLoadError(null);
 
@@ -153,6 +162,8 @@ export function LeadsWorkbench({
       }
 
       const nextData = (await response.json()) as LeadListResponse;
+      if (requestId !== latestLeadRequestId.current) return;
+
       setData(nextData);
       setSelectedLeadId((currentLeadId) =>
         nextData.rows.some((lead) => lead.id === currentLeadId) ? currentLeadId : (nextData.rows[0]?.id ?? null),
@@ -160,9 +171,12 @@ export function LeadsWorkbench({
       setActiveFilters(nextFilters);
       window.history.replaceState(null, "", query.toString() ? `/leads?${query}` : "/leads");
     } catch {
+      if (requestId !== latestLeadRequestId.current) return;
       setLoadError("Failed to refresh leads. Try again in a moment.");
     } finally {
-      setPending(false);
+      if (requestId === latestLeadRequestId.current) {
+        setPending(false);
+      }
     }
   }
 
@@ -238,9 +252,14 @@ export function LeadsWorkbench({
       {importError ? <div className="import-status error" role="alert">{importError}</div> : null}
       <LeadFilters
         activeStatus={activeFilters.status}
+        searchValue={searchInput}
         counts={data.counts}
         pending={pending}
-        onSelect={(status) => loadPage({ ...activeFilters, status }, 1)}
+        onSelect={(status) => loadPage({ ...activeFilters, search: normalizeSearch(searchInput), status }, 1)}
+        onSearchChange={(search) => {
+          setSearchInput(search);
+          void loadPage({ ...activeFilters, search: normalizeSearch(search) }, 1);
+        }}
       />
       <div className="leads-screen">
         <section className={`leads-list${pending ? " is-pending" : ""}`} aria-busy={pending}>

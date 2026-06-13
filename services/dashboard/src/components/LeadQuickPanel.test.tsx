@@ -102,7 +102,7 @@ describe("LeadQuickPanel", () => {
     );
 
     expect(screen.getByText("Note")).toHaveClass("dp-message-badge");
-    expect(screen.getByText("27 May, 08:15 am")).toHaveClass("dp-message-time");
+    expect(screen.getByText("27 May, 12:15 pm")).toHaveClass("dp-message-time");
     expect(screen.getByText("Asked to follow up next week.").tagName).toBe("BLOCKQUOTE");
   });
 });

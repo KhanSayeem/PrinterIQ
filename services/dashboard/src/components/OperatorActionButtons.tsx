@@ -120,6 +120,7 @@ export function OperatorActionButtons({
           onClick={() => {
             if (window.confirm("Are you sure? This will stop all automated sends for this lead.")) {
               const formData = new FormData();
+              formData.set("tenantId", tenantId);
               formData.set("leadId", leadId);
               run(actions.pauseLead, formData);
             }
@@ -135,6 +136,7 @@ export function OperatorActionButtons({
           className="operator-action-drawer"
           action={(formData) => run(actions.addNote, formData, () => setNoteBody(""))}
         >
+          <input type="hidden" name="tenantId" value={tenantId} />
           <input type="hidden" name="leadId" value={leadId} />
           <div className="operator-drawer-header">
             <label className="form-label" htmlFor="operator-note">Add note</label>
@@ -158,6 +160,7 @@ export function OperatorActionButtons({
           className="operator-action-drawer"
           action={(formData) => run(actions.overrideReply, formData, () => setReplyBody(""))}
         >
+          <input type="hidden" name="tenantId" value={tenantId} />
           <input type="hidden" name="leadId" value={leadId} />
           <div className="operator-drawer-header">
             <label className="form-label" htmlFor="operator-reply">Override reply</label>
