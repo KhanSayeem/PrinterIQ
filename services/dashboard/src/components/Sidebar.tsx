@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, CreditCard, ListChecks, Pin, Users } from "lucide-react";
+import { BarChart3, CreditCard, ListChecks, Pin, Users, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -11,20 +11,35 @@ const items = [
   { href: "/revenue", label: "Revenue", icon: CreditCard },
 ];
 
-export function Sidebar() {
+export function Sidebar({
+  mobileOpen = false,
+  onMobileClose,
+}: {
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+}) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(false);
   const [pinned, setPinned] = useState(false);
 
   return (
     <aside
-      className={`sidebar ${expanded || pinned ? "expanded" : ""} ${pinned ? "pinned" : ""}`}
+      className={`sidebar ${expanded || pinned ? "expanded" : ""} ${pinned ? "pinned" : ""} ${mobileOpen ? "mobile-open open" : ""}`}
+      aria-label="Mobile dashboard navigation"
       onMouseEnter={() => setExpanded(true)}
       onMouseLeave={() => setExpanded(false)}
     >
       <div className="sidebar-top">
         <div className="logo-mark">PI</div>
         <div className="logo-name">PrinterIQ</div>
+        <button
+          type="button"
+          className="mobile-sidebar-close"
+          aria-label="Close navigation"
+          onClick={onMobileClose}
+        >
+          <X size={16} aria-hidden="true" />
+        </button>
         <button
           type="button"
           className={`pin-btn ${pinned ? "active" : ""}`}
@@ -40,7 +55,13 @@ export function Sidebar() {
           const Icon = item.icon;
           const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           return (
-            <Link key={item.href} href={item.href} className={`nav-item ${active ? "active" : ""}`} title={item.label}>
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`nav-item ${active ? "active" : ""}`}
+              title={item.label}
+              onClick={onMobileClose}
+            >
               <Icon size={16} />
               <span className="nav-label-text">{item.label}</span>
               {item.href === "/leads" ? <span className="nav-badge">5</span> : null}
