@@ -143,7 +143,7 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .score-track { width: 34px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
 .score-fill { height: 100%; background: #059669; }
 .detail-panel { border-left: 1px solid var(--border); background: var(--bg-card); display: flex; flex-direction: column; min-width: 0; }
-.sticky-detail-panel { position: sticky; top: 48px; height: calc(100vh - 48px); max-height: calc(100vh - 48px); align-self: start; }
+.sticky-detail-panel { position: fixed; top: 48px; right: 0; width: 268px; height: calc(100vh - 48px); max-height: calc(100vh - 48px); align-self: start; z-index: 5; }
 .dp-header { padding: 16px 16px 14px; border-bottom: 1px solid var(--border); }
 .dp-header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .dp-header-actions { display: flex; gap: 4px; flex-shrink: 0; }
