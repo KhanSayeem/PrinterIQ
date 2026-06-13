@@ -76,8 +76,11 @@ describe("LeadsWorkbench", () => {
   it("selects rows and closes the quick panel without navigating", () => {
     render(<LeadsWorkbench {...baseProps} />);
 
+    expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
+
     fireEvent.click(screen.getByRole("button", { name: "Preview Maya Jones" }));
 
+    expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
     expect(screen.getByText("MJ")).toHaveClass("dp-avatar");
     expect(screen.getByText("MJ Electrical · Melbourne")).toBeInTheDocument();
     expect(screen.getByText("Can you send details?")).toBeInTheDocument();
