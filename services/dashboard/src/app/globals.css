@@ -195,9 +195,12 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .lead-detail-name { font-size: 22px; font-weight: 500; letter-spacing: -0.04em; }
 .lead-detail-company { font-size: 13px; color: var(--text-secondary); margin-top: 3px; }
 .lead-detail-badges, .lead-detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.lead-detail-action-metadata, .operator-action-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.operator-action-controls .btn { white-space: nowrap; }
 .operator-actions-panel { display: grid; gap: 10px; min-width: min(460px, 100%); }
 .operator-actions-panel.compact { min-width: 0; padding: 0; border-bottom: 0; }
 .lead-detail-actions.compact { gap: 6px; margin-top: 0; flex-wrap: nowrap; }
+.operator-action-controls.compact { gap: 6px; flex-wrap: nowrap; width: 100%; }
 .operator-compact-btn { height: 34px; padding: 0 9px; justify-content: center; flex: 1 1 0; min-width: 0; font-size: 11px; }
 .operator-compact-btn svg { width: 18px; height: 18px; }
 .operator-action-fields { display: grid; gap: 6px; grid-template-columns: repeat(2, minmax(180px, 1fr)); align-items: start; }
@@ -379,6 +382,12 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
   .lead-detail-sticky-header { top: 48px; padding: 12px 16px; }
   .lead-detail-header-row { gap: 12px; }
   .lead-detail-name { font-size: 19px; }
+  .operator-actions-panel { width: 100%; min-width: 0; }
+  .lead-detail-actions:not(.compact) { width: 100%; align-items: flex-start; flex-direction: column; gap: 8px; }
+  .lead-detail-action-metadata { width: 100%; }
+  .operator-action-controls:not(.compact) { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .operator-action-controls:not(.compact) .btn { min-width: 0; min-height: 40px; justify-content: center; padding: 6px 6px; font-size: 11px; line-height: 1.15; text-align: center; white-space: normal; gap: 4px; }
+  .operator-action-controls:not(.compact) .btn svg { flex: 0 0 14px; }
   .operator-action-fields { grid-template-columns: 1fr; }
   .operator-textarea { grid-row: auto; }
   .lead-tabs { overflow-x: auto; padding: 0 16px; }
