@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LeadsWorkbench } from "./LeadsWorkbench";
 import type { LeadListRow } from "./LeadQuickPanel";
@@ -62,9 +63,35 @@ const baseProps = {
   pageSize: 2,
 };
 
+function mockLeadLayout(matchesDesktop: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string) => ({
+      matches: matchesDesktop,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
+
+function getTablePreviewButton(name: string) {
+  const button = document.querySelector<HTMLButtonElement>(`.table-preview-btn[aria-label='Preview ${name}']`);
+  if (!button) {
+    throw new Error(`Could not find table preview button for ${name}`);
+  }
+
+  return button;
+}
+
 describe("LeadsWorkbench", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
+    mockLeadLayout(true);
     window.history.replaceState(null, "", "/leads");
   });
 
@@ -73,13 +100,15 @@ describe("LeadsWorkbench", () => {
     vi.unstubAllEnvs();
   });
 
-  it("selects rows and closes the quick panel without navigating", () => {
+  it("selects rows and closes the quick panel without navigating", async () => {
     render(<LeadsWorkbench {...baseProps} />);
 
-    expect(document.querySelector(".leads-screen")).toHaveClass("has-detail-panel");
-    expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
+    await waitFor(() => {
+      expect(document.querySelector(".leads-screen")).toHaveClass("has-detail-panel");
+      expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Preview Maya Jones" }));
+    fireEvent.click(getTablePreviewButton("Maya Jones"));
 
     expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
     expect(screen.getByText("MJ")).toHaveClass("dp-avatar");
@@ -91,8 +120,47 @@ describe("LeadsWorkbench", () => {
     expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
     expect(screen.queryByText("Select a lead to preview details.")).not.toBeInTheDocument();
     expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
-    const mayaRow = screen.getByRole("button", { name: "Preview Maya Jones" }).closest("tr");
+    const mayaRow = getTablePreviewButton("Maya Jones").closest("tr");
     expect(mayaRow).not.toHaveClass("selected");
+  });
+
+  it("does not reserve the side-panel column until a lead is selected", () => {
+    render(<LeadsWorkbench {...baseProps} leads={[]} total={0} totalPages={1} />);
+
+    expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
+    expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
+  });
+
+  it("does not render the quick panel in the initial HTML", () => {
+    const html = renderToString(<LeadsWorkbench {...baseProps} />);
+
+    expect(html).not.toContain("Lead quick panel");
+    expect(html).not.toContain("has-detail-panel");
+  });
+
+  it("opens the quick panel from a mobile lead card without reserving it by default", () => {
+    mockLeadLayout(false);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    const darrenCard = document.querySelector<HTMLButtonElement>(".lead-card[aria-label='Preview Darren Smith']");
+
+    expect(darrenCard).not.toBeNull();
+    expect(darrenCard).not.toHaveClass("selected");
+    expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
+    expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
+
+    fireEvent.click(darrenCard!);
+
+    expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
+    expect(darrenCard).toHaveClass("selected");
+    expect(document.querySelector(".leads-screen")).toHaveClass("has-detail-panel");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close quick panel" }));
+
+    expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
+    expect(darrenCard).not.toHaveClass("selected");
+    expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
   });
 
   it("renders the no-leads empty state outside the panel", () => {
@@ -133,7 +201,7 @@ describe("LeadsWorkbench", () => {
     expect(screen.getByText("5 contacts")).toBeInTheDocument();
     expect(screen.getByText("Page 1 of 2 · 5 contacts")).toBeInTheDocument();
     expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Preview Maya Jones" })).toBeInTheDocument();
+    expect(getTablePreviewButton("Maya Jones")).toBeInTheDocument();
     expect(screen.getAllByText("MJ Electrical").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/import-csv",
@@ -296,7 +364,7 @@ describe("LeadsWorkbench", () => {
 
     expect(screen.queryByText("Select a lead to preview details.")).not.toBeInTheDocument();
     expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Preview Darren Smith" }).closest("tr")).toHaveClass("selected");
+    expect(getTablePreviewButton("Darren Smith").closest("tr")).toHaveClass("selected");
   });
 
   it("requests the next page without navigation when pagination is clicked", async () => {

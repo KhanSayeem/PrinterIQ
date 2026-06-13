@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { LeadTable } from "./LeadTable";
 
@@ -42,7 +42,9 @@ describe("LeadTable", () => {
     expect(screen.queryByRole("columnheader", { name: "Website" })).not.toBeInTheDocument();
   });
 
-  it("renders mobile lead cards with a direct detail link", () => {
+  it("renders mobile lead cards as in-place preview buttons", () => {
+    const selectedLeadIds: string[] = [];
+
     render(
       <LeadTable
         leads={[
@@ -67,19 +69,23 @@ describe("LeadTable", () => {
           },
         ]}
         selectedLeadId="lead-1"
-        onSelectLead={() => undefined}
+        onSelectLead={(leadId) => selectedLeadIds.push(leadId)}
       />,
     );
 
     const cards = screen.getByRole("list", { name: "Lead cards" });
     const card = within(cards).getByRole("listitem", { name: "Darren Smith" });
 
-    const cardLink = within(card).getByRole("link", { name: "Open Darren Smith" });
+    const cardButton = within(card).getByRole("button", { name: "Preview Darren Smith" });
 
-    expect(cardLink).toHaveClass("lead-card");
-    expect(cardLink).toHaveAttribute("href", "/leads/lead-1");
-    expect(within(cardLink).getByText("Aqua Options")).toBeInTheDocument();
-    expect(within(cardLink).getByText("NSW")).toBeInTheDocument();
-    expect(within(cardLink).getByText("Score 78")).toBeInTheDocument();
+    expect(cardButton).toHaveClass("lead-card");
+    expect(cardButton).not.toHaveAttribute("href");
+    expect(within(cardButton).getByText("Aqua Options")).toBeInTheDocument();
+    expect(within(cardButton).getByText("NSW")).toBeInTheDocument();
+    expect(within(cardButton).getByText("Score 78")).toBeInTheDocument();
+
+    fireEvent.click(cardButton);
+
+    expect(selectedLeadIds).toEqual(["lead-1"]);
   });
 });
