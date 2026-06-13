@@ -55,6 +55,7 @@ button, input { font-family: var(--font); }
 .user-avatar { width: 28px; height: 28px; display: grid; place-items: center; background: var(--bg-active); border: 1px solid var(--border); border-radius: 50%; font-size: 11px; font-weight: 500; color: var(--text-secondary); flex-shrink: 0; }
 .user-name { font-size: 12px; font-weight: 500; }
 .user-role { font-size: 10px; color: var(--text-tertiary); }
+.mobile-sidebar-close, .mobile-sidebar-backdrop, .mobile-nav-toggle { display: none; }
 .main { min-height: 100vh; margin-left: var(--sidebar-collapsed); transition: margin-left var(--transition); display: flex; flex-direction: column; }
 .sidebar.expanded ~ .main, .sidebar.pinned ~ .main { margin-left: var(--sidebar-expanded); }
 .topbar { height: 48px; border-bottom: 1px solid var(--border); background: var(--bg-card); display: flex; align-items: center; padding: 0 24px 0 28px; position: sticky; top: 0; z-index: 10; }
@@ -351,8 +352,16 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 @keyframes pulse { 50% { opacity: 0.45; } }
 @media (max-width: 860px) {
   .main, .sidebar.expanded ~ .main, .sidebar.pinned ~ .main { margin-left: 0; }
-  .sidebar { display: none; }
-  .topbar { padding: 0 14px; }
+  .sidebar { display: flex; width: min(82vw, 280px); transform: translateX(-100%); visibility: hidden; box-shadow: 18px 0 36px rgba(0,0,0,0.12); transition: transform var(--transition), visibility var(--transition); }
+  .sidebar.mobile-open { transform: translateX(0); visibility: visible; }
+  .sidebar .logo-name, .sidebar .nav-section-label, .sidebar .nav-label-text, .sidebar .nav-badge, .sidebar .user-info { opacity: 1; transform: translateX(0); }
+  .sidebar .pin-btn { display: none; }
+  .mobile-sidebar-close { margin-left: auto; width: 30px; height: 30px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); color: var(--text-secondary); display: grid; place-items: center; cursor: pointer; }
+  .mobile-sidebar-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+  .mobile-sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 90; border: 0; background: rgba(26,26,24,0.28); }
+  .mobile-nav-toggle { width: 34px; height: 34px; border: 1px solid var(--border); border-radius: var(--radius-md); display: grid; place-items: center; background: var(--bg-card); color: var(--text-secondary); cursor: pointer; flex: 0 0 34px; }
+  .mobile-nav-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+  .topbar { padding: 0 14px; gap: 10px; }
   .topbar-actions { min-width: 0; }
   .topbar-user { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .content { overflow: visible; }
