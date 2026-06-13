@@ -98,7 +98,7 @@ button, input { font-family: var(--font); }
 .login-submit { width: 100%; margin-top: 18px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--accent); color: var(--accent-fg); border: none; font-size: 13px; font-weight: 500; cursor: pointer; }
 .login-submit:disabled { opacity: 0.7; cursor: wait; }
 .login-note { font-size: 11px; color: var(--text-tertiary); text-align: center; margin-top: 16px; }
-.leads-screen { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 268px; min-height: 0; overflow: hidden; }
+.leads-screen { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 268px; align-items: start; min-height: 0; overflow: hidden; }
 .leads-list { min-width: 0; display: flex; flex-direction: column; }
 .leads-list.is-pending { opacity: 0.6; pointer-events: none; transition: opacity 0.1s ease; }
 .filters { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -143,6 +143,7 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .score-track { width: 34px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
 .score-fill { height: 100%; background: #059669; }
 .detail-panel { border-left: 1px solid var(--border); background: var(--bg-card); display: flex; flex-direction: column; min-width: 0; }
+.sticky-detail-panel { position: sticky; top: 48px; height: calc(100vh - 48px); max-height: calc(100vh - 48px); align-self: start; }
 .dp-header { padding: 16px 16px 14px; border-bottom: 1px solid var(--border); }
 .dp-header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .dp-header-actions { display: flex; gap: 4px; flex-shrink: 0; }
