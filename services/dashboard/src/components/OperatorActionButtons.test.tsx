@@ -68,6 +68,17 @@ describe("OperatorActionButtons", () => {
     }
   });
 
+  it("groups full lead actions separately from status and score", () => {
+    renderActions();
+
+    const controls = screen.getByRole("group", { name: "Lead actions" });
+    expect(controls).toContainElement(screen.getByRole("button", { name: "Add note" }));
+    expect(controls).toContainElement(screen.getByRole("button", { name: "Override reply" }));
+    expect(controls).toContainElement(screen.getByRole("button", { name: "Pause lead" }));
+    expect(controls).not.toContainElement(screen.getByText("contacted"));
+    expect(controls).not.toContainElement(screen.getByText("score 72 / 100"));
+  });
+
   it("renders compact labelled controls", () => {
     renderActions({}, { compact: true });
 
