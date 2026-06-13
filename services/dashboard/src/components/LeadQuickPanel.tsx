@@ -53,7 +53,7 @@ type LeadQuickPanelProps = {
 
 export function LeadQuickPanel({ lead, tenantId, actions }: LeadQuickPanelProps) {
   if (!lead) {
-    return <aside className="detail-panel sticky-detail-panel" aria-label="Lead quick panel"><div className="empty-state">Select a lead to preview details.</div></aside>;
+    return null;
   }
 
   return (
@@ -75,7 +75,7 @@ export function LeadQuickPanelWithClose({
   actions?: LeadActions;
 }) {
   if (!lead) {
-    return <LeadQuickPanel lead={null} tenantId={tenantId} actions={actions} />;
+    return null;
   }
 
   return (

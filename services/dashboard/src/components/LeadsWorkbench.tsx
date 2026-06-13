@@ -261,7 +261,7 @@ export function LeadsWorkbench({
           void loadPage({ ...activeFilters, search: normalizeSearch(search) }, 1);
         }}
       />
-      <div className="leads-screen">
+      <div className={`leads-screen${selectedLead ? " has-detail-panel" : ""}`}>
         <section className={`leads-list${pending ? " is-pending" : ""}`} aria-busy={pending}>
           {loadError ? <div className="error-state inline-error" role="alert">{loadError}</div> : null}
           {data.rows.length ? (
@@ -277,7 +277,9 @@ export function LeadsWorkbench({
             onPageChange={(nextPage) => loadPage(activeFilters, nextPage)}
           />
         </section>
-        <LeadQuickPanelWithClose tenantId={tenantId} lead={selectedLead} onClose={() => setSelectedLeadId(null)} />
+        {selectedLead ? (
+          <LeadQuickPanelWithClose tenantId={tenantId} lead={selectedLead} onClose={() => setSelectedLeadId(null)} />
+        ) : null}
       </div>
     </>
   );
