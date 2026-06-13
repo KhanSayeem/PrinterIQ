@@ -68,11 +68,13 @@ export function LeadQuickPanelWithClose({
   tenantId,
   onClose,
   actions,
+  autoFocusClose = false,
 }: {
   lead: LeadListRow | null;
   tenantId: string;
   onClose: () => void;
   actions?: LeadActions;
+  autoFocusClose?: boolean;
 }) {
   if (!lead) {
     return null;
@@ -80,7 +82,13 @@ export function LeadQuickPanelWithClose({
 
   return (
     <aside className="detail-panel sticky-detail-panel" aria-label="Lead quick panel">
-      <LeadQuickPanelContent lead={lead} tenantId={tenantId} actions={actions} onClose={onClose} />
+      <LeadQuickPanelContent
+        lead={lead}
+        tenantId={tenantId}
+        actions={actions}
+        onClose={onClose}
+        autoFocusClose={autoFocusClose}
+      />
     </aside>
   );
 }
@@ -90,11 +98,13 @@ function LeadQuickPanelContent({
   tenantId,
   actions,
   onClose,
+  autoFocusClose = false,
 }: {
   lead: LeadListRow;
   tenantId: string;
   actions?: LeadActions;
   onClose?: () => void;
+  autoFocusClose?: boolean;
 }) {
   return (
     <>
@@ -116,7 +126,13 @@ function LeadQuickPanelContent({
               <ExternalLink size={15} />
             </Link>
             {onClose ? (
-              <button className="dp-icon-btn" type="button" aria-label="Close quick panel" onClick={onClose}>
+              <button
+                className="dp-icon-btn"
+                type="button"
+                aria-label="Close quick panel"
+                autoFocus={autoFocusClose}
+                onClick={onClose}
+              >
                 <X size={15} />
               </button>
             ) : null}

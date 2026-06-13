@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { LeadListRow } from "./LeadQuickPanel";
 import { LeadStatusBadge } from "./LeadStatusBadge";
 
@@ -68,10 +67,11 @@ export function LeadTable({
 
           return (
             <li key={lead.id} aria-label={name}>
-              <Link
+              <button
+                type="button"
                 className={`lead-card${lead.id === selectedLeadId ? " selected" : ""}`}
-                href={`/leads/${lead.id}`}
-                aria-label={`Open ${name}`}
+                aria-label={`Preview ${name}`}
+                onClick={() => onSelectLead(lead.id)}
               >
                 <div className="lead-card-main">
                   <div className="lead-card-title">{name}</div>
@@ -85,9 +85,9 @@ export function LeadTable({
                 </div>
                 <div className="lead-card-footer">
                   <span>{formatLastActivity(lead.updatedAt)}</span>
-                  <span className="lead-card-link" aria-hidden="true">Open</span>
+                  <span className="lead-card-link" aria-hidden="true">Preview</span>
                 </div>
-              </Link>
+              </button>
             </li>
           );
         })}
