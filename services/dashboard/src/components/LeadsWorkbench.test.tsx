@@ -76,6 +76,7 @@ describe("LeadsWorkbench", () => {
   it("selects rows and closes the quick panel without navigating", () => {
     render(<LeadsWorkbench {...baseProps} />);
 
+    expect(document.querySelector(".leads-screen")).toHaveClass("has-detail-panel");
     expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
 
     fireEvent.click(screen.getByRole("button", { name: "Preview Maya Jones" }));
@@ -87,7 +88,9 @@ describe("LeadsWorkbench", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close quick panel" }));
 
-    expect(screen.getByText("Select a lead to preview details.")).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Select a lead to preview details.")).not.toBeInTheDocument();
+    expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
     const mayaRow = screen.getByRole("button", { name: "Preview Maya Jones" }).closest("tr");
     expect(mayaRow).not.toHaveClass("selected");
   });

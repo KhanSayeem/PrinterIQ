@@ -98,7 +98,8 @@ button, input { font-family: var(--font); }
 .login-submit { width: 100%; margin-top: 18px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--accent); color: var(--accent-fg); border: none; font-size: 13px; font-weight: 500; cursor: pointer; }
 .login-submit:disabled { opacity: 0.7; cursor: wait; }
 .login-note { font-size: 11px; color: var(--text-tertiary); text-align: center; margin-top: 16px; }
-.leads-screen { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 268px; align-items: start; min-height: 0; overflow: hidden; }
+.leads-screen { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; min-height: 0; overflow: hidden; }
+.leads-screen.has-detail-panel { grid-template-columns: minmax(0, 1fr) 268px; }
 .leads-list { min-width: 0; display: flex; flex-direction: column; }
 .leads-list.is-pending { opacity: 0.6; pointer-events: none; transition: opacity 0.1s ease; }
 .filters { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -106,7 +107,7 @@ button, input { font-family: var(--font); }
 .pill { font-size: 11px; padding: 4px 11px; border-radius: 99px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); }
 .pill.active { background: var(--text-primary); color: #fff; border-color: var(--text-primary); }
 .filter-count { margin-left: 4px; opacity: 0.55; font-size: 10px; }
-.table-wrap { flex: 1; overflow: auto; }
+.table-wrap { flex: 1; overflow-y: auto; overflow-x: hidden; }
 .lead-card-list { display: none; list-style: none; margin: 0; padding: 12px; gap: 10px; }
 .lead-card { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); }
 .lead-card.selected { border-color: var(--border-strong); background: var(--bg-active); }
