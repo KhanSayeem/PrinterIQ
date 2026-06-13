@@ -7,6 +7,7 @@ describe("parseLeadListParams", () => {
       status: undefined,
       state: undefined,
       tradeType: undefined,
+      search: undefined,
       scoreMin: undefined,
       scoreMax: undefined,
       page: 1,
@@ -19,6 +20,7 @@ describe("parseLeadListParams", () => {
         status: "qualified",
         state: "NSW",
         trade_type: "plumbing",
+        q: "aqua",
         score_min: "40",
         score_max: "80",
         page: "3",
@@ -27,6 +29,7 @@ describe("parseLeadListParams", () => {
       status: "qualified",
       state: "NSW",
       tradeType: "plumbing",
+      search: "aqua",
       scoreMin: 40,
       scoreMax: 80,
       page: 3,
@@ -38,5 +41,10 @@ describe("parseLeadListParams", () => {
 
     expect(result.scoreMin).toBeUndefined();
     expect(result.page).toBe(1);
+  });
+
+  it("trims blank search params and accepts search as an alias", () => {
+    expect(parseLeadListParams({ q: "   " }).search).toBeUndefined();
+    expect(parseLeadListParams({ search: "  kurt  " }).search).toBe("kurt");
   });
 });

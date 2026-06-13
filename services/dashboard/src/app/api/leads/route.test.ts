@@ -89,7 +89,7 @@ describe("GET /api/leads", () => {
     });
 
     const response = await GET(
-      new NextRequest("http://localhost/api/leads?status=qualified&tenantId=evil-tenant&page=2"),
+      new NextRequest("http://localhost/api/leads?status=qualified&q=coolcats&tenantId=evil-tenant&page=2"),
     );
     const body = await response.json();
 
@@ -97,6 +97,7 @@ describe("GET /api/leads", () => {
       expect.objectContaining({
         tenantId: "10000000-0000-0000-0000-000000000001",
         status: "qualified",
+        search: "coolcats",
         page: 2,
         pageSize: 25,
       }),

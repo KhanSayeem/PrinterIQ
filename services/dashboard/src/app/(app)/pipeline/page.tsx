@@ -3,6 +3,8 @@ import { PipelineStagePanel } from "@/components/PipelineStagePanel";
 import { getDashboardTenantId } from "@/auth/tenant";
 import { getPipelineAnalytics } from "@/db/queries";
 
+type PipelineAnalytics = Awaited<ReturnType<typeof getPipelineAnalytics>>;
+
 function getPipelineLoadErrorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message;
@@ -17,6 +19,7 @@ export default async function PipelinePage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
+  let analytics: PipelineAnalytics;
 
   try {
     const tenantId = getDashboardTenantId();
@@ -24,32 +27,7 @@ export default async function PipelinePage({
       throw new Error("Dashboard tenant not configured");
     }
 
-    const analytics = await getPipelineAnalytics({ tenantId, selectedStage: params.stage });
-
-    return (
-      <>
-        <div className="page-header">
-          <div className="page-title-wrap">
-            <div className="page-title">Funnel</div>
-            <div className="page-subtitle">Pipeline stage breakdown · all time</div>
-          </div>
-        </div>
-        {analytics.total === 0 ? (
-          <div className="empty-state">No pipeline data. Import leads first.</div>
-        ) : (
-          <div className="pipeline-workbench">
-            <section className="pipeline-main">
-              <PipelineFunnel
-                stages={analytics.stages}
-                conversions={analytics.conversions}
-                selectedStage={analytics.selectedStage}
-              />
-            </section>
-            <PipelineStagePanel detail={analytics.selectedStageDetail} />
-          </div>
-        )}
-      </>
-    );
+    analytics = await getPipelineAnalytics({ tenantId, selectedStage: params.stage });
   } catch (error) {
     const message = getPipelineLoadErrorMessage(error);
     console.error("Failed to load pipeline data", { message });
@@ -61,4 +39,29 @@ export default async function PipelinePage({
       </div>
     );
   }
+
+  return (
+    <>
+      <div className="page-header">
+        <div className="page-title-wrap">
+          <div className="page-title">Funnel</div>
+          <div className="page-subtitle">Pipeline stage breakdown · all time</div>
+        </div>
+      </div>
+      {analytics.total === 0 ? (
+        <div className="empty-state">No pipeline data. Import leads first.</div>
+      ) : (
+        <div className="pipeline-workbench">
+          <section className="pipeline-main">
+            <PipelineFunnel
+              stages={analytics.stages}
+              conversions={analytics.conversions}
+              selectedStage={analytics.selectedStage}
+            />
+          </section>
+          <PipelineStagePanel detail={analytics.selectedStageDetail} />
+        </div>
+      )}
+    </>
+  );
 }

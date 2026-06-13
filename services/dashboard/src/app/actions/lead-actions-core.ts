@@ -1,10 +1,8 @@
 import type {
   getLatestInstantlyLeadId,
   getLatestInstantlyReplyMetadata,
-  insertOperatorConversation,
   updateLeadStatus,
   assertLeadStatusTransitionAllowed,
-  deleteOperatorNote,
   DeleteOperatorNoteInput,
   OperatorConversationInput,
 } from "@/db/queries";

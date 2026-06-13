@@ -76,7 +76,7 @@ describe("LeadsWorkbench", () => {
   it("selects rows and closes the quick panel without navigating", () => {
     render(<LeadsWorkbench {...baseProps} />);
 
-    fireEvent.click(screen.getByText("MJ Electrical"));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Maya Jones" }));
 
     expect(screen.getByText("MJ")).toHaveClass("dp-avatar");
     expect(screen.getByText("MJ Electrical · Melbourne")).toBeInTheDocument();
@@ -127,8 +127,8 @@ describe("LeadsWorkbench", () => {
     expect(screen.getByText("5 contacts")).toBeInTheDocument();
     expect(screen.getByText("Page 1 of 2 · 5 contacts")).toBeInTheDocument();
     expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
-    expect(screen.getByText("Maya Jones")).toBeInTheDocument();
-    expect(screen.getByText("MJ Electrical")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview Maya Jones" })).toBeInTheDocument();
+    expect(screen.getAllByText("MJ Electrical").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/import-csv",
       expect.objectContaining({
@@ -317,6 +317,69 @@ describe("LeadsWorkbench", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("/api/leads?page=2");
     expect(window.location.search).toBe("?page=2");
+  });
+
+  it("searches leads through the API and keeps the search term in the URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[0]],
+        counts,
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        pageSize: 25,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Search leads"), {
+      target: { value: "coolcats" },
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/leads?q=coolcats");
+    });
+    expect(window.location.search).toBe("?q=coolcats");
+    expect(screen.getByPlaceholderText("Search leads")).toHaveValue("coolcats");
+  });
+
+  it("preserves typed spaces in the search input while trimming the API query", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[0]],
+        counts,
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        pageSize: 25,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Search leads"), {
+      target: { value: "Cool " },
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/leads?q=Cool");
+    });
+    expect(screen.getByPlaceholderText("Search leads")).toHaveValue("Cool ");
+
+    fireEvent.change(screen.getByPlaceholderText("Search leads"), {
+      target: { value: "Cool Cats" },
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/leads?q=Cool+Cats");
+    });
+    expect(screen.getByPlaceholderText("Search leads")).toHaveValue("Cool Cats");
+    expect(window.location.search).toBe("?q=Cool+Cats");
   });
 
   it("shows an error state and keeps the current rows when a filter fetch fails", async () => {

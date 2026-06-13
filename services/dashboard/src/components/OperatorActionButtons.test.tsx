@@ -104,11 +104,13 @@ describe("OperatorActionButtons", () => {
     expect(await screen.findByText("Note saved.")).toBeInTheDocument();
     expect(defaultActions.addNote).toHaveBeenCalled();
     const submittedForm = defaultActions.addNote.mock.calls[0]![1] as FormData;
+    expect(submittedForm.get("tenantId")).toBe(tenantId);
+    expect(submittedForm.get("leadId")).toBe(leadId);
     expect(submittedForm.get("body")).toBe("Called and left voicemail");
   });
 
   it("sends override replies and updates the visible status badge", async () => {
-    renderActions();
+    const actions = renderActions();
 
     fireEvent.click(screen.getByRole("button", { name: "Override reply" }));
     fireEvent.change(screen.getByLabelText("Override reply"), {
@@ -119,6 +121,9 @@ describe("OperatorActionButtons", () => {
     expect(await screen.findByText("Override reply sent.")).toBeInTheDocument();
     expect(screen.getByText("replied")).toHaveClass("s-replied");
     expect(screen.getByText("score 72 / 100")).toBeInTheDocument();
+    const submittedForm = actions.overrideReply.mock.calls[0]![1] as FormData;
+    expect(submittedForm.get("tenantId")).toBe(tenantId);
+    expect(submittedForm.get("leadId")).toBe(leadId);
   });
 
   it("shows N/A instead of score-- when the score is missing", () => {
@@ -150,6 +155,9 @@ describe("OperatorActionButtons", () => {
 
     await waitFor(() => expect(actions.pauseLead).toHaveBeenCalled());
     expect(confirm).toHaveBeenCalledWith("Are you sure? This will stop all automated sends for this lead.");
+    const submittedForm = actions.pauseLead.mock.calls[0]![1] as FormData;
+    expect(submittedForm.get("tenantId")).toBe(tenantId);
+    expect(submittedForm.get("leadId")).toBe(leadId);
     expect(await screen.findByText("Lead paused.")).toBeInTheDocument();
     expect(screen.getByText("archived")).toHaveClass("s-archived");
     confirm.mockRestore();

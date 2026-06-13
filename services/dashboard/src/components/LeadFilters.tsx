@@ -18,18 +18,27 @@ const filters = [
 
 export function LeadFilters({
   activeStatus,
+  searchValue,
   counts,
   pending,
   onSelect,
+  onSearchChange,
 }: {
   activeStatus?: string;
+  searchValue: string;
   counts: LeadFilterCounts;
   pending?: boolean;
   onSelect: (status?: string) => void;
+  onSearchChange: (value: string) => void;
 }) {
   return (
     <div className="filters">
-      <input className="search-input" placeholder="Search leads" readOnly />
+      <input
+        className="search-input"
+        placeholder="Search leads"
+        value={searchValue}
+        onChange={(event) => onSearchChange(event.target.value)}
+      />
       {filters.map((filter) => {
         const active = filter.status ? activeStatus === filter.status : !activeStatus;
         return (

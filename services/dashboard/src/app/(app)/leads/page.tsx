@@ -44,6 +44,7 @@ export default async function LeadsPage({
         tradeType: filters.tradeType,
         scoreMin: filters.scoreMin,
         scoreMax: filters.scoreMax,
+        search: filters.search,
         page: requestedPage,
         pageSize,
       }),
