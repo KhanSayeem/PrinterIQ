@@ -76,13 +76,36 @@ describe("LeadQuickPanel", () => {
     expect(screen.getByText("CONTACT")).toBeInTheDocument();
     expect(screen.getByText("ACTIONS")).toBeInTheDocument();
     expect(screen.getByText("LATEST MESSAGE")).toBeInTheDocument();
-    for (const action of ["note", "reply", "pause"]) {
+    for (const action of ["note", "pause"]) {
       const button = screen.getByRole("button", { name: action });
       expect(button).toBeEnabled();
       expect(button.textContent).toContain(action);
     }
+    expect(screen.getByRole("button", { name: "reply" })).toBeDisabled();
+    expect(screen.getByText("No inbound Instantly reply thread yet.")).toBeInTheDocument();
     expect(screen.queryByText("score 78 / 100")).not.toBeInTheDocument();
     expect(screen.queryByText("qualified")).not.toBeInTheDocument();
+  });
+
+  it("enables compact reply when the latest conversation has Instantly metadata", () => {
+    render(
+      <LeadQuickPanel
+        tenantId="tenant-1"
+        lead={{
+          ...lead,
+          latestConversation: {
+            id: "conversation-1",
+            direction: "inbound",
+            body: "Can you send the details?",
+            instantlyEmailId: "email-uuid-123",
+            instantlyAccountId: "sender@example.com",
+            createdAt: new Date("2026-05-27T02:15:00Z"),
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "reply" })).toBeEnabled();
   });
 
   it("styles the latest message as a note blockquote with right-aligned timestamp", () => {

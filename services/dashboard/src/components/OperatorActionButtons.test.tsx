@@ -121,7 +121,7 @@ describe("OperatorActionButtons", () => {
   });
 
   it("sends override replies and updates the visible status badge", async () => {
-    const actions = renderActions();
+    const actions = renderActions({}, { canOverrideReply: true });
 
     fireEvent.click(screen.getByRole("button", { name: "Override reply" }));
     fireEvent.change(screen.getByLabelText("Override reply"), {
@@ -135,6 +135,29 @@ describe("OperatorActionButtons", () => {
     const submittedForm = actions.overrideReply.mock.calls[0]![1] as FormData;
     expect(submittedForm.get("tenantId")).toBe(tenantId);
     expect(submittedForm.get("leadId")).toBe(leadId);
+  });
+
+  it("disables override replies when the lead has no inbound Instantly thread", () => {
+    renderActions({}, { canOverrideReply: false });
+
+    const reply = screen.getByRole("button", { name: "Override reply" });
+    expect(reply).toBeDisabled();
+    expect(screen.getByText("No inbound Instantly reply thread yet.")).toBeInTheDocument();
+  });
+
+  it("shows a note-specific fallback when add note throws", async () => {
+    const addNote = vi.fn(async (): Promise<LeadActionState> => {
+      throw new Error("password authentication failed for user postgres");
+    });
+    renderActions({ addNote });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    fireEvent.change(screen.getByLabelText("Add note"), {
+      target: { value: "Called and left voicemail" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit note" }));
+
+    expect(await screen.findByText("Note failed. Check dashboard database and tenant configuration.")).toBeInTheDocument();
   });
 
   it("shows N/A instead of score-- when the score is missing", () => {

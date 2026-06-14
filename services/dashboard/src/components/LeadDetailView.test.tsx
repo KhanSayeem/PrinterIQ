@@ -47,6 +47,47 @@ describe("LeadDetailView", () => {
     expect(header.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("enables override replies only when the conversation has Instantly reply metadata", () => {
+    const { unmount } = render(
+      <LeadDetailView
+        tenantId="tenant-1"
+        lead={lead}
+        enrichment={null}
+        qualification={null}
+        conversations={[]}
+        outreachSends={[]}
+        payment={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Override reply" })).toBeDisabled();
+    unmount();
+
+    render(
+      <LeadDetailView
+        tenantId="tenant-1"
+        lead={lead}
+        enrichment={null}
+        qualification={null}
+        conversations={[
+          {
+            id: "inbound-1",
+            direction: "inbound",
+            channel: "email",
+            body: "Can you send details?",
+            createdAt: new Date("2026-05-27T10:00:00.000Z"),
+            instantlyEmailId: "email-uuid-123",
+            instantlyAccountId: "sender@example.com",
+          },
+        ]}
+        outreachSends={[]}
+        payment={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Override reply" })).toBeEnabled();
+  });
+
   it("keeps contact info inside the Overview tab and deletes notes from the Conversation tab", async () => {
     const deleteNote = vi.fn(async () => ({ ok: true, message: "Note deleted.", deletedConversationId: "note-1" }));
 

@@ -234,18 +234,22 @@ describe("dashboard lead queries", () => {
     }).getQuery();
 
     const normalizedSql = query.sql.toLowerCase();
+    const insertTargetList = query.sql.slice(0, query.sql.indexOf("SELECT"));
     expect(normalizedSql).toContain('insert into "conversations"');
     expect(normalizedSql).toContain('select');
     expect(normalizedSql).toContain('"leads"."tenant_id"');
     expect(normalizedSql).toContain('from "leads"');
     expect(query.sql).toContain('"leads"."tenant_id" =');
     expect(query.sql).toContain('"leads"."id" =');
-    expect(query.sql).toContain('"tenant_id"');
-    expect(query.sql).toContain('"lead_id"');
-    expect(query.sql).toContain('"direction"');
-    expect(query.sql).toContain('"channel"');
-    expect(query.sql).toContain('"body"');
-    expect(query.sql).toContain('"operator_override"');
+    expect(normalizedSql).toContain("tenant_id");
+    expect(normalizedSql).toContain("lead_id");
+    expect(normalizedSql).toContain("direction");
+    expect(normalizedSql).toContain("channel");
+    expect(normalizedSql).toContain("body");
+    expect(normalizedSql).toContain("operator_override");
+    expect(insertTargetList).not.toContain('"conversations"."tenant_id"');
+    expect(insertTargetList).not.toContain('"conversations"."lead_id"');
+    expect(insertTargetList).not.toContain('"conversations"."operator_override"');
     expect(normalizedSql).toContain("returning");
     expect(query.params).toContain(tenantId);
     expect(query.params).toContain(leadId);
