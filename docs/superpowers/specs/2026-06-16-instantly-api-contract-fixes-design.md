@@ -14,7 +14,10 @@ contract bugs and one piece of dead/broken code:
 2. `pauseLead` (escalation handoff + dashboard "Pause" button) sends a PATCH
    that Instantly silently no-ops (`status` is read-only).
 3. The pipeline's `instantly_client.py` has unused `pause_lead` /
-   `unsubscribe_lead` methods sharing the same broken PATCH pattern.
+   `unsubscribe_lead` methods. `pause_lead` shares bug 2's broken
+   `{"status": -1}` no-op; `unsubscribe_lead` sends a different body
+   (`{"lt_interest_status": -1}`) but the same broken `PATCH /api/v2/leads/{id}`
+   endpoint shape, and is uncalled either way.
 
 The three Instantly webhooks (`reply_received`, `email_bounced`,
 `lead_unsubscribed`) are already registered and verified against the existing
@@ -114,10 +117,13 @@ as `instantly_lead_id`, so it is always available at both call sites.
   performs the `/leads/move` call; reads `INSTANTLY_PAUSED_LIST_ID` the same
   way it currently reads `apiKey` (constructor option with env fallback,
   throws `Missing env var: INSTANTLY_PAUSED_LIST_ID` if absent).
-- `src/app/actions/lead-actions-core.ts`: `pauseLead` action destructures
-  `{ instantlyLeadId, instantlyCampaignId }` from `getLatestInstantlyLeadId`
-  and passes both to `deps.instantly.pauseLead`. `InstantlyClient` type
-  signature updated to `pauseLead(instantlyLeadId: string, instantlyCampaignId: string): Promise<void>`.
+- `src/app/actions/lead-actions-core.ts`: `pauseLead` action keeps its
+  existing `try/catch` around `getLatestInstantlyLeadId` (which still throws
+  `"Instantly lead id not found for lead"` before returning), then
+  destructures `const { instantlyLeadId, instantlyCampaignId } = await deps.getLatestInstantlyLeadId(identity)`
+  inside the try and passes both to `deps.instantly.pauseLead`.
+  `InstantlyClient` type signature updated to
+  `pauseLead(instantlyLeadId: string, instantlyCampaignId: string): Promise<void>`.
 
 #### Reply agent (`services/reply-agent`)
 
@@ -154,14 +160,19 @@ Write failing tests first, then implement, for each of:
   `_instantly_payload` shape assertions and `_instantly_lead_id` to read
   `created_leads[0].id` (including the missing/empty `created_leads` error
   case).
-- `services/dashboard/src/clients/instantly.test.ts` — new
-  `pauseLead(leadId, campaignId)` test asserting the `/leads/move` body and
+- `services/dashboard/src/clients/instantly.test.ts` — replace the existing
+  "pauses a lead with the Instantly v2 lead status patch" test (asserts the
+  old PATCH body) and the existing missing-API-key test's single-arg
+  `pauseLead("instantly-lead-1")` call with two-arg
+  `pauseLead(leadId, campaignId)` tests asserting the `/leads/move` body and
   the `INSTANTLY_PAUSED_LIST_ID` missing-env error.
 - `services/dashboard/src/db/queries.test.ts` —
   `buildLatestInstantlyLeadIdQuery` / `getLatestInstantlyLeadId` return
   `instantlyCampaignId`.
-- `services/dashboard/src/app/actions/lead-actions.test.ts` — update mocks
-  and assertions for the two-arg `pauseLead`.
+- `services/dashboard/src/app/actions/lead-actions.test.ts` — update the
+  `getLatestInstantlyLeadId` mock (currently `mockResolvedValue("instantly-lead-123")`)
+  to resolve `{ instantlyLeadId, instantlyCampaignId }`, and update the
+  `pauseLead` call assertion to the two-arg form.
 - `services/reply-agent/tests/escalation.test.ts` — new
   `InstantlyHttpClient.pauseLead` move-body test; `escalate()` passes
   `instantly_campaign_id` through.
