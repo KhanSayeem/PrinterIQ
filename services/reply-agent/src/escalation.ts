@@ -23,7 +23,7 @@ export type SmsClient = {
 };
 
 export type InstantlyClient = {
-  pauseLead(instantlyLeadId: string): Promise<void>;
+  pauseLead(instantlyLeadId: string, instantlyCampaignId: string): Promise<void>;
 };
 
 type EscalationLogger = {
@@ -84,20 +84,28 @@ export class InstantlyHttpClient implements InstantlyClient {
   constructor(
     private readonly apiKey = process.env.INSTANTLY_API_KEY,
     private readonly baseUrl = INSTANTLY_BASE_URL,
+    private readonly pausedListId = process.env.INSTANTLY_PAUSED_LIST_ID,
   ) {}
 
-  async pauseLead(instantlyLeadId: string): Promise<void> {
+  async pauseLead(instantlyLeadId: string, instantlyCampaignId: string): Promise<void> {
     if (!this.apiKey) {
       throw new MissingEnvError("Missing env var: INSTANTLY_API_KEY");
     }
+    if (!this.pausedListId) {
+      throw new MissingEnvError("Missing env var: INSTANTLY_PAUSED_LIST_ID");
+    }
 
-    const response = await fetch(`${this.baseUrl}/api/v2/leads/${encodeURIComponent(instantlyLeadId)}`, {
-      method: "PATCH",
+    const response = await fetch(`${this.baseUrl}/api/v2/leads/move`, {
+      method: "POST",
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ status: -1 }),
+      body: JSON.stringify({
+        ids: [instantlyLeadId],
+        campaign: instantlyCampaignId,
+        to_list_id: this.pausedListId,
+      }),
     });
 
     if (!response.ok) {
@@ -122,7 +130,7 @@ export async function escalate(input: EscalationInput, deps: EscalationDeps = {}
   });
 
   try {
-    await instantly.pauseLead(context.instantly_lead_id);
+    await instantly.pauseLead(context.instantly_lead_id, context.instantly_campaign_id);
   } catch {
     logger.error(
       {
