@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
         status: filters.status,
         state: filters.state,
         tradeType: filters.tradeType,
+        search: filters.search,
         scoreMin: filters.scoreMin,
         scoreMax: filters.scoreMax,
         page: filters.page,

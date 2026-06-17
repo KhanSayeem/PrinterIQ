@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LeadsWorkbench } from "./LeadsWorkbench";
 import type { LeadListRow } from "./LeadQuickPanel";
@@ -62,9 +63,35 @@ const baseProps = {
   pageSize: 2,
 };
 
+function mockLeadLayout(matchesDesktop: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string) => ({
+      matches: matchesDesktop,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
+
+function getTablePreviewButton(name: string) {
+  const button = document.querySelector<HTMLButtonElement>(`.table-preview-btn[aria-label='Preview ${name}']`);
+  if (!button) {
+    throw new Error(`Could not find table preview button for ${name}`);
+  }
+
+  return button;
+}
+
 describe("LeadsWorkbench", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
+    mockLeadLayout(true);
     window.history.replaceState(null, "", "/leads");
   });
 
@@ -73,20 +100,67 @@ describe("LeadsWorkbench", () => {
     vi.unstubAllEnvs();
   });
 
-  it("selects rows and closes the quick panel without navigating", () => {
+  it("selects rows and closes the quick panel without navigating", async () => {
     render(<LeadsWorkbench {...baseProps} />);
 
-    fireEvent.click(screen.getByText("MJ Electrical"));
+    await waitFor(() => {
+      expect(document.querySelector(".leads-screen")).toHaveClass("has-detail-panel");
+      expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
+    });
 
+    fireEvent.click(getTablePreviewButton("Maya Jones"));
+
+    expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
     expect(screen.getByText("MJ")).toHaveClass("dp-avatar");
     expect(screen.getByText("MJ Electrical · Melbourne")).toBeInTheDocument();
     expect(screen.getByText("Can you send details?")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close quick panel" }));
 
-    expect(screen.getByText("Select a lead to preview details.")).toBeInTheDocument();
-    const mayaRow = screen.getByRole("button", { name: "Preview Maya Jones" }).closest("tr");
+    expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Select a lead to preview details.")).not.toBeInTheDocument();
+    expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
+    const mayaRow = getTablePreviewButton("Maya Jones").closest("tr");
     expect(mayaRow).not.toHaveClass("selected");
+  });
+
+  it("does not reserve the side-panel column until a lead is selected", () => {
+    render(<LeadsWorkbench {...baseProps} leads={[]} total={0} totalPages={1} />);
+
+    expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
+    expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
+  });
+
+  it("does not render the quick panel in the initial HTML", () => {
+    const html = renderToString(<LeadsWorkbench {...baseProps} />);
+
+    expect(html).not.toContain("Lead quick panel");
+    expect(html).not.toContain("has-detail-panel");
+  });
+
+  it("opens the quick panel from a mobile lead card without reserving it by default", () => {
+    mockLeadLayout(false);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    const darrenCard = document.querySelector<HTMLButtonElement>(".lead-card[aria-label='Preview Darren Smith']");
+
+    expect(darrenCard).not.toBeNull();
+    expect(darrenCard).not.toHaveClass("selected");
+    expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
+    expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
+
+    fireEvent.click(darrenCard!);
+
+    expect(screen.getByRole("complementary", { name: "Lead quick panel" })).toHaveClass("sticky-detail-panel");
+    expect(darrenCard).toHaveClass("selected");
+    expect(document.querySelector(".leads-screen")).toHaveClass("has-detail-panel");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close quick panel" }));
+
+    expect(screen.queryByRole("complementary", { name: "Lead quick panel" })).not.toBeInTheDocument();
+    expect(darrenCard).not.toHaveClass("selected");
+    expect(document.querySelector(".leads-screen")).not.toHaveClass("has-detail-panel");
   });
 
   it("renders the no-leads empty state outside the panel", () => {
@@ -127,8 +201,8 @@ describe("LeadsWorkbench", () => {
     expect(screen.getByText("5 contacts")).toBeInTheDocument();
     expect(screen.getByText("Page 1 of 2 · 5 contacts")).toBeInTheDocument();
     expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
-    expect(screen.getByText("Maya Jones")).toBeInTheDocument();
-    expect(screen.getByText("MJ Electrical")).toBeInTheDocument();
+    expect(getTablePreviewButton("Maya Jones")).toBeInTheDocument();
+    expect(screen.getAllByText("MJ Electrical").length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/import-csv",
       expect.objectContaining({
@@ -290,7 +364,7 @@ describe("LeadsWorkbench", () => {
 
     expect(screen.queryByText("Select a lead to preview details.")).not.toBeInTheDocument();
     expect(screen.getByText("Aqua Options · Sydney")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Preview Darren Smith" }).closest("tr")).toHaveClass("selected");
+    expect(getTablePreviewButton("Darren Smith").closest("tr")).toHaveClass("selected");
   });
 
   it("requests the next page without navigation when pagination is clicked", async () => {
@@ -317,6 +391,69 @@ describe("LeadsWorkbench", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("/api/leads?page=2");
     expect(window.location.search).toBe("?page=2");
+  });
+
+  it("searches leads through the API and keeps the search term in the URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[0]],
+        counts,
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        pageSize: 25,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Search leads"), {
+      target: { value: "coolcats" },
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/leads?q=coolcats");
+    });
+    expect(window.location.search).toBe("?q=coolcats");
+    expect(screen.getByPlaceholderText("Search leads")).toHaveValue("coolcats");
+  });
+
+  it("preserves typed spaces in the search input while trimming the API query", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[0]],
+        counts,
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        pageSize: 25,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Search leads"), {
+      target: { value: "Cool " },
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/leads?q=Cool");
+    });
+    expect(screen.getByPlaceholderText("Search leads")).toHaveValue("Cool ");
+
+    fireEvent.change(screen.getByPlaceholderText("Search leads"), {
+      target: { value: "Cool Cats" },
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/leads?q=Cool+Cats");
+    });
+    expect(screen.getByPlaceholderText("Search leads")).toHaveValue("Cool Cats");
+    expect(window.location.search).toBe("?q=Cool+Cats");
   });
 
   it("shows an error state and keeps the current rows when a filter fetch fails", async () => {

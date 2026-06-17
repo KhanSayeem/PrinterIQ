@@ -28,6 +28,7 @@ export default async function RevenuePage({
 }) {
   const params = await searchParams;
   const period = normalizeRevenuePeriod(params.period);
+  let analytics: RevenueAnalytics;
 
   try {
     const tenantId = getDashboardTenantId();
@@ -35,19 +36,7 @@ export default async function RevenuePage({
       throw new Error("Dashboard tenant not configured");
     }
 
-    const analytics = await getRevenueAnalytics({ tenantId, period });
-
-    return (
-      <>
-        <div className="page-header">
-          <div className="page-title-wrap">
-            <div className="page-title">Revenue</div>
-            <div className="page-subtitle">Financial overview and AI cost tracker</div>
-          </div>
-        </div>
-        <RevenueView analytics={analytics} />
-      </>
-    );
+    analytics = await getRevenueAnalytics({ tenantId, period });
   } catch (error) {
     const message = getRevenueLoadErrorMessage(error);
     console.error("Failed to load revenue data", { message });
@@ -59,6 +48,18 @@ export default async function RevenuePage({
       </div>
     );
   }
+
+  return (
+    <>
+      <div className="page-header">
+        <div className="page-title-wrap">
+          <div className="page-title">Revenue</div>
+          <div className="page-subtitle">Financial overview and AI cost tracker</div>
+        </div>
+      </div>
+      <RevenueView analytics={analytics} />
+    </>
+  );
 }
 
 function RevenueView({ analytics }: { analytics: RevenueAnalytics }) {

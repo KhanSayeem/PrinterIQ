@@ -53,11 +53,11 @@ type LeadQuickPanelProps = {
 
 export function LeadQuickPanel({ lead, tenantId, actions }: LeadQuickPanelProps) {
   if (!lead) {
-    return <aside className="detail-panel" aria-label="Lead quick panel"><div className="empty-state">Select a lead to preview details.</div></aside>;
+    return null;
   }
 
   return (
-    <aside className="detail-panel" aria-label="Lead quick panel">
+    <aside className="detail-panel sticky-detail-panel" aria-label="Lead quick panel">
       <LeadQuickPanelContent lead={lead} tenantId={tenantId} actions={actions} />
     </aside>
   );
@@ -68,19 +68,27 @@ export function LeadQuickPanelWithClose({
   tenantId,
   onClose,
   actions,
+  autoFocusClose = false,
 }: {
   lead: LeadListRow | null;
   tenantId: string;
   onClose: () => void;
   actions?: LeadActions;
+  autoFocusClose?: boolean;
 }) {
   if (!lead) {
-    return <LeadQuickPanel lead={null} tenantId={tenantId} actions={actions} />;
+    return null;
   }
 
   return (
-    <aside className="detail-panel" aria-label="Lead quick panel">
-      <LeadQuickPanelContent lead={lead} tenantId={tenantId} actions={actions} onClose={onClose} />
+    <aside className="detail-panel sticky-detail-panel" aria-label="Lead quick panel">
+      <LeadQuickPanelContent
+        lead={lead}
+        tenantId={tenantId}
+        actions={actions}
+        onClose={onClose}
+        autoFocusClose={autoFocusClose}
+      />
     </aside>
   );
 }
@@ -90,11 +98,13 @@ function LeadQuickPanelContent({
   tenantId,
   actions,
   onClose,
+  autoFocusClose = false,
 }: {
   lead: LeadListRow;
   tenantId: string;
   actions?: LeadActions;
   onClose?: () => void;
+  autoFocusClose?: boolean;
 }) {
   return (
     <>
@@ -116,7 +126,13 @@ function LeadQuickPanelContent({
               <ExternalLink size={15} />
             </Link>
             {onClose ? (
-              <button className="dp-icon-btn" type="button" aria-label="Close quick panel" onClick={onClose}>
+              <button
+                className="dp-icon-btn"
+                type="button"
+                aria-label="Close quick panel"
+                autoFocus={autoFocusClose}
+                onClick={onClose}
+              >
                 <X size={15} />
               </button>
             ) : null}
@@ -188,5 +204,6 @@ function formatMessageTime(value: Date | string) {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Australia/Sydney",
   }).format(date);
 }

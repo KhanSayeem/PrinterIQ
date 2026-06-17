@@ -536,7 +536,7 @@ class RedisPipelineQueue:
         await self._promote_due_jobs()
         raw_item = await self._redis.rpoplpush(self._wait_key, self._active_key)
         if raw_item is None:
-            return None
+            return await self._pop_bullmq_hash_job()
         item = _decode_redis_value(raw_item)
         try:
             payload = await self._payload_from_item(item)
@@ -560,7 +560,34 @@ class RedisPipelineQueue:
         await self._redis.rpush(self._wait_key, encoded)
 
     async def ack(self, message: QueueMessage) -> None:
+        if message.ack_token.startswith("hash:"):
+            await self._redis.delete(message.ack_token.removeprefix("hash:"))
+            return
         await self._redis.lrem(self._active_key, 1, message.ack_token)
+
+    async def _pop_bullmq_hash_job(self) -> QueueMessage | None:
+        async for raw_key in self._redis.scan_iter(match=f"{self._job_key_prefix}*"):
+            key = _decode_redis_value(raw_key)
+            if key in {
+                self._wait_key,
+                self._active_key,
+                self._delayed_key,
+                self._dead_key,
+                f"{self._job_key_prefix}events",
+                f"{self._job_key_prefix}id",
+                f"{self._job_key_prefix}marker",
+                f"{self._job_key_prefix}meta",
+            }:
+                continue
+            job_hash = await self._redis.hgetall(key)
+            raw_data = job_hash.get("data") if isinstance(job_hash, dict) else None
+            if raw_data is None:
+                continue
+            return QueueMessage(
+                payload=_json_payload(_decode_redis_value(raw_data)),
+                ack_token=f"hash:{key}",
+            )
+        return None
 
     async def _promote_due_jobs(self) -> None:
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
@@ -625,7 +652,7 @@ async def smoke_check() -> str:
     redis = get_redis_client()
     try:
         await cast(Awaitable[object], redis.ping())
-        pending_count = await cast(Awaitable[int], redis.llen("bull:pipeline:wait"))
+        pending_count = await redis.llen("bull:pipeline:wait")
     finally:
         await redis.aclose()
 

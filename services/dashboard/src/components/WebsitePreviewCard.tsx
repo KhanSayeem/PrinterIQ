@@ -39,7 +39,7 @@ export function WebsitePreviewCard({
         <div className="website-preview-pending">
           <div>
             <div className="preview-pending-label">Preview generating...</div>
-            <div className="preview-pending-copy">Waiting for the preview worker to publish this lead's prototype.</div>
+            <div className="preview-pending-copy">Waiting for the preview worker to publish this lead&apos;s prototype.</div>
           </div>
           <div className="preview-skeleton-stack" aria-hidden="true">
             <span className="skeleton-block preview-skeleton-wide" />

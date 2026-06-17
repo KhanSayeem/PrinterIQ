@@ -41,6 +41,7 @@ describe("dashboard lead queries", () => {
       status: "qualified",
       state: "NSW",
       tradeType: "tradies",
+      search: "coolcats",
       scoreMin: 50,
       scoreMax: 90,
       page: 2,
@@ -53,7 +54,11 @@ describe("dashboard lead queries", () => {
     expect(query.sql).toContain('"leads"."status" =');
     expect(query.sql).toContain('"leads"."state" =');
     expect(query.sql).toContain('"leads"."vertical" =');
+    expect(query.sql).toContain("ilike");
+    expect(query.sql).toContain('"leads"."business_name"');
+    expect(query.sql).toContain('"leads"."email"');
     expect(query.params).toContain(tenantId);
+    expect(query.params).toContain("%coolcats%");
   });
 
   it("orders lead list queries by the most recently updated lead first", () => {
@@ -101,6 +106,7 @@ describe("dashboard lead queries", () => {
       status: "qualified",
       state: "NSW",
       tradeType: "tradies",
+      search: "coolcats",
       scoreMin: 50,
       scoreMax: 90,
       page: 3,
@@ -113,11 +119,13 @@ describe("dashboard lead queries", () => {
     expect(query.sql).toContain('"leads"."status" =');
     expect(query.sql).toContain('"leads"."state" =');
     expect(query.sql).toContain('"leads"."vertical" =');
+    expect(query.sql).toContain("ilike");
     expect(query.sql).toContain('"qualifications"."score" >=');
     expect(query.sql).toContain('"qualifications"."score" <=');
     expect(query.sql).not.toContain("limit");
     expect(query.sql).not.toContain("offset");
     expect(query.params).toContain(tenantId);
+    expect(query.params).toContain("%coolcats%");
   });
 
   it("clamps lead-list pagination metadata to the available page range", () => {

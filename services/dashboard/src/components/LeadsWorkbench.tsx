@@ -1,7 +1,7 @@
 "use client";
 
 import { Upload } from "lucide-react";
-import { type ChangeEvent, useMemo, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LeadFilterCounts } from "@/db/queries";
 import type { LeadListFilterParams } from "@/lib/lead-list-params";
 import { LeadFilters } from "./LeadFilters";
@@ -33,10 +33,15 @@ function buildLeadListQuery(filters: LeadListFilters, page: number) {
   if (filters.status) query.set("status", filters.status);
   if (filters.state) query.set("state", filters.state);
   if (filters.tradeType) query.set("trade_type", filters.tradeType);
+  if (filters.search) query.set("q", filters.search);
   if (filters.scoreMin !== undefined) query.set("score_min", String(filters.scoreMin));
   if (filters.scoreMax !== undefined) query.set("score_max", String(filters.scoreMax));
   if (page > 1) query.set("page", String(page));
   return query;
+}
+
+function normalizeSearch(value: string) {
+  return value.trim() || undefined;
 }
 
 function buildSubtitle(total: number, allCount: number) {
@@ -128,19 +133,68 @@ export function LeadsWorkbench({
 }) {
   const [data, setData] = useState<LeadListResponse>({ rows: leads, counts, total, page, totalPages, pageSize });
   const [activeFilters, setActiveFilters] = useState<LeadListFilters>(filters);
+  const [searchInput, setSearchInput] = useState(filters.search ?? "");
   const [pending, setPending] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(leads[0]?.id ?? null);
+  const [isDesktopLeadLayout, setIsDesktopLeadLayout] = useState(false);
+  const [quickPanelOpen, setQuickPanelOpen] = useState(false);
+  const latestLeadRequestId = useRef(0);
+  const quickPanelTriggerRef = useRef<HTMLElement | null>(null);
 
   const selectedLead = useMemo(
     () => data.rows.find((lead) => lead.id === selectedLeadId) ?? null,
     [data.rows, selectedLeadId],
   );
+  const showQuickPanel = Boolean(selectedLead && (isDesktopLeadLayout || quickPanelOpen));
+  const visibleSelectedLeadId = showQuickPanel ? selectedLeadId : null;
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+
+    const mediaQuery = window.matchMedia("(min-width: 861px)");
+    const syncLeadLayout = () => setIsDesktopLeadLayout(mediaQuery.matches);
+
+    syncLeadLayout();
+    mediaQuery.addEventListener("change", syncLeadLayout);
+    return () => mediaQuery.removeEventListener("change", syncLeadLayout);
+  }, []);
+
+  function handleSelectLead(leadId: string) {
+    const activeElement = document.activeElement;
+    quickPanelTriggerRef.current = activeElement instanceof HTMLElement ? activeElement : null;
+    setSelectedLeadId(leadId);
+    setQuickPanelOpen(true);
+  }
+
+  const handleCloseQuickPanel = useCallback(() => {
+    setQuickPanelOpen(false);
+    setSelectedLeadId(null);
+    window.requestAnimationFrame(() => {
+      quickPanelTriggerRef.current?.focus();
+      quickPanelTriggerRef.current = null;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!showQuickPanel) return;
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        handleCloseQuickPanel();
+      }
+    }
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [showQuickPanel, handleCloseQuickPanel]);
 
   async function loadPage(nextFilters: LeadListFilters, nextPage: number) {
+    const requestId = latestLeadRequestId.current + 1;
+    latestLeadRequestId.current = requestId;
     setPending(true);
     setLoadError(null);
 
@@ -153,6 +207,8 @@ export function LeadsWorkbench({
       }
 
       const nextData = (await response.json()) as LeadListResponse;
+      if (requestId !== latestLeadRequestId.current) return;
+
       setData(nextData);
       setSelectedLeadId((currentLeadId) =>
         nextData.rows.some((lead) => lead.id === currentLeadId) ? currentLeadId : (nextData.rows[0]?.id ?? null),
@@ -160,9 +216,12 @@ export function LeadsWorkbench({
       setActiveFilters(nextFilters);
       window.history.replaceState(null, "", query.toString() ? `/leads?${query}` : "/leads");
     } catch {
+      if (requestId !== latestLeadRequestId.current) return;
       setLoadError("Failed to refresh leads. Try again in a moment.");
     } finally {
-      setPending(false);
+      if (requestId === latestLeadRequestId.current) {
+        setPending(false);
+      }
     }
   }
 
@@ -238,15 +297,20 @@ export function LeadsWorkbench({
       {importError ? <div className="import-status error" role="alert">{importError}</div> : null}
       <LeadFilters
         activeStatus={activeFilters.status}
+        searchValue={searchInput}
         counts={data.counts}
         pending={pending}
-        onSelect={(status) => loadPage({ ...activeFilters, status }, 1)}
+        onSelect={(status) => loadPage({ ...activeFilters, search: normalizeSearch(searchInput), status }, 1)}
+        onSearchChange={(search) => {
+          setSearchInput(search);
+          void loadPage({ ...activeFilters, search: normalizeSearch(search) }, 1);
+        }}
       />
-      <div className="leads-screen">
+      <div className={`leads-screen${showQuickPanel ? " has-detail-panel" : ""}`}>
         <section className={`leads-list${pending ? " is-pending" : ""}`} aria-busy={pending}>
           {loadError ? <div className="error-state inline-error" role="alert">{loadError}</div> : null}
           {data.rows.length ? (
-            <LeadTable leads={data.rows} selectedLeadId={selectedLeadId} onSelectLead={setSelectedLeadId} />
+            <LeadTable leads={data.rows} selectedLeadId={visibleSelectedLeadId} onSelectLead={handleSelectLead} />
           ) : (
             <div className="empty-state">No leads yet. Import your Apollo CSV to get started.</div>
           )}
@@ -258,7 +322,24 @@ export function LeadsWorkbench({
             onPageChange={(nextPage) => loadPage(activeFilters, nextPage)}
           />
         </section>
-        <LeadQuickPanelWithClose tenantId={tenantId} lead={selectedLead} onClose={() => setSelectedLeadId(null)} />
+        {showQuickPanel && selectedLead ? (
+          <>
+            {!isDesktopLeadLayout ? (
+              <button
+                type="button"
+                className="detail-panel-backdrop"
+                aria-label="Close quick panel backdrop"
+                onClick={handleCloseQuickPanel}
+              />
+            ) : null}
+            <LeadQuickPanelWithClose
+              tenantId={tenantId}
+              lead={selectedLead}
+              onClose={handleCloseQuickPanel}
+              autoFocusClose={!isDesktopLeadLayout && quickPanelOpen}
+            />
+          </>
+        ) : null}
       </div>
     </>
   );

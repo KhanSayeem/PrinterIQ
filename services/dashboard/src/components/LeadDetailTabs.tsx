@@ -13,6 +13,23 @@ type Conversation = { id: string; direction: string; channel: string; body: stri
 
 const tabs = ["Overview", "Conversation", "Outreach", "Payment"] as const;
 
+function externalHref(value: string) {
+  const trimmed = value.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function renderExternalUrl(value: string | null) {
+  if (!value?.trim()) {
+    return <span className="detail-field-value">--</span>;
+  }
+
+  return (
+    <a className="detail-field-value link" href={externalHref(value)} target="_blank" rel="noreferrer">
+      {value}
+    </a>
+  );
+}
+
 export function LeadDetailTabs({
   lead,
   enrichment,
@@ -54,8 +71,8 @@ export function LeadDetailTabs({
                 <div className="detail-card-title">Contact</div>
                 <div className="detail-field"><span className="detail-field-label">Email</span><span className="detail-field-value">{lead.email}</span></div>
                 <div className="detail-field"><span className="detail-field-label">Phone</span><span className="detail-field-value">{lead.phone ?? "--"}</span></div>
-                <div className="detail-field"><span className="detail-field-label">Website</span><span className="detail-field-value link">{lead.websiteUrl ?? "--"}</span></div>
-                <div className="detail-field"><span className="detail-field-label">LinkedIn</span><span className="detail-field-value link">{lead.linkedinUrl ?? "--"}</span></div>
+                <div className="detail-field"><span className="detail-field-label">Website</span>{renderExternalUrl(lead.websiteUrl)}</div>
+                <div className="detail-field"><span className="detail-field-label">LinkedIn</span>{renderExternalUrl(lead.linkedinUrl)}</div>
               </div>
               <div className="detail-card">
                 <div className="detail-card-title">Enrichment</div>

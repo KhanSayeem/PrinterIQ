@@ -55,4 +55,49 @@ describe("LeadDetailTabs", () => {
 
     expect(screen.queryByText("Delivered")).toBeNull();
   });
+
+  it("renders website and LinkedIn values as external links without changing display text", () => {
+    render(
+      <LeadDetailTabs
+        lead={{
+          email: "darren@example.com",
+          phone: null,
+          websiteUrl: "aquaoptions.com.au",
+          linkedinUrl: "https://linkedin.com/company/aqua-options",
+        }}
+        enrichment={null}
+        qualification={null}
+        conversations={[]}
+        outreachSends={[]}
+        payment={null}
+        websitePreview={null}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "aquaoptions.com.au" })).toHaveAttribute("href", "https://aquaoptions.com.au");
+    expect(screen.getByRole("link", { name: "aquaoptions.com.au" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "aquaoptions.com.au" })).toHaveAttribute("rel", "noreferrer");
+    expect(screen.getByRole("link", { name: "https://linkedin.com/company/aqua-options" })).toHaveAttribute(
+      "href",
+      "https://linkedin.com/company/aqua-options",
+    );
+  });
+
+  it("keeps missing website and LinkedIn values as placeholders", () => {
+    render(
+      <LeadDetailTabs
+        lead={{ email: "darren@example.com", phone: null, websiteUrl: null, linkedinUrl: null }}
+        enrichment={null}
+        qualification={null}
+        conversations={[]}
+        outreachSends={[]}
+        payment={null}
+        websitePreview={null}
+      />,
+    );
+
+    expect(screen.getByText("Website").nextElementSibling).toHaveTextContent("--");
+    expect(screen.getByText("LinkedIn").nextElementSibling).toHaveTextContent("--");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
 });
