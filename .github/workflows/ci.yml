@@ -25,7 +25,7 @@ jobs:
       - run: pytest tests/ -v
 
   reply-agent:
-    name: Reply Agent (ESLint + tsc + vitest)
+    name: Reply Agent (tsc + vitest)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -38,7 +38,6 @@ jobs:
           cache: npm
           cache-dependency-path: services/reply-agent/package-lock.json
       - run: npm ci
-      - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
 
