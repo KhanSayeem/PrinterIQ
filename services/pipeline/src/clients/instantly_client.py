@@ -40,7 +40,7 @@ class InstantlyClient:
         return cls(api_key=api_key)
 
     async def add_lead_to_campaign(self, payload: Mapping[str, object]) -> dict[str, object]:
-        return await self._request("POST", "/api/v2/leads", json=dict(payload))
+        return await self._request("POST", "/api/v2/leads/add", json=dict(payload))
 
     async def pause_lead(self, instantly_lead_id: str) -> dict[str, object]:
         return await self._request(
