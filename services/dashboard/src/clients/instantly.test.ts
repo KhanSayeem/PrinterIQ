@@ -6,31 +6,54 @@ describe("InstantlyHttpClient", () => {
     const fetchMock = vi.fn();
     const client = new InstantlyHttpClient({
       apiKey: undefined,
+      pausedListId: "paused-list-1",
       fetchFn: fetchMock,
       baseUrl: "https://api.instantly.test",
     });
 
-    await expect(client.pauseLead("instantly-lead-1")).rejects.toThrow("Missing env var: INSTANTLY_API_KEY");
+    await expect(client.pauseLead("instantly-lead-1", "campaign-1")).rejects.toThrow(
+      "Missing env var: INSTANTLY_API_KEY",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("pauses a lead with the Instantly v2 lead status patch", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+  it("fails before calling fetch when INSTANTLY_PAUSED_LIST_ID is missing", async () => {
+    const fetchMock = vi.fn();
     const client = new InstantlyHttpClient({
       apiKey: "api-key",
+      pausedListId: undefined,
       fetchFn: fetchMock,
       baseUrl: "https://api.instantly.test",
     });
 
-    await client.pauseLead("instantly-lead-1");
+    await expect(client.pauseLead("instantly-lead-1", "campaign-1")).rejects.toThrow(
+      "Missing env var: INSTANTLY_PAUSED_LIST_ID",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-    expect(fetchMock).toHaveBeenCalledWith("https://api.instantly.test/api/v2/leads/instantly-lead-1", {
-      method: "PATCH",
+  it("moves a lead to the paused holding list via the Instantly v2 leads/move endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      pausedListId: "paused-list-1",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await client.pauseLead("instantly-lead-1", "campaign-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("https://api.instantly.test/api/v2/leads/move", {
+      method: "POST",
       headers: {
         Authorization: "Bearer api-key",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ status: -1 }),
+      body: JSON.stringify({
+        ids: ["instantly-lead-1"],
+        campaign: "campaign-1",
+        to_list_id: "paused-list-1",
+      }),
     });
   });
 
