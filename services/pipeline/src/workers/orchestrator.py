@@ -652,7 +652,7 @@ async def smoke_check() -> str:
     redis = get_redis_client()
     try:
         await cast(Awaitable[object], redis.ping())
-        pending_count = await cast(Awaitable[int], redis.llen("bull:pipeline:wait"))
+        pending_count = await redis.llen("bull:pipeline:wait")
     finally:
         await redis.aclose()
 

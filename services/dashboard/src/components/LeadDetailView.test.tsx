@@ -35,6 +35,7 @@ describe("LeadDetailView", () => {
         conversations={[]}
         outreachSends={[]}
         payment={null}
+        websitePreview={null}
       />,
     );
 
@@ -67,6 +68,7 @@ describe("LeadDetailView", () => {
         ]}
         outreachSends={[]}
         payment={null}
+        websitePreview={null}
         actions={{ deleteNote }}
         now={new Date("2026-05-27T12:00:00.000Z")}
       />,

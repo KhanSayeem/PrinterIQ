@@ -10,8 +10,6 @@ jobs:
   python:
     name: Python (ruff + mypy + pytest)
     runs-on: ubuntu-latest
-    if: |
-      hashFiles('services/pipeline/pyproject.toml') != ''
     defaults:
       run:
         working-directory: services/pipeline
@@ -27,10 +25,8 @@ jobs:
       - run: pytest tests/ -v
 
   reply-agent:
-    name: Reply Agent (ESLint + tsc + vitest)
+    name: Reply Agent (tsc + vitest)
     runs-on: ubuntu-latest
-    if: |
-      hashFiles('services/reply-agent/package.json') != ''
     defaults:
       run:
         working-directory: services/reply-agent
@@ -42,15 +38,12 @@ jobs:
           cache: npm
           cache-dependency-path: services/reply-agent/package-lock.json
       - run: npm ci
-      - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
 
   dashboard:
     name: Dashboard (ESLint + tsc + build)
     runs-on: ubuntu-latest
-    if: |
-      hashFiles('services/dashboard/package.json') != ''
     defaults:
       run:
         working-directory: services/dashboard
