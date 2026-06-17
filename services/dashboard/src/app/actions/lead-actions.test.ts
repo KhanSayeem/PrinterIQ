@@ -24,7 +24,10 @@ function createDeps() {
     }),
     updateLeadStatus: vi.fn().mockResolvedValue({ id: leadId, status: "replied" }),
     assertLeadStatusTransitionAllowed: vi.fn().mockResolvedValue({ id: leadId, status: "contacted" }),
-    getLatestInstantlyLeadId: vi.fn().mockResolvedValue("instantly-lead-123"),
+    getLatestInstantlyLeadId: vi.fn().mockResolvedValue({
+      instantlyLeadId: "instantly-lead-123",
+      instantlyCampaignId: "campaign-456",
+    }),
     getLatestInstantlyReplyMetadata: vi.fn().mockResolvedValue({
       instantlyEmailId: "email-uuid-123",
       instantlyAccountId: "sender@printeriq.com",
@@ -79,7 +82,7 @@ describe("lead actions", () => {
 
     expect(deps.getLatestInstantlyLeadId).toHaveBeenCalledWith({ tenantId, leadId });
     expect(deps.assertLeadStatusTransitionAllowed).toHaveBeenCalledWith({ tenantId, leadId, status: "archived" });
-    expect(deps.instantly.pauseLead).toHaveBeenCalledWith("instantly-lead-123");
+    expect(deps.instantly.pauseLead).toHaveBeenCalledWith("instantly-lead-123", "campaign-456");
     expect(deps.updateLeadStatus).toHaveBeenCalledWith({ tenantId, leadId, status: "archived" });
     expect(result).toMatchObject({
       ok: true,
