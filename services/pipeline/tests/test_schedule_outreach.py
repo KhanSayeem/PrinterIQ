@@ -295,7 +295,9 @@ def test_successful_job_reserves_outreach_before_calling_instantly() -> None:
             lead_fetcher=FakeLeadFetcher(_lead()),
             qualification_fetcher=FakeQualificationFetcher(_qualification()),
             outreach_repo=repo,
-            instantly_client=EventInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]}),
+            instantly_client=EventInstantlyClient(
+                result={"created_leads": [{"id": "instantly-lead-1"}]}
+            ),
         )
 
         assert repo.events == ["reserve", "instantly", "complete", "contacted"]
