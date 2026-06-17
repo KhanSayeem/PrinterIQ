@@ -89,6 +89,7 @@ export type EscalationContext = {
   city: string | null;
   email: string;
   instantly_lead_id: string;
+  instantly_campaign_id: string;
 };
 
 export type ConversationHistoryItem = {
