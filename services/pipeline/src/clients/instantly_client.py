@@ -42,20 +42,6 @@ class InstantlyClient:
     async def add_lead_to_campaign(self, payload: Mapping[str, object]) -> dict[str, object]:
         return await self._request("POST", "/api/v2/leads/add", json=dict(payload))
 
-    async def pause_lead(self, instantly_lead_id: str) -> dict[str, object]:
-        return await self._request(
-            "PATCH",
-            f"/api/v2/leads/{instantly_lead_id}",
-            json={"status": -1},
-        )
-
-    async def unsubscribe_lead(self, instantly_lead_id: str) -> dict[str, object]:
-        return await self._request(
-            "PATCH",
-            f"/api/v2/leads/{instantly_lead_id}",
-            json={"lt_interest_status": -1},
-        )
-
     async def _request(
         self,
         method: str,

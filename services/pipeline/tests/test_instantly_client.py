@@ -104,30 +104,3 @@ def test_api_error_does_not_include_response_body_with_possible_pii() -> None:
         assert "response body omitted" in message
 
     asyncio.run(scenario())
-
-
-def test_pause_and_unsubscribe_are_patch_lead_wrappers() -> None:
-    async def scenario() -> None:
-        requests: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            return httpx.Response(200, json={"id": "lead-123"})
-
-        transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(transport=transport) as http_client:
-            client = InstantlyClient(api_key="secret-key", http_client=http_client)
-            await client.pause_lead("lead-123")
-            await client.unsubscribe_lead("lead-123")
-
-        assert [request.method for request in requests] == ["PATCH", "PATCH"]
-        assert [str(request.url) for request in requests] == [
-            "https://api.instantly.ai/api/v2/leads/lead-123",
-            "https://api.instantly.ai/api/v2/leads/lead-123",
-        ]
-        assert requests[0].read()
-        assert requests[0].content == b'{"status":-1}'
-        assert requests[1].read()
-        assert requests[1].content == b'{"lt_interest_status":-1}'
-
-    asyncio.run(scenario())
