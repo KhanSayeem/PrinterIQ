@@ -272,20 +272,28 @@ def _instantly_payload(
         custom_variables["preview_url"] = preview_url
 
     return {
-        "campaign": campaign_id,
-        "email": str(lead["email"]),
-        "personalization": opener,
-        "website": str(lead.get("website_url", "")),
-        "first_name": str(lead.get("first_name", "")),
-        "last_name": str(lead.get("last_name", "")),
-        "company_name": str(lead.get("business_name", "")),
-        "phone": str(lead.get("phone", "")),
-        "custom_variables": custom_variables,
+        "campaign_id": campaign_id,
+        "leads": [
+            {
+                "email": str(lead["email"]),
+                "personalization": opener,
+                "website": str(lead.get("website_url", "")),
+                "first_name": str(lead.get("first_name", "")),
+                "last_name": str(lead.get("last_name", "")),
+                "company_name": str(lead.get("business_name", "")),
+                "phone": str(lead.get("phone", "")),
+                "custom_variables": custom_variables,
+            }
+        ],
     }
 
 
 def _instantly_lead_id(result: dict[str, object]) -> str:
-    instantly_lead_id = result.get("id")
-    if not isinstance(instantly_lead_id, str) or not instantly_lead_id:
-        raise ValueError("Instantly response did not include id")
-    return instantly_lead_id
+    created_leads = result.get("created_leads")
+    if isinstance(created_leads, list) and created_leads:
+        first = created_leads[0]
+        if isinstance(first, dict):
+            instantly_lead_id = first.get("id")
+            if isinstance(instantly_lead_id, str) and instantly_lead_id:
+                return instantly_lead_id
+    raise ValueError("Instantly response did not include id")

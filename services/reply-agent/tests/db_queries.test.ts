@@ -240,6 +240,7 @@ describe("reply-agent DB queries", () => {
           city: "Newcastle",
           email: "brett@example.com",
           instantly_lead_id: "instantly-lead-123",
+          instantly_campaign_id: "campaign-456",
         },
       ],
     });
@@ -254,11 +255,13 @@ describe("reply-agent DB queries", () => {
     expect(sql).toContain("outreach_sends.tenant_id = leads.tenant_id");
     expect(sql).toContain("outreach_sends.lead_id = leads.id");
     expect(sql).toContain("outreach_sends.instantly_lead_id IS NOT NULL");
+    expect(sql).toContain("outreach_sends.instantly_campaign_id");
     expect(sql).toContain("outreach_sends.sent_at DESC NULLS LAST");
     expect(sql).toContain("outreach_sends.created_at DESC");
     expect(sql).toContain("outreach_sends.id DESC");
     expect(params).toEqual(["tenant-id", "lead-id"]);
     expect(context.instantly_lead_id).toBe("instantly-lead-123");
+    expect(context.instantly_campaign_id).toBe("campaign-456");
   });
 
   it("fails when escalation context has no Instantly lead id", async () => {

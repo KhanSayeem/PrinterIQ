@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   escalate,
+  InstantlyHttpClient,
   TwilioSmsClient,
   type EscalationQueries,
   type InstantlyClient,
@@ -22,6 +23,7 @@ function createQueries(overrides: Partial<EscalationQueries> = {}): EscalationQu
       city: "Newcastle",
       email: "brett@stonebuilders.com.au",
       instantly_lead_id: "instantly-lead-123",
+      instantly_campaign_id: "campaign-456",
     }),
     ...overrides,
   };
@@ -73,7 +75,7 @@ describe("escalation", () => {
     expect(vi.mocked(instantly.pauseLead).mock.invocationCallOrder[0]).toBeGreaterThan(
       vi.mocked(sms.sendSms).mock.invocationCallOrder[0]!,
     );
-    expect(instantly.pauseLead).toHaveBeenCalledWith("instantly-lead-123");
+    expect(instantly.pauseLead).toHaveBeenCalledWith("instantly-lead-123", "campaign-456");
   });
 
   it("uses the fixed operator escalation number", async () => {
@@ -226,6 +228,42 @@ describe("Twilio SMS client", () => {
 
     await expect(client.sendSms({ to: "+61400457006", body: "Escalation body" })).rejects.toThrow(
       "Missing env var: TWILIO_FROM_NUMBER",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("Instantly client", () => {
+  it("moves a lead to the paused holding list via the Instantly v2 leads/move endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new InstantlyHttpClient("api-key", "https://api.instantly.test", "paused-list-1");
+
+    await client.pauseLead("instantly-lead-123", "campaign-456");
+
+    expect(fetchMock).toHaveBeenCalledWith("https://api.instantly.test/api/v2/leads/move", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer api-key",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ids: ["instantly-lead-123"],
+        campaign: "campaign-456",
+        to_list_id: "paused-list-1",
+      }),
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("fails before calling fetch when INSTANTLY_PAUSED_LIST_ID is missing", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new InstantlyHttpClient("api-key", "https://api.instantly.test", undefined);
+
+    await expect(client.pauseLead("instantly-lead-123", "campaign-456")).rejects.toThrow(
+      "Missing env var: INSTANTLY_PAUSED_LIST_ID",
     );
     expect(fetchMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();

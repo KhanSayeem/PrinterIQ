@@ -32,7 +32,7 @@ export type LeadActionDeps = {
   getLatestInstantlyReplyMetadata: typeof getLatestInstantlyReplyMetadata;
   deleteOperatorNote: (input: DeleteOperatorNoteInput) => Promise<{ id: string }>;
   instantly: {
-    pauseLead(instantlyLeadId: string): Promise<void>;
+    pauseLead(instantlyLeadId: string, instantlyCampaignId: string): Promise<void>;
     sendReply(input: {
       instantlyEmailId: string;
       instantlyAccountId: string;
@@ -121,9 +121,15 @@ export function createLeadActions(deps: LeadActionDeps) {
 
     async pauseLead(_previousState: LeadActionState, formData: FormData): Promise<LeadActionState> {
       const identity = readIdentity(formData);
-      let instantlyLeadId: string;
       try {
-        instantlyLeadId = await deps.getLatestInstantlyLeadId(identity);
+        const { instantlyLeadId, instantlyCampaignId } = await deps.getLatestInstantlyLeadId(identity);
+
+        await deps.assertLeadStatusTransitionAllowed({ ...identity, status: "archived" });
+        await deps.instantly.pauseLead(instantlyLeadId, instantlyCampaignId);
+        await deps.updateLeadStatus({ ...identity, status: "archived" });
+        deps.revalidatePath(`/leads/${identity.leadId}`);
+
+        return { ok: true, message: "Lead paused.", status: "archived" };
       } catch (error) {
         if (error instanceof Error && error.message === "Instantly lead id not found for lead") {
           return {
@@ -133,13 +139,6 @@ export function createLeadActions(deps: LeadActionDeps) {
         }
         throw error;
       }
-
-      await deps.assertLeadStatusTransitionAllowed({ ...identity, status: "archived" });
-      await deps.instantly.pauseLead(instantlyLeadId);
-      await deps.updateLeadStatus({ ...identity, status: "archived" });
-      deps.revalidatePath(`/leads/${identity.leadId}`);
-
-      return { ok: true, message: "Lead paused.", status: "archived" };
     },
 
     async deleteNote(_previousState: LeadActionState, formData: FormData): Promise<LeadActionState> {

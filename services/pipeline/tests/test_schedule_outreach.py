@@ -174,7 +174,7 @@ def _payload(**overrides: object) -> dict[str, object]:
 def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted() -> None:
     async def scenario() -> None:
         repo = FakeOutreachRepository()
-        instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
+        instantly = FakeInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]})
 
         await schedule_outreach(
             _payload(
@@ -190,23 +190,27 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
 
         assert instantly.calls == [
             {
-                "campaign": "campaign-from-payload",
-                "email": "brett@stonebuilders.com.au",
-                "personalization": "Brett, your site is hard to use on mobile.",
-                "website": "https://stonebuilders.com.au",
-                "first_name": "Brett",
-                "last_name": "Stone",
-                "company_name": "Stone Builders",
-                "phone": "+61400000001",
-                "custom_variables": {
-                    "opener": "Brett, your site is hard to use on mobile.",
-                    "weakness": "no_mobile",
-                    "followup_1": "Worth fixing before the next batch of quote requests.",
-                    "followup_2": "Happy to show what a fast tradie site can look like.",
-                    "lead_id": str(LEAD_ID),
-                    "website_preview_url": PREVIEW_URL,
-                    "preview_url": PREVIEW_URL,
-                },
+                "campaign_id": "campaign-from-payload",
+                "leads": [
+                    {
+                        "email": "brett@stonebuilders.com.au",
+                        "personalization": "Brett, your site is hard to use on mobile.",
+                        "website": "https://stonebuilders.com.au",
+                        "first_name": "Brett",
+                        "last_name": "Stone",
+                        "company_name": "Stone Builders",
+                        "phone": "+61400000001",
+                        "custom_variables": {
+                            "opener": "Brett, your site is hard to use on mobile.",
+                            "weakness": "no_mobile",
+                            "followup_1": "Worth fixing before the next batch of quote requests.",
+                            "followup_2": "Happy to show what a fast tradie site can look like.",
+                            "lead_id": str(LEAD_ID),
+                            "website_preview_url": PREVIEW_URL,
+                            "preview_url": PREVIEW_URL,
+                        },
+                    }
+                ],
             }
         ]
         assert repo.reserved == [
@@ -291,7 +295,9 @@ def test_successful_job_reserves_outreach_before_calling_instantly() -> None:
             lead_fetcher=FakeLeadFetcher(_lead()),
             qualification_fetcher=FakeQualificationFetcher(_qualification()),
             outreach_repo=repo,
-            instantly_client=EventInstantlyClient(result={"id": "instantly-lead-1"}),
+            instantly_client=EventInstantlyClient(
+                result={"created_leads": [{"id": "instantly-lead-1"}]}
+            ),
         )
 
         assert repo.events == ["reserve", "instantly", "complete", "contacted"]
@@ -319,7 +325,7 @@ def test_successful_job_reserves_outreach_before_calling_instantly() -> None:
 def test_successful_job_defaults_website_preview_url_when_preview_payload_missing() -> None:
     async def scenario() -> None:
         repo = FakeOutreachRepository()
-        instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
+        instantly = FakeInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]})
 
         await schedule_outreach(
             _payload(),
@@ -329,7 +335,7 @@ def test_successful_job_defaults_website_preview_url_when_preview_payload_missin
             instantly_client=instantly,
         )
 
-        custom_variables = instantly.calls[0]["custom_variables"]
+        custom_variables = instantly.calls[0]["leads"][0]["custom_variables"]
         assert isinstance(custom_variables, dict)
         assert custom_variables["website_preview_url"] == ""
         assert repo.preview_gets == []
@@ -499,7 +505,7 @@ def test_missing_default_campaign_id_fails_clearly(monkeypatch: pytest.MonkeyPat
 def test_campaign_id_defaults_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-from-env")
-        instantly = FakeInstantlyClient(result={"id": "instantly-lead-1"})
+        instantly = FakeInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]})
 
         await schedule_outreach(
             {
@@ -514,7 +520,7 @@ def test_campaign_id_defaults_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
             instantly_client=instantly,
         )
 
-        assert instantly.calls[0]["campaign"] == "campaign-from-env"
+        assert instantly.calls[0]["campaign_id"] == "campaign-from-env"
 
     asyncio.run(scenario())
 
@@ -532,5 +538,26 @@ def test_worker_refuses_qualification_without_personalised_opener() -> None:
                 outreach_repo=FakeOutreachRepository(),
                 instantly_client=FakeInstantlyClient(result={"id": "unused"}),
             )
+
+    asyncio.run(scenario())
+
+
+def test_missing_created_leads_in_instantly_response_fails_clearly() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+        instantly = FakeInstantlyClient(result={"created_leads": []})
+
+        with pytest.raises(ValueError, match="Instantly response did not include id"):
+            await schedule_outreach(
+                _payload(),
+                lead_fetcher=FakeLeadFetcher(_lead()),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=repo,
+                instantly_client=instantly,
+            )
+
+        assert repo.completed == []
+        assert repo.updates == []
+        assert repo.lock_released is True
 
     asyncio.run(scenario())

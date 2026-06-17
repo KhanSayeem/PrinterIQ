@@ -399,10 +399,11 @@ export async function fetchEscalationContext(
         leads.business_name,
         leads.city,
         leads.email,
-        latest_send.instantly_lead_id
+        latest_send.instantly_lead_id,
+        latest_send.instantly_campaign_id
       FROM leads
       JOIN LATERAL (
-        SELECT outreach_sends.instantly_lead_id
+        SELECT outreach_sends.instantly_lead_id, outreach_sends.instantly_campaign_id
         FROM outreach_sends
         WHERE outreach_sends.tenant_id = leads.tenant_id
           AND outreach_sends.lead_id = leads.id

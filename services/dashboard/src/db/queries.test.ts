@@ -298,6 +298,7 @@ describe("dashboard lead queries", () => {
     expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
     expect(query.sql).toContain('"outreach_sends"."lead_id" =');
     expect(query.sql).toContain('"outreach_sends"."instantly_lead_id" is not null');
+    expect(query.sql).toContain('"instantly_campaign_id"');
     expect(query.sql).toContain('order by "outreach_sends"."sent_at" desc');
     expect(query.params).toContain(tenantId);
     expect(query.params).toContain(leadId);

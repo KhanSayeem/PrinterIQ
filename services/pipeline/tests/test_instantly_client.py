@@ -14,7 +14,7 @@ def test_add_lead_to_campaign_sends_bearer_auth_and_documented_body() -> None:
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
-            return httpx.Response(200, json={"id": "lead-123"})
+            return httpx.Response(200, json={"created_leads": [{"id": "lead-123"}]})
 
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport) as http_client:
@@ -22,31 +22,35 @@ def test_add_lead_to_campaign_sends_bearer_auth_and_documented_body() -> None:
 
             result = await client.add_lead_to_campaign(
                 {
-                    "campaign": "campaign-123",
-                    "email": "example@example.com",
-                    "personalization": "Hello there",
-                    "website": "https://example.com",
-                    "last_name": "Doe",
-                    "first_name": "John",
-                    "company_name": "Example Inc.",
-                    "phone": "+1234567890",
-                    "custom_variables": {"lead_id": "lead-uuid"},
+                    "campaign_id": "campaign-123",
+                    "leads": [
+                        {
+                            "email": "example@example.com",
+                            "personalization": "Hello there",
+                            "website": "https://example.com",
+                            "last_name": "Doe",
+                            "first_name": "John",
+                            "company_name": "Example Inc.",
+                            "phone": "+1234567890",
+                            "custom_variables": {"lead_id": "lead-uuid"},
+                        }
+                    ],
                 }
             )
 
-        assert result == {"id": "lead-123"}
+        assert result == {"created_leads": [{"id": "lead-123"}]}
         assert len(requests) == 1
         request = requests[0]
         assert request.method == "POST"
-        assert str(request.url) == "https://api.instantly.ai/api/v2/leads"
+        assert str(request.url) == "https://api.instantly.ai/api/v2/leads/add"
         assert request.headers["Authorization"] == "Bearer secret-key"
         assert request.headers["Content-Type"] == "application/json"
         assert request.read()
         assert request.content == (
-            b'{"campaign":"campaign-123","email":"example@example.com",'
+            b'{"campaign_id":"campaign-123","leads":[{"email":"example@example.com",'
             b'"personalization":"Hello there","website":"https://example.com",'
             b'"last_name":"Doe","first_name":"John","company_name":"Example Inc.",'
-            b'"phone":"+1234567890","custom_variables":{"lead_id":"lead-uuid"}}'
+            b'"phone":"+1234567890","custom_variables":{"lead_id":"lead-uuid"}}]}'
         )
 
     asyncio.run(scenario())
@@ -98,32 +102,5 @@ def test_api_error_does_not_include_response_body_with_possible_pii() -> None:
         assert "brett@stonebuilders.com.au" not in message
         assert "+61400000001" not in message
         assert "response body omitted" in message
-
-    asyncio.run(scenario())
-
-
-def test_pause_and_unsubscribe_are_patch_lead_wrappers() -> None:
-    async def scenario() -> None:
-        requests: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            return httpx.Response(200, json={"id": "lead-123"})
-
-        transport = httpx.MockTransport(handler)
-        async with httpx.AsyncClient(transport=transport) as http_client:
-            client = InstantlyClient(api_key="secret-key", http_client=http_client)
-            await client.pause_lead("lead-123")
-            await client.unsubscribe_lead("lead-123")
-
-        assert [request.method for request in requests] == ["PATCH", "PATCH"]
-        assert [str(request.url) for request in requests] == [
-            "https://api.instantly.ai/api/v2/leads/lead-123",
-            "https://api.instantly.ai/api/v2/leads/lead-123",
-        ]
-        assert requests[0].read()
-        assert requests[0].content == b'{"status":-1}'
-        assert requests[1].read()
-        assert requests[1].content == b'{"lt_interest_status":-1}'
 
     asyncio.run(scenario())

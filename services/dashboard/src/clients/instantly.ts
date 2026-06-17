@@ -6,6 +6,7 @@ type InstantlyClientOptions = {
   apiKey?: string;
   baseUrl?: string;
   fetchFn?: FetchFn;
+  pausedListId?: string;
 };
 
 export type InstantlyReplyInput = {
@@ -19,17 +20,26 @@ export class InstantlyHttpClient {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
   private readonly fetchFn: FetchFn;
+  private readonly pausedListId?: string;
 
   constructor(options: InstantlyClientOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.INSTANTLY_API_KEY;
     this.baseUrl = (options.baseUrl ?? INSTANTLY_BASE_URL).replace(/\/+$/, "");
     this.fetchFn = options.fetchFn ?? fetch;
+    this.pausedListId = options.pausedListId ?? process.env.INSTANTLY_PAUSED_LIST_ID;
   }
 
-  async pauseLead(instantlyLeadId: string): Promise<void> {
-    await this.request(`/api/v2/leads/${encodeURIComponent(instantlyLeadId)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status: -1 }),
+  async pauseLead(instantlyLeadId: string, instantlyCampaignId: string): Promise<void> {
+    if (!this.pausedListId) {
+      throw new Error("Missing env var: INSTANTLY_PAUSED_LIST_ID");
+    }
+    await this.request("/api/v2/leads/move", {
+      method: "POST",
+      body: JSON.stringify({
+        ids: [instantlyLeadId],
+        campaign: instantlyCampaignId,
+        to_list_id: this.pausedListId,
+      }),
     });
   }
 

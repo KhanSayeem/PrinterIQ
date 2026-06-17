@@ -535,6 +535,7 @@ export function buildLatestInstantlyLeadIdQuery(db: DashboardDb, identity: LeadI
   return db
     .select({
       instantlyLeadId: outreachSends.instantlyLeadId,
+      instantlyCampaignId: outreachSends.instantlyCampaignId,
     })
     .from(outreachSends)
     .where(
@@ -884,7 +885,7 @@ export async function getLatestInstantlyLeadId(identity: LeadIdentity) {
   if (!row?.instantlyLeadId) {
     throw new Error("Instantly lead id not found for lead");
   }
-  return row.instantlyLeadId;
+  return { instantlyLeadId: row.instantlyLeadId, instantlyCampaignId: row.instantlyCampaignId };
 }
 
 export async function getLatestInstantlyReplyMetadata(
