@@ -1,11 +1,12 @@
 "use client";
 
-import { BarChart3, CreditCard, ListChecks, Pin, Users, X } from "lucide-react";
+import { BarChart3, CreditCard, ListChecks, Pin, Search, Users, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 const items = [
+  { href: "/prospects", label: "Prospects", icon: Search },
   { href: "/leads", label: "Leads", icon: Users },
   { href: "/pipeline", label: "Pipeline", icon: ListChecks },
   { href: "/revenue", label: "Revenue", icon: CreditCard },
