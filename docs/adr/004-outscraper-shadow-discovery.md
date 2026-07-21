@@ -1,6 +1,6 @@
 # ADR 004 - Outscraper Shadow Discovery Before Apollo
 
-**Status:** Accepted for the bounded A/B shadow pilot. Supersedes ADR 003 only for staged shadow discovery.  
+**Status:** Accepted for the bounded A/B shadow pilot. Supersedes ADR 003 only for staged shadow discovery.
 **Date:** July 2026
 
 ## Context
@@ -21,4 +21,3 @@ Outscraper and Apollo credentials remain server-only. Provider payloads are reta
 - Public contact details are not treated as consent for outreach.
 - The existing Apollo CSV path and lead state machine remain unchanged.
 - A successful pilot produces a go/no-go recommendation only; it does not enable promotion or outreach.
-
