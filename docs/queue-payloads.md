@@ -80,6 +80,96 @@ Minimal payload by design — worker fetches full lead from DB. Never put DB fie
 
 ---
 
+## `generate_preview`
+
+**Queue:** pipeline | **Worker:** `generate_preview.py` | **Max retries:** 3
+
+```json
+{
+  "job_type": "generate_preview",
+  "tenant_id": "uuid",
+  "lead_id": "uuid"
+}
+```
+
+---
+
+## Prospect shadow discovery
+
+These jobs operate only on tenant-scoped prospect staging. They cannot create leads, previews, outreach sends, or Instantly requests.
+
+### `start_discovery`
+
+```json
+{
+  "job_type": "start_discovery",
+  "tenant_id": "uuid",
+  "discovery_run_id": "uuid"
+}
+```
+
+### `poll_outscraper`
+
+```json
+{
+  "job_type": "poll_outscraper",
+  "tenant_id": "uuid",
+  "discovery_run_id": "uuid",
+  "poll_count": 1
+}
+```
+
+### `normalize_prospects`
+
+```json
+{
+  "job_type": "normalize_prospects",
+  "tenant_id": "uuid",
+  "discovery_run_id": "uuid"
+}
+```
+
+### `assess_prospects`
+
+```json
+{
+  "job_type": "assess_prospects",
+  "tenant_id": "uuid",
+  "discovery_run_id": "uuid"
+}
+```
+
+### `enrich_prospect_contacts`
+
+```json
+{
+  "job_type": "enrich_prospect_contacts",
+  "tenant_id": "uuid",
+  "discovery_run_id": "uuid"
+}
+```
+
+### `prepare_shadow_review`
+
+```json
+{
+  "job_type": "prepare_shadow_review",
+  "tenant_id": "uuid",
+  "discovery_run_id": "uuid"
+}
+```
+
+### `purge_prospect_data`
+
+```json
+{
+  "job_type": "purge_prospect_data",
+  "tenant_id": "uuid"
+}
+```
+
+---
+
 ## `process_reply`
 
 **Queue:** replies | **Worker:** `handler.ts` | **Max retries:** 3 | **Concurrency:** 10

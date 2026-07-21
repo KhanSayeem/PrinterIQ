@@ -19,6 +19,8 @@ Supabase (AP Sydney)
 └── Postgres — single source of truth for all data
 
 Third-party APIs
+├── Outscraper  — bounded Google Maps discovery for staged shadow prospects
+├── Apollo      — verified business-email resolution for staged prospects
 ├── Instantly   — cold email sending, inbox rotation, reply webhooks
 ├── ClickSend   — SMS (AU sender IDs)
 ├── Anthropic   — Claude Haiku (bulk scoring) + Claude Sonnet (personalisation + replies)
@@ -67,6 +69,13 @@ Apollo CSV
   → schedule_outreach.py (outreach_sends table, status=contacted)
   → Instantly sends email sequence
 
+Outscraper shadow discovery (ADR 004)
+  → discovery_runs / business_prospects (raw tenant-scoped snapshots)
+  → deterministic Route A/B assessment
+  → Apollo verified-business-email resolution
+  → authenticated Prospects review area
+  → STOP (no leads, previews, outreach sends, or Instantly requests)
+
 Instantly reply webhook
   → webhook.ts       (URL-token auth, queues process_reply job)
   → handler.ts       (conversations table, Claude classification)
@@ -77,3 +86,5 @@ Instantly bounced/unsubscribed webhooks
   → webhook.ts       (URL-token auth)
   → db/queries.ts    (marks outreach_sends event flag, archives eligible lead)
 ```
+
+The shadow flow is isolated from the production lead pipeline. Provider results are persisted before transformation, and replay uses the tenant, run, source, and provider business identity. No staged prospect may enter the lead status state machine without a later architectural decision and compliance review.
