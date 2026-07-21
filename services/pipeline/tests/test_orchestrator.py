@@ -33,6 +33,7 @@ from workers.schedule_outreach import OutreachSendLockedError
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
+LEASE_STARTED_AT = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
 
 
 @dataclass
@@ -40,10 +41,15 @@ class FakeQueueStore:
     inserts: list[QueueJobInsert] = field(default_factory=list)
     updates: list[QueueJobUpdate] = field(default_factory=list)
     next_job_id: UUID = UUID("30000000-0000-0000-0000-000000000003")
+    acquired: bool = True
 
     async def create_queue_job(self, insert: QueueJobInsert) -> QueueJobLease:
         self.inserts.append(insert)
-        return QueueJobLease(job_id=self.next_job_id, acquired=True)
+        return QueueJobLease(
+            job_id=self.next_job_id,
+            acquired=self.acquired,
+            lease_started_at=LEASE_STARTED_AT,
+        )
 
     async def update_queue_job(self, update: QueueJobUpdate) -> None:
         self.updates.append(update)
@@ -139,6 +145,13 @@ def test_pipeline_handlers_register_all_pipeline_job_types() -> None:
         JobType.QUALIFY_LEAD,
         JobType.GENERATE_PREVIEW,
         JobType.SCHEDULE_OUTREACH,
+        JobType.START_DISCOVERY,
+        JobType.POLL_OUTSCRAPER,
+        JobType.NORMALIZE_PROSPECTS,
+        JobType.ASSESS_PROSPECTS,
+        JobType.ENRICH_PROSPECT_CONTACTS,
+        JobType.PREPARE_SHADOW_REVIEW,
+        JobType.PURGE_PROSPECT_DATA,
     }
 
 
@@ -150,6 +163,64 @@ def test_default_schedule_outreach_handler_fails_with_configuration_error() -> N
             await handlers[JobType.SCHEDULE_OUTREACH](
                 {"job_type": JobType.SCHEDULE_OUTREACH.value}
             )
+
+    asyncio.run(scenario())
+
+
+def test_production_handlers_inject_discovery_dependencies() -> None:
+    async def scenario() -> None:
+        calls: list[tuple[str, dict[str, object], dict[str, object]]] = []
+
+        async def start_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("start", payload, deps))
+
+        async def poll_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("poll", payload, deps))
+
+        prospect_store = object()
+        queue = object()
+        outscraper_client = object()
+        handlers = build_production_pipeline_handlers(
+            lead_repository=object(),
+            pipeline_store=object(),
+            prospect_store=prospect_store,
+            queue=queue,
+            auditor=object(),
+            claude_client=object(),
+            instantly_client=object(),
+            outscraper_client=outscraper_client,
+            start_discovery_worker=start_worker,
+            poll_outscraper_worker=poll_worker,
+            rate_limits={},
+        )
+        payload = {
+            "tenant_id": str(TENANT_ID),
+            "discovery_run_id": "20000000-0000-0000-0000-000000000001",
+        }
+
+        await handlers[JobType.START_DISCOVERY](payload)
+        await handlers[JobType.POLL_OUTSCRAPER](payload)
+
+        assert calls == [
+            (
+                "start",
+                payload,
+                {
+                    "store": prospect_store,
+                    "queue": queue,
+                    "outscraper_client": outscraper_client,
+                },
+            ),
+            (
+                "poll",
+                payload,
+                {
+                    "store": prospect_store,
+                    "queue": queue,
+                    "outscraper_client": outscraper_client,
+                },
+            ),
+        ]
 
     asyncio.run(scenario())
 
@@ -523,6 +594,61 @@ def test_pooled_production_handlers_use_independent_connection_per_concurrent_jo
     asyncio.run(scenario())
 
 
+def test_pooled_production_handlers_register_discovery_with_connection_scoped_store() -> None:
+    async def scenario() -> None:
+        class FakePool:
+            def acquire(self) -> object:
+                class _AcquireContext:
+                    async def __aenter__(self) -> object:
+                        return object()
+
+                    async def __aexit__(
+                        self,
+                        exc_type: object,
+                        exc: object,
+                        traceback: object,
+                    ) -> None:
+                        return None
+
+                return _AcquireContext()
+
+        calls: list[tuple[str, object, object, object]] = []
+
+        async def start_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("start", deps["store"], deps["queue"], deps["outscraper_client"]))
+
+        async def poll_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("poll", deps["store"], deps["queue"], deps["outscraper_client"]))
+
+        queue = object()
+        client = object()
+        handlers = build_pooled_production_pipeline_handlers(
+            pool=FakePool(),
+            queue=queue,
+            auditor=object(),
+            claude_client=object(),
+            instantly_client=object(),
+            outscraper_client=client,
+            start_discovery_worker=start_worker,
+            poll_outscraper_worker=poll_worker,
+            rate_limits={},
+        )
+        payload = {
+            "tenant_id": str(TENANT_ID),
+            "discovery_run_id": "20000000-0000-0000-0000-000000000001",
+        }
+
+        await handlers[JobType.START_DISCOVERY](payload)
+        await handlers[JobType.POLL_OUTSCRAPER](payload)
+
+        assert [call[0] for call in calls] == ["start", "poll"]
+        assert calls[0][1].__class__.__name__ == "ProspectStore"
+        assert calls[0][1] is not calls[1][1]
+        assert all(call[2] is queue and call[3] is client for call in calls)
+
+    asyncio.run(scenario())
+
+
 def test_pipeline_queue_manager_processes_one_payload_through_tracking() -> None:
     async def scenario() -> None:
         handled: list[dict[str, object]] = []
@@ -560,6 +686,38 @@ def test_pipeline_queue_manager_processes_one_payload_through_tracking() -> None
         assert store.inserts[0].lead_id == LEAD_ID
         assert store.updates[0].status == "completed"
         assert store.updates[0].tenant_id == TENANT_ID
+
+    asyncio.run(scenario())
+
+
+def test_start_discovery_with_busy_lease_is_delayed_for_stale_takeover() -> None:
+    async def scenario() -> None:
+        payload = {
+            "job_type": JobType.START_DISCOVERY.value,
+            "tenant_id": str(TENANT_ID),
+            "discovery_run_id": "20000000-0000-0000-0000-000000000001",
+        }
+        transport = FakeQueueTransport(payloads=[payload])
+        store = FakeQueueStore(acquired=False)
+
+        async def unexpected_handler(_: dict[str, object]) -> None:
+            raise AssertionError("handler must not run without the lease")
+
+        manager = PipelineQueueManager(
+            queue=transport,
+            store=store,
+            handlers={JobType.START_DISCOVERY: unexpected_handler},
+        )
+        earliest_retry = datetime.now(UTC) + timedelta(minutes=9, seconds=55)
+
+        processed = await manager.run_once()
+
+        assert processed is False
+        assert transport.acked
+        assert len(transport.enqueued) == 1
+        retry_payload, retry_at = transport.enqueued[0]
+        assert retry_payload == payload
+        assert retry_at is not None and retry_at >= earliest_retry
 
     asyncio.run(scenario())
 
@@ -999,6 +1157,13 @@ def test_pipeline_rate_limiters_builds_production_limiters() -> None:
 
 def test_generate_preview_uses_five_attempts() -> None:
     assert max_attempts_by_job_type()[JobType.GENERATE_PREVIEW] == 5
+
+
+def test_discovery_jobs_use_bounded_transport_attempts() -> None:
+    attempts = max_attempts_by_job_type()
+
+    assert attempts[JobType.START_DISCOVERY] == 3
+    assert attempts[JobType.POLL_OUTSCRAPER] == 5
 
 
 def test_minute_rate_limiter_waits_between_calls() -> None:

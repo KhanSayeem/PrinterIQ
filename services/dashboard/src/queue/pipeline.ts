@@ -13,6 +13,11 @@ export type QueueJobLease = {
   acquired: boolean;
 };
 
+export type StartDiscoveryJobInput = {
+  tenantId: string;
+  discoveryRunId: string;
+};
+
 type IngestCsvPayload = {
   job_type: "ingest_csv";
   tenant_id: string;
@@ -21,6 +26,14 @@ type IngestCsvPayload = {
   vertical: string;
   dry_run: boolean;
 };
+
+type StartDiscoveryPayload = {
+  job_type: "start_discovery";
+  tenant_id: string;
+  discovery_run_id: string;
+};
+
+type PipelinePayload = IngestCsvPayload | StartDiscoveryPayload;
 
 const activeImportStates = new Set(["waiting", "active", "delayed", "prioritized", "waiting-children"]);
 const pipelineQueueKeys = ["bull:pipeline:wait", "bull:pipeline:active"];
@@ -46,8 +59,8 @@ function redisUrl() {
   return "redis://127.0.0.1:6379";
 }
 
-function createPipelineQueue() {
-  return new Queue<IngestCsvPayload>("pipeline", {
+function createPipelineQueue<T extends PipelinePayload>() {
+  return new Queue<T>("pipeline", {
     connection: { url: redisUrl() },
   });
 }
@@ -85,7 +98,7 @@ async function hasRawTenantImportRetry(
 }
 
 export async function enqueueIngestCsvJob(input: IngestCsvJobInput): Promise<QueueJobLease> {
-  const queue = createPipelineQueue();
+  const queue = createPipelineQueue<IngestCsvPayload>();
   const jobId = importJobId(input.tenantId);
 
   try {
@@ -135,7 +148,7 @@ export async function enqueueIngestCsvJob(input: IngestCsvJobInput): Promise<Que
 }
 
 export async function hasActiveIngestCsvJob(tenantId: string) {
-  const queue = createPipelineQueue();
+  const queue = createPipelineQueue<IngestCsvPayload>();
   const jobId = importJobId(tenantId);
 
   try {
@@ -148,6 +161,39 @@ export async function hasActiveIngestCsvJob(tenantId: string) {
     }
 
     return await hasRawTenantImportRetry(queue, tenantId);
+  } finally {
+    try {
+      await queue.close();
+    } catch (error) {
+      console.error("Failed to close pipeline queue", {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+}
+
+export async function enqueueStartDiscoveryJob(
+  input: StartDiscoveryJobInput,
+): Promise<QueueJobLease> {
+  const queue = createPipelineQueue<StartDiscoveryPayload>();
+  const jobId = `start-discovery-${input.discoveryRunId}`;
+
+  try {
+    const job = await queue.add(
+      "start_discovery",
+      {
+        job_type: "start_discovery",
+        tenant_id: input.tenantId,
+        discovery_run_id: input.discoveryRunId,
+      },
+      {
+        attempts: 3,
+        jobId,
+        removeOnComplete: true,
+      },
+    );
+
+    return { id: String(job.id ?? jobId), acquired: true };
   } finally {
     try {
       await queue.close();

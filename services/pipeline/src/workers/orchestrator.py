@@ -10,7 +10,7 @@ import time
 from argparse import ArgumentParser
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import UUID
@@ -20,11 +20,13 @@ if __package__ == "src.workers":
 
 from clients.claude_client import RealClaudeClient
 from clients.instantly_client import InstantlyClient
+from clients.outscraper_client import OutscraperClient
 from clients.playwright_audit import PlaywrightAuditor
 from clients.redis_client import get_redis_client
 from db.queries import (
     LeadStore,
     PipelineStore,
+    ProspectStore,
     QueueJobInsert,
     QueueJobLease,
     QueueJobStore,
@@ -32,7 +34,12 @@ from db.queries import (
 )
 from env import load_pipeline_env
 from pipeline_queue.definitions import JobType
-from pipeline_queue.worker_base import QueueJobRepository, run_tracked_job
+from pipeline_queue.worker_base import (
+    QueueJobRepository,
+    QueueLeaseUnavailableError,
+    run_tracked_job,
+)
+from workers.discover_prospects import poll_outscraper, start_discovery
 from workers.enrich import enrich_lead
 from workers.generate_preview import generate_preview
 from workers.ingest import ingest_csv_file
@@ -135,6 +142,13 @@ def build_pipeline_handlers(
         or _unconfigured_generate_preview_handler,
         JobType.SCHEDULE_OUTREACH: schedule_outreach_handler
         or _unconfigured_schedule_outreach_handler,
+        JobType.START_DISCOVERY: _unconfigured_prospect_handler,
+        JobType.POLL_OUTSCRAPER: _unconfigured_prospect_handler,
+        JobType.NORMALIZE_PROSPECTS: _unconfigured_prospect_handler,
+        JobType.ASSESS_PROSPECTS: _unconfigured_prospect_handler,
+        JobType.ENRICH_PROSPECT_CONTACTS: _unconfigured_prospect_handler,
+        JobType.PREPARE_SHADOW_REVIEW: _unconfigured_prospect_handler,
+        JobType.PURGE_PROSPECT_DATA: _unconfigured_prospect_handler,
     }
     if rate_limits is None:
         return handlers
@@ -150,15 +164,19 @@ def build_production_pipeline_handlers(
     *,
     lead_repository: object,
     pipeline_store: object,
+    prospect_store: object | None = None,
     queue: object,
     auditor: object,
     claude_client: object,
     instantly_client: object,
+    outscraper_client: object | None = None,
     ingest_worker: FlexibleWorker | None = None,
     enrich_worker: FlexibleWorker | None = None,
     qualify_worker: FlexibleWorker | None = None,
     generate_preview_worker: FlexibleWorker | None = None,
     schedule_worker: FlexibleWorker | None = None,
+    start_discovery_worker: FlexibleWorker | None = None,
+    poll_outscraper_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
@@ -166,6 +184,12 @@ def build_production_pipeline_handlers(
     qualify: FlexibleWorker = qualify_worker or cast(FlexibleWorker, qualify_lead)
     preview: FlexibleWorker = generate_preview_worker or cast(FlexibleWorker, generate_preview)
     schedule: FlexibleWorker = schedule_worker or cast(FlexibleWorker, schedule_outreach)
+    start_prospects: FlexibleWorker = start_discovery_worker or cast(
+        FlexibleWorker, start_discovery
+    )
+    poll_prospects: FlexibleWorker = poll_outscraper_worker or cast(
+        FlexibleWorker, poll_outscraper
+    )
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
     qualify_claude_client = (
         RateLimitedClaudeClient(claude_client, limiters[JobType.QUALIFY_LEAD])
@@ -228,12 +252,39 @@ def build_production_pipeline_handlers(
         worker=schedule,
     )
 
+    async def handle_start_discovery(payload: dict[str, object]) -> object:
+        if prospect_store is None or outscraper_client is None:
+            return await _unconfigured_prospect_handler(payload)
+        return await start_prospects(
+            payload,
+            store=prospect_store,
+            queue=queue,
+            outscraper_client=outscraper_client,
+        )
+
+    async def handle_poll_outscraper(payload: dict[str, object]) -> object:
+        if prospect_store is None or outscraper_client is None:
+            return await _unconfigured_prospect_handler(payload)
+        return await poll_prospects(
+            payload,
+            store=prospect_store,
+            queue=queue,
+            outscraper_client=outscraper_client,
+        )
+
     handlers: dict[JobType, PipelineHandler] = {
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
         JobType.QUALIFY_LEAD: handle_qualify,
         JobType.GENERATE_PREVIEW: handle_generate_preview,
         JobType.SCHEDULE_OUTREACH: schedule_handler,
+        JobType.START_DISCOVERY: handle_start_discovery,
+        JobType.POLL_OUTSCRAPER: handle_poll_outscraper,
+        JobType.NORMALIZE_PROSPECTS: _unconfigured_prospect_handler,
+        JobType.ASSESS_PROSPECTS: _unconfigured_prospect_handler,
+        JobType.ENRICH_PROSPECT_CONTACTS: _unconfigured_prospect_handler,
+        JobType.PREPARE_SHADOW_REVIEW: _unconfigured_prospect_handler,
+        JobType.PURGE_PROSPECT_DATA: _unconfigured_prospect_handler,
     }
     schedule_limiter = (
         {JobType.SCHEDULE_OUTREACH: limiters[JobType.SCHEDULE_OUTREACH]}
@@ -255,11 +306,14 @@ def build_pooled_production_pipeline_handlers(
     auditor: object,
     claude_client: object,
     instantly_client: object,
+    outscraper_client: object | None = None,
     ingest_worker: FlexibleWorker | None = None,
     enrich_worker: FlexibleWorker | None = None,
     qualify_worker: FlexibleWorker | None = None,
     generate_preview_worker: FlexibleWorker | None = None,
     schedule_worker: FlexibleWorker | None = None,
+    start_discovery_worker: FlexibleWorker | None = None,
+    poll_outscraper_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
@@ -267,6 +321,12 @@ def build_pooled_production_pipeline_handlers(
     qualify: FlexibleWorker = qualify_worker or cast(FlexibleWorker, qualify_lead)
     preview: FlexibleWorker = generate_preview_worker or cast(FlexibleWorker, generate_preview)
     schedule: FlexibleWorker = schedule_worker or cast(FlexibleWorker, schedule_outreach)
+    start_prospects: FlexibleWorker = start_discovery_worker or cast(
+        FlexibleWorker, start_discovery
+    )
+    poll_prospects: FlexibleWorker = poll_outscraper_worker or cast(
+        FlexibleWorker, poll_outscraper
+    )
     connection_pool = cast(Any, pool)
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
     qualify_claude_client = (
@@ -340,12 +400,41 @@ def build_pooled_production_pipeline_handlers(
                 instantly_client=instantly_client,
             )
 
+    async def handle_start_discovery(payload: dict[str, object]) -> object:
+        if outscraper_client is None:
+            return await _unconfigured_prospect_handler(payload)
+        async with connection_pool.acquire() as connection:
+            return await start_prospects(
+                payload,
+                store=ProspectStore(connection),
+                queue=queue,
+                outscraper_client=outscraper_client,
+            )
+
+    async def handle_poll_outscraper(payload: dict[str, object]) -> object:
+        if outscraper_client is None:
+            return await _unconfigured_prospect_handler(payload)
+        async with connection_pool.acquire() as connection:
+            return await poll_prospects(
+                payload,
+                store=ProspectStore(connection),
+                queue=queue,
+                outscraper_client=outscraper_client,
+            )
+
     handlers: dict[JobType, PipelineHandler] = {
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
         JobType.QUALIFY_LEAD: handle_qualify,
         JobType.GENERATE_PREVIEW: handle_generate_preview,
         JobType.SCHEDULE_OUTREACH: handle_schedule,
+        JobType.START_DISCOVERY: handle_start_discovery,
+        JobType.POLL_OUTSCRAPER: handle_poll_outscraper,
+        JobType.NORMALIZE_PROSPECTS: _unconfigured_prospect_handler,
+        JobType.ASSESS_PROSPECTS: _unconfigured_prospect_handler,
+        JobType.ENRICH_PROSPECT_CONTACTS: _unconfigured_prospect_handler,
+        JobType.PREPARE_SHADOW_REVIEW: _unconfigured_prospect_handler,
+        JobType.PURGE_PROSPECT_DATA: _unconfigured_prospect_handler,
     }
     schedule_limiter = (
         {JobType.SCHEDULE_OUTREACH: limiters[JobType.SCHEDULE_OUTREACH]}
@@ -390,6 +479,10 @@ async def _unconfigured_generate_preview_handler(_: dict[str, object]) -> object
     raise RuntimeError("generate_preview handler is not configured with production dependencies")
 
 
+async def _unconfigured_prospect_handler(_: dict[str, object]) -> object:
+    raise RuntimeError("prospect handler is not configured with production dependencies")
+
+
 def build_schedule_outreach_handler(
     *,
     lead_fetcher: object,
@@ -432,6 +525,13 @@ def max_attempts_by_job_type() -> dict[JobType, int]:
         JobType.QUALIFY_LEAD: 3,
         JobType.GENERATE_PREVIEW: 5,
         JobType.SCHEDULE_OUTREACH: 5,
+        JobType.START_DISCOVERY: 3,
+        JobType.POLL_OUTSCRAPER: 5,
+        JobType.NORMALIZE_PROSPECTS: 3,
+        JobType.ASSESS_PROSPECTS: 3,
+        JobType.ENRICH_PROSPECT_CONTACTS: 5,
+        JobType.PREPARE_SHADOW_REVIEW: 3,
+        JobType.PURGE_PROSPECT_DATA: 3,
     }
 
 
@@ -506,7 +606,15 @@ class PipelineQueueManager:
                 handler=handler,
                 attempt_count=attempt_count,
                 max_attempts=max_attempts,
+                retry_if_unavailable=job_type == JobType.START_DISCOVERY,
             )
+        except QueueLeaseUnavailableError:
+            await self._queue.enqueue(
+                payload,
+                delay_until=datetime.now(UTC) + timedelta(minutes=10),
+            )
+            await self._queue.ack(message)
+            return False
         except SendWindowNotReachedError:
             retry_at = _future_send_after(payload)
             await self._queue.enqueue(payload, delay_until=retry_at)
@@ -652,7 +760,7 @@ async def smoke_check() -> str:
     redis = get_redis_client()
     try:
         await cast(Awaitable[object], redis.ping())
-        pending_count = await redis.llen("bull:pipeline:wait")
+        pending_count = await cast(Awaitable[int], redis.llen("bull:pipeline:wait"))
     finally:
         await redis.aclose()
 
@@ -685,6 +793,7 @@ async def build_production_manager() -> PipelineQueueManager:
         auditor=PlaywrightAuditor(),
         claude_client=RealClaudeClient(api_key=anthropic_key, prompts_dir=prompts_dir),
         instantly_client=InstantlyClient.from_env(),
+        outscraper_client=OutscraperClient.from_env(),
     )
     return PipelineQueueManager(
         queue=queue,

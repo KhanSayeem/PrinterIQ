@@ -21,6 +21,9 @@ import {
   buildRevenuePaymentsSummaryQuery,
   buildUpdateLeadStatusQuery,
   buildDeleteOperatorNoteQuery,
+  buildCreateDiscoveryRunQuery,
+  buildLatestDiscoveryRunQuery,
+  buildMarkDiscoveryRunFailedQuery,
   normalizeWebsitePreview,
   normalizeLeadFilterCounts,
   normalizeLeadListPageMeta,
@@ -33,6 +36,13 @@ const db = drizzle(sql);
 const tenantId = "10000000-0000-0000-0000-000000000001";
 const leadId = "00000000-0000-0000-0001-000000000001";
 const periodStart = new Date("2026-05-27T00:00:00.000Z");
+const discoveryQuerySpec = {
+  key: "greater-brisbane-plumbers-v1",
+  categories: ["Plumber", "Drainage service", "Gas fitter"],
+  localities: ["Brisbane", "Logan", "Ipswich", "Moreton Bay", "Redlands"],
+  region: "AU",
+  totalLimit: 500,
+};
 
 describe("dashboard lead queries", () => {
   it("scopes lead list queries by tenant_id and filters", () => {
@@ -337,6 +347,53 @@ describe("dashboard lead queries", () => {
     expect(query.params).toContain("33333333-3333-4333-8333-333333333333");
     expect(query.params).toContain("note");
     expect(query.params).toContain(true);
+  });
+});
+
+describe("dashboard discovery run queries", () => {
+  it("creates a tenant-scoped shadow Outscraper run", () => {
+    const query = buildCreateDiscoveryRunQuery(db, {
+      tenantId,
+      querySpec: discoveryQuerySpec,
+    }).toSQL();
+
+    expect(query.sql).toContain('insert into "discovery_runs"');
+    expect(query.sql).toContain('"tenant_id"');
+    expect(query.sql).toContain('"query_spec"');
+    expect(query.sql).toContain('"shadow_mode"');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain("outscraper");
+    expect(query.params).toContain("created");
+    expect(query.params).toContain(true);
+    expect(query.params).toContain(JSON.stringify(discoveryQuerySpec));
+  });
+
+  it("fetches only the tenant's latest discovery run", () => {
+    const query = buildLatestDiscoveryRunQuery(db, { tenantId }).toSQL();
+
+    expect(query.sql).toContain('from "discovery_runs"');
+    expect(query.sql).toContain('"discovery_runs"."tenant_id" =');
+    expect(query.sql).toContain('order by "discovery_runs"."created_at" desc');
+    expect(query.sql).toContain("limit");
+    expect(query.params).toContain(tenantId);
+  });
+
+  it("marks only the tenant's created run failed after queue rejection", () => {
+    const query = buildMarkDiscoveryRunFailedQuery(db, {
+      tenantId,
+      discoveryRunId: "20000000-0000-0000-0000-000000000001",
+      failureCode: "queue_submission_failed",
+    }).toSQL();
+
+    expect(query.sql).toContain('update "discovery_runs"');
+    expect(query.sql).toContain('"discovery_runs"."tenant_id" =');
+    expect(query.sql).toContain('"discovery_runs"."id" =');
+    expect(query.sql).toContain('"discovery_runs"."status" =');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain("20000000-0000-0000-0000-000000000001");
+    expect(query.params).toContain("created");
+    expect(query.params).toContain("failed");
+    expect(query.params).toContain("queue_submission_failed");
   });
 });
 

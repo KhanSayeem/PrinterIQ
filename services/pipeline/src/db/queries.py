@@ -3,11 +3,23 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal, Protocol, SupportsInt, cast
 from uuid import UUID
 
 QueueJobStatus = Literal["active", "completed", "failed", "dead"]
+DiscoveryRunStatus = Literal[
+    "created",
+    "submitted",
+    "polling",
+    "persisted",
+    "processing",
+    "review_ready",
+    "completed",
+    "failed",
+]
+SourceProspectStatus = Literal["discovered", "failed"]
 _ALLOWED_STATUS_PREDECESSORS: dict[str, tuple[str, ...]] = {
     "enriched": ("imported",),
     "qualified": ("enriched",),
@@ -15,6 +27,15 @@ _ALLOWED_STATUS_PREDECESSORS: dict[str, tuple[str, ...]] = {
     "replied": ("contacted",),
     "paid": ("replied",),
     "archived": ("enriched", "qualified", "contacted", "replied"),
+}
+_RUN_PREDECESSORS: dict[DiscoveryRunStatus, tuple[str, ...]] = {
+    "submitted": ("created",),
+    "polling": ("submitted", "polling"),
+    "persisted": ("submitted", "polling"),
+    "processing": ("persisted",),
+    "review_ready": ("processing",),
+    "completed": ("review_ready",),
+    "failed": ("created", "submitted", "polling", "persisted", "processing"),
 }
 
 
@@ -43,6 +64,7 @@ class QueueJobInsert:
 class QueueJobLease:
     job_id: UUID
     acquired: bool
+    lease_started_at: datetime
 
 
 @dataclass(frozen=True)
@@ -51,6 +73,7 @@ class QueueJobUpdate:
     tenant_id: UUID
     status: QueueJobStatus
     attempt_count: int
+    lease_started_at: datetime
     error_message: str | None = None
 
 
@@ -63,6 +86,86 @@ class QueueJobStore:
 
     async def update_queue_job(self, update: QueueJobUpdate) -> None:
         await update_queue_job(self._connection, update)
+
+
+@dataclass(frozen=True)
+class SourceProspectUpsert:
+    tenant_id: UUID
+    discovery_run_id: UUID
+    source_business_id: str
+    business_name: str
+    source_payload: Mapping[str, object]
+    primary_category: str | None = None
+    additional_categories: tuple[str, ...] = ()
+    phone: str | None = None
+    full_address: str | None = None
+    locality: str | None = None
+    state: str | None = None
+    postcode: str | None = None
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    business_status: str | None = None
+    rating: Decimal | None = None
+    review_count: int | None = None
+    google_profile_url: str | None = None
+    source_website_url: str | None = None
+    status: SourceProspectStatus = "discovered"
+    outcome_reason: str | None = None
+    normalized_name: str | None = None
+    source_payload_expires_at: datetime | None = None
+    source: Literal["outscraper"] = "outscraper"
+
+
+class ProspectStore:
+    def __init__(self, connection: DatabaseConnection) -> None:
+        self._connection = connection
+
+    async def get_discovery_run(
+        self, tenant_id: UUID, discovery_run_id: UUID
+    ) -> dict[str, object] | None:
+        return await get_discovery_run(
+            self._connection,
+            tenant_id=tenant_id,
+            discovery_run_id=discovery_run_id,
+        )
+
+    async def transition_discovery_run(
+        self,
+        tenant_id: UUID,
+        discovery_run_id: UUID,
+        to_status: DiscoveryRunStatus,
+        *,
+        source_request_id: str | None = None,
+        provider_usage: Mapping[str, object] | None = None,
+        failure_code: str | None = None,
+        failure_detail: str | None = None,
+        discovered_count: int | None = None,
+    ) -> dict[str, object] | None:
+        return await transition_discovery_run(
+            self._connection,
+            tenant_id=tenant_id,
+            discovery_run_id=discovery_run_id,
+            to_status=to_status,
+            source_request_id=source_request_id,
+            provider_usage=provider_usage,
+            failure_code=failure_code,
+            failure_detail=failure_detail,
+            discovered_count=discovered_count,
+        )
+
+    async def upsert_source_prospect(
+        self, prospect: SourceProspectUpsert
+    ) -> dict[str, object]:
+        return await upsert_source_prospect(self._connection, prospect)
+
+    async def refresh_discovery_run_aggregates(
+        self, tenant_id: UUID, discovery_run_id: UUID
+    ) -> dict[str, object]:
+        return await refresh_discovery_run_aggregates(
+            self._connection,
+            tenant_id=tenant_id,
+            discovery_run_id=discovery_run_id,
+        )
 
 
 @dataclass(frozen=True)
@@ -306,6 +409,233 @@ class PipelineStore:
             instantly_campaign_id=instantly_campaign_id,
             channel=channel,
         )
+
+
+async def get_discovery_run(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    discovery_run_id: UUID,
+) -> dict[str, object] | None:
+    result = await connection.fetchrow(
+        """
+        SELECT id, tenant_id, source, source_request_id, query_spec, status,
+               shadow_mode, discovered_count, usable_count, route_a_count,
+               route_b_count, verified_contact_count, provider_usage,
+               failure_code, failure_detail, submitted_at, results_received_at,
+               review_ready_at, created_at, updated_at
+        FROM discovery_runs
+        WHERE tenant_id = $1
+          AND id = $2
+        """,
+        tenant_id,
+        discovery_run_id,
+    )
+    if result is None:
+        return None
+    return dict(cast(Mapping[str, object], result))
+
+
+async def transition_discovery_run(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    discovery_run_id: UUID,
+    to_status: DiscoveryRunStatus,
+    source_request_id: str | None = None,
+    provider_usage: Mapping[str, object] | None = None,
+    failure_code: str | None = None,
+    failure_detail: str | None = None,
+    discovered_count: int | None = None,
+) -> dict[str, object] | None:
+    predecessors = _RUN_PREDECESSORS.get(to_status)
+    if predecessors is None:
+        raise ValueError(f"Unsupported discovery run transition: {to_status}")
+
+    result = await connection.fetchrow(
+        """
+        UPDATE discovery_runs
+        SET status = $3,
+            source_request_id = COALESCE($5, source_request_id),
+            provider_usage = COALESCE($6::jsonb, provider_usage),
+            failure_code = COALESCE($7, failure_code),
+            failure_detail = COALESCE($8, failure_detail),
+            discovered_count = COALESCE($9, discovered_count),
+            submitted_at = CASE
+              WHEN $3 = 'submitted' THEN COALESCE(submitted_at, NOW())
+              ELSE submitted_at
+            END,
+            results_received_at = CASE
+              WHEN $3 = 'persisted' THEN COALESCE(results_received_at, NOW())
+              ELSE results_received_at
+            END,
+            review_ready_at = CASE
+              WHEN $3 = 'review_ready' THEN COALESCE(review_ready_at, NOW())
+              ELSE review_ready_at
+            END,
+            updated_at = NOW()
+        WHERE tenant_id = $1
+          AND id = $2
+          AND status = ANY($4::text[])
+        RETURNING id, tenant_id, source, source_request_id, query_spec, status,
+                  shadow_mode, discovered_count, usable_count, route_a_count,
+                  route_b_count, verified_contact_count, provider_usage,
+                  failure_code, failure_detail, submitted_at, results_received_at,
+                  review_ready_at, created_at, updated_at
+        """,
+        tenant_id,
+        discovery_run_id,
+        to_status,
+        predecessors,
+        source_request_id,
+        None if provider_usage is None else json.dumps(dict(provider_usage)),
+        failure_code,
+        failure_detail,
+        discovered_count,
+    )
+    if result is None:
+        return None
+    return dict(cast(Mapping[str, object], result))
+
+
+async def upsert_source_prospect(
+    connection: DatabaseConnection,
+    prospect: SourceProspectUpsert,
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        INSERT INTO business_prospects (
+          tenant_id, discovery_run_id, source, source_business_id,
+          business_name, primary_category, additional_categories, phone,
+          full_address, locality, state, postcode, latitude, longitude,
+          business_status, rating, review_count, google_profile_url,
+          source_website_url, source_payload, source_payload_expires_at,
+          status, outcome_reason, normalized_name
+        )
+        SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
+               $13, $14, $15, $16, $17, $18, $19, $20::jsonb,
+               COALESCE($21, NOW() + INTERVAL '30 days'), $22, $23, $24
+        FROM discovery_runs
+        WHERE tenant_id = $1
+          AND id = $2
+        ON CONFLICT (tenant_id, discovery_run_id, source, source_business_id)
+        DO UPDATE SET
+          business_name = EXCLUDED.business_name,
+          primary_category = EXCLUDED.primary_category,
+          additional_categories = EXCLUDED.additional_categories,
+          phone = EXCLUDED.phone,
+          full_address = EXCLUDED.full_address,
+          locality = EXCLUDED.locality,
+          state = EXCLUDED.state,
+          postcode = EXCLUDED.postcode,
+          latitude = EXCLUDED.latitude,
+          longitude = EXCLUDED.longitude,
+          business_status = EXCLUDED.business_status,
+          rating = EXCLUDED.rating,
+          review_count = EXCLUDED.review_count,
+          google_profile_url = EXCLUDED.google_profile_url,
+          source_website_url = EXCLUDED.source_website_url,
+          source_payload = EXCLUDED.source_payload,
+          updated_at = NOW()
+        RETURNING id, tenant_id, discovery_run_id, source, source_business_id,
+                  business_name, primary_category, additional_categories, phone,
+                  full_address, locality, state, postcode, latitude, longitude,
+                  business_status, rating, review_count, google_profile_url,
+                  source_website_url, status, outcome_reason, source_payload,
+                  source_payload_expires_at, created_at, updated_at
+        """,
+        prospect.tenant_id,
+        prospect.discovery_run_id,
+        getattr(prospect, "source", "outscraper"),
+        prospect.source_business_id,
+        prospect.business_name,
+        getattr(prospect, "primary_category", None),
+        json.dumps(list(getattr(prospect, "additional_categories", ()))),
+        getattr(prospect, "phone", None),
+        getattr(prospect, "full_address", None),
+        getattr(prospect, "locality", None),
+        getattr(prospect, "state", None),
+        getattr(prospect, "postcode", None),
+        getattr(prospect, "latitude", None),
+        getattr(prospect, "longitude", None),
+        getattr(prospect, "business_status", None),
+        getattr(prospect, "rating", None),
+        getattr(prospect, "review_count", None),
+        getattr(prospect, "google_profile_url", None),
+        getattr(prospect, "source_website_url", None),
+        json.dumps(dict(prospect.source_payload)),
+        getattr(prospect, "source_payload_expires_at", None),
+        prospect.status,
+        prospect.outcome_reason,
+        getattr(prospect, "normalized_name", None) or prospect.business_name,
+    )
+    if result is None:
+        raise LookupError(
+            f"Discovery run {prospect.discovery_run_id} not found for tenant "
+            f"{prospect.tenant_id}"
+        )
+    return dict(cast(Mapping[str, object], result))
+
+
+async def refresh_discovery_run_aggregates(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    discovery_run_id: UUID,
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        WITH prospect_counts AS (
+          SELECT COUNT(*)::integer AS discovered_count,
+                 COUNT(*) FILTER (WHERE status <> 'failed')::integer AS usable_count,
+                 COUNT(*) FILTER (WHERE route = 'A')::integer AS route_a_count,
+                 COUNT(*) FILTER (WHERE route = 'B')::integer AS route_b_count
+          FROM business_prospects
+          WHERE tenant_id = $1
+            AND discovery_run_id = $2
+        ),
+        verified_contacts AS (
+          SELECT COUNT(DISTINCT prospect_contacts.prospect_id)::integer
+                   AS verified_contact_count
+          FROM prospect_contacts
+          INNER JOIN business_prospects
+            ON business_prospects.tenant_id = prospect_contacts.tenant_id
+           AND business_prospects.id = prospect_contacts.prospect_id
+          WHERE prospect_contacts.tenant_id = $1
+            AND business_prospects.discovery_run_id = $2
+            AND prospect_contacts.status = 'verified'
+        )
+        UPDATE discovery_runs
+        SET discovered_count = prospect_counts.discovered_count,
+            usable_count = prospect_counts.usable_count,
+            route_a_count = prospect_counts.route_a_count,
+            route_b_count = prospect_counts.route_b_count,
+            verified_contact_count = verified_contacts.verified_contact_count,
+            updated_at = NOW()
+        FROM prospect_counts, verified_contacts
+        WHERE discovery_runs.tenant_id = $1
+          AND discovery_runs.id = $2
+        RETURNING discovery_runs.id, discovery_runs.tenant_id,
+                  discovery_runs.source, discovery_runs.source_request_id,
+                  discovery_runs.query_spec, discovery_runs.status,
+                  discovery_runs.shadow_mode, discovery_runs.discovered_count,
+                  discovery_runs.usable_count, discovery_runs.route_a_count,
+                  discovery_runs.route_b_count,
+                  discovery_runs.verified_contact_count,
+                  discovery_runs.provider_usage, discovery_runs.failure_code,
+                  discovery_runs.failure_detail, discovery_runs.submitted_at,
+                  discovery_runs.results_received_at,
+                  discovery_runs.review_ready_at, discovery_runs.created_at,
+                  discovery_runs.updated_at
+        """,
+        tenant_id,
+        discovery_run_id,
+    )
+    if result is None:
+        raise LookupError(
+            f"Discovery run {discovery_run_id} not found for tenant {tenant_id}"
+        )
+    return dict(cast(Mapping[str, object], result))
 
 
 async def lead_email_exists(
@@ -1040,10 +1370,10 @@ async def _create_queue_job_for_lead(
             error_message = NULL,
             completed_at = NULL
         WHERE queue_jobs.status = 'failed'
-        RETURNING id, TRUE AS acquired
+        RETURNING id, TRUE AS acquired, started_at
         ),
         existing_job AS (
-        SELECT id, FALSE AS acquired
+        SELECT id, FALSE AS acquired, started_at
         FROM queue_jobs
         WHERE tenant_id = $1
           AND lead_id = $2
@@ -1052,9 +1382,9 @@ async def _create_queue_job_for_lead(
           AND NOT EXISTS (SELECT 1 FROM inserted_job)
         LIMIT 1
         )
-        SELECT id, acquired FROM inserted_job
+        SELECT id, acquired, started_at FROM inserted_job
         UNION ALL
-        SELECT id, acquired FROM existing_job
+        SELECT id, acquired, started_at FROM existing_job
         LIMIT 1
         """,
         insert.tenant_id,
@@ -1096,10 +1426,15 @@ async def _create_queue_job_without_lead(
             error_message = NULL,
             completed_at = NULL
         WHERE queue_jobs.status = 'failed'
-        RETURNING id, TRUE AS acquired
+           OR (
+             queue_jobs.status = 'active'
+             AND queue_jobs.job_type = 'start_discovery'
+             AND queue_jobs.started_at < NOW() - INTERVAL '10 minutes'
+           )
+        RETURNING id, TRUE AS acquired, started_at
         ),
         existing_job AS (
-        SELECT id, FALSE AS acquired
+        SELECT id, FALSE AS acquired, started_at
         FROM queue_jobs
         WHERE tenant_id = $1
           AND lead_id IS NULL
@@ -1108,9 +1443,9 @@ async def _create_queue_job_without_lead(
           AND NOT EXISTS (SELECT 1 FROM inserted_job)
         LIMIT 1
         )
-        SELECT id, acquired FROM inserted_job
+        SELECT id, acquired, started_at FROM inserted_job
         UNION ALL
-        SELECT id, acquired FROM existing_job
+        SELECT id, acquired, started_at FROM existing_job
         LIMIT 1
         """,
         insert.tenant_id,
@@ -1132,7 +1467,20 @@ def _coerce_queue_job_lease(raw_row: object) -> QueueJobLease:
         job_id = UUID(raw_id)
     else:
         raise TypeError(f"Expected queue job UUID, got {type(raw_id).__name__}")
-    return QueueJobLease(job_id=job_id, acquired=bool(row["acquired"]))
+    raw_started_at = row.get("started_at")
+    if isinstance(raw_started_at, str):
+        lease_started_at = datetime.fromisoformat(raw_started_at)
+    elif isinstance(raw_started_at, datetime):
+        lease_started_at = raw_started_at
+    else:
+        raise TypeError(
+            f"Expected queue job started_at datetime, got {type(raw_started_at).__name__}"
+        )
+    return QueueJobLease(
+        job_id=job_id,
+        acquired=bool(row["acquired"]),
+        lease_started_at=lease_started_at,
+    )
 
 
 async def update_queue_job(connection: DatabaseConnection, update: QueueJobUpdate) -> None:
@@ -1146,10 +1494,13 @@ async def update_queue_job(connection: DatabaseConnection, update: QueueJobUpdat
             {completed_fragment}
         WHERE id = $1
           AND tenant_id = $2
+          AND status = 'active'
+          AND started_at = $6::timestamptz
         """,
         update.job_id,
         update.tenant_id,
         update.status,
         update.attempt_count,
         update.error_message,
+        update.lease_started_at,
     )
