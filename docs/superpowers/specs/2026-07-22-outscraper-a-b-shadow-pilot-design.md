@@ -95,7 +95,7 @@ flowchart LR
 
 ### 6.2 Service Boundaries
 
-- The Python pipeline owns Outscraper calls, polling, normalization, website audits, scoring, and Apollo contact enrichment.
+- The Python pipeline owns Outscraper calls, polling, normalization, website audits, scoring, and Apollo organization/person resolution.
 - All Python database access goes through `services/pipeline/src/db/queries.py`.
 - The Next.js dashboard reads run/prospect/assessment data and writes manual review assessments through `services/dashboard/src/db/queries.ts` and server actions.
 - Provider secrets remain server-side environment variables and are never returned to browser components.
@@ -193,7 +193,15 @@ Required fields:
 - provider payload JSON and its expiry timestamp
 - timestamps
 
-Only an Apollo email explicitly reported as verified satisfies the pilot contact gate. Unverified, catch-all, guessed, personal, role-ambiguous, or no-match results remain `contact_unresolved`. Route A attempts may use business name, phone, address, and location; Route B may additionally use the owned domain. PrinterIQ never invents an address when Apollo cannot resolve one.
+Only an Apollo email explicitly reported as verified satisfies the pilot contact gate. Unverified, catch-all, guessed, personal, role-ambiguous, or no-match results remain `contact_unresolved`. PrinterIQ never invents a person or address when Apollo cannot resolve one.
+
+Apollo resolution is an explicit three-step chain:
+
+1. Resolve an Apollo organization. Route B uses the owned domain plus business name; Route A uses business name and Greater Brisbane location. Ambiguous organization matches are unresolved rather than guessed.
+2. Search people within the resolved organization, limited to `owner`, `founder`, `c_suite`, and `partner` seniorities and filtered to Apollo's `verified` email status.
+3. Enrich the selected person by Apollo person ID and accept the result only when the returned business email remains verified.
+
+The pilot does not request personal emails, phone reveal, phone waterfall, or email waterfall. `reveal_personal_emails`, `reveal_phone_number`, `run_waterfall_email`, and `run_waterfall_phone` remain false. People Search requires an Apollo master API key; implementation must fail configuration validation with a clear operator message if the configured key lacks that capability. Without a master key, discovery and scoring may run, but the pilot cannot satisfy its verified-contact success gate.
 
 ## 8. Eligibility And Routing
 
