@@ -73,3 +73,17 @@ Status only advances forward. Never skip stages. Never go backward.
 - Always save handoff documents inside this repo at `docs/superpowers/handoffs/`
 - Use dated session filenames, e.g. `YYYY-MM-DD-session-N.md`
 - Do not leave handoffs only in temp directories; future agents should be able to find them from the repo root
+
+## Agent skills
+
+### Issue tracker
+
+Work is tracked in GitHub Issues. External pull requests are not a triage request surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+PrinterIQ uses a single-context domain layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
