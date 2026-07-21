@@ -1,7 +1,7 @@
 # Outscraper A/B Shadow Pilot Design
 
 **Date:** 2026-07-22
-**Status:** Approved in design discussion; pending repository review
+**Status:** Approved
 **Target branch:** `dev`
 
 ---
@@ -134,7 +134,7 @@ Required fields:
 - `query_spec` JSON containing categories, included localities, locale, result cap, and query version
 - `status`: `created`, `submitted`, `polling`, `persisted`, `processing`, `review_ready`, `completed`, or `failed`
 - `shadow_mode`, constrained to `true` for V1
-- provider and processing counts
+- provider and processing counts plus `provider_usage` JSON for request counts and provider-reported or operator-reconciled spend
 - `failure_code`, `failure_detail`
 - `submitted_at`, `results_received_at`, `review_ready_at`, `created_at`, `updated_at`
 
@@ -150,14 +150,14 @@ Required fields:
 - business data: name, normalized name, primary category, additional categories, phone, normalized phone, address, locality, state, postcode, latitude, longitude
 - Google data: business status, rating, review count, profile URL
 - website data: source URL, normalized domain, ownership classification
-- deduplication: canonical prospect ID when merged and duplicate evidence
+- deduplication: duplicate evidence plus run-scoped exact and secondary matching results
 - eligibility: franchise/multi-location flags, hold/reject reason, route
 - lifecycle status: `discovered`, `normalized`, `assessed`, `contact_enriched`, `review_ready`, `held`, `rejected`, `failed`, `approved`, or `promoted`
 - `lead_id`, nullable and unused in V1
 - source payload JSON and its expiry timestamp
 - timestamps
 
-The primary source identity is unique on `(tenant_id, source, source_business_id)`. Google Place ID is the V1 `source_business_id`. Secondary duplicate matching uses normalized phone, normalized owned domain, and normalized name/address. Ambiguous matches are held for review rather than automatically merged.
+The source identity is unique within a run on `(tenant_id, discovery_run_id, source, source_business_id)`. Google Place ID is the normal V1 `source_business_id`. A malformed provider record without a Place ID is retained as a failed prospect using a deterministic `invalid:` payload hash so it remains measurable but can never become eligible. Run-scoped identity preserves immutable membership when a calibration run rediscovers the same business. Exact cross-run reporting may join snapshots by `(tenant_id, source, source_business_id)`; V1 does not create a permanent fuzzy canonical-business relationship. Secondary matching uses normalized phone, normalized owned domain, and normalized name/address within a run. Ambiguous matches are held for review rather than automatically linked or merged.
 
 `approved`, `promoted`, and `lead_id` reserve the future integration boundary. No V1 code path may set them.
 
@@ -171,11 +171,11 @@ Required fields:
 - `assessment_type`: `automated` or `manual_review`
 - `assessment_version`
 - automated fields: eligibility result, computed route, total score, category subtotals, rule evidence JSON, forced-route reason
-- manual fields: reviewer ID, review decision (`correct`, `wrong_route`, `ineligible`, `needs_investigation`), corrected route, review note
+- manual fields: server-derived Supabase reviewer subject, idempotency key, review decision (`correct`, `wrong_route`, `ineligible`, `needs_investigation`), corrected route, review note
 - optional AI summary and prompt version; neither may alter eligibility, score, or route
 - `created_at`
 
-An automated assessment is unique per `(tenant_id, prospect_id, assessment_version)`. Manual assessments remain append-only so recalibration rounds retain their audit history.
+An automated assessment is unique per `(tenant_id, prospect_id, assessment_version)`. A manual assessment is unique per `(tenant_id, prospect_id, idempotency_key)`. Manual assessments remain append-only so recalibration rounds retain their audit history. The database also constrains an assessment's `(tenant_id, discovery_run_id, prospect_id)` to the prospect snapshot from that same run.
 
 ### 7.4 `prospect_contacts`
 
@@ -190,6 +190,7 @@ Required fields:
 - matched person/business metadata needed to audit the match
 - email and provider email status
 - match evidence and confidence classification
+- provider-reported credits consumed when available
 - provider payload JSON and its expiry timestamp
 - timestamps
 
@@ -272,7 +273,7 @@ The dashboard adds a run-level review experience. It shows:
 - precision metrics and provider cost/yield metrics
 - CSV export of the reviewed cohort
 
-The validation set contains exactly 60 eligible-for-sampling records when enough records exist: 20 Route A, 20 Route B, and 20 selected from healthy/rejected results. Selection is deterministic from discovery run ID, prospect ID, and cohort using a documented hash ordering. Refreshing or reopening a run cannot change its sample.
+The validation set contains exactly 60 eligible-for-sampling records when enough records exist: 20 Route A, 20 Route B, and 20 selected from healthy/rejected results. Selection is deterministic from discovery run ID, prospect ID, and cohort using a documented hash ordering. Sample membership and cohort are stored explicitly on the prospect snapshot. Refreshing or reopening a run cannot change its sample.
 
 If any cohort contains fewer than 20 records, all available records in that cohort are selected and the run is marked `insufficient_sample`; it cannot pass the shadow gate.
 
@@ -286,7 +287,7 @@ The review surface lives under the authenticated `/prospects` dashboard area, se
 - Polling treats pending provider state as a delayed retry, not a failure.
 - Provider terminal failure records a stable failure code and ends the run.
 - Results are persisted per business before normalization begins.
-- Replayed result ingestion upserts by tenant/source/source-business identity without erasing later assessment or review state.
+- Replayed result ingestion upserts by tenant/run/source/source-business identity without erasing later assessment or review state.
 - Each processing stage records prospect-level failure codes and continues other records.
 - Website timeouts use bounded retries. Two failed retrieval attempts are required before Route A inaccessibility classification.
 - Apollo transport failures are retried; valid no-match responses are terminal contact outcomes and are not retried.
@@ -301,7 +302,7 @@ The review surface lives under the authenticated `/prospects` dashboard area, se
 - Dashboard access uses the existing authenticated operator boundary.
 - Provider payloads expose no secrets to client components or exports.
 - Raw Outscraper and Apollo payloads expire after 30 days.
-- Rejected, held, and unresolved normalized prospects expire after 90 days unless needed for an active review.
+- Rejected, held, and unresolved normalized prospects expire after 90 days only after their discovery run is marked `completed`. Runs in `review_ready` retain every snapshot needed for an active or incomplete review.
 - Promoted records, if introduced later, follow the existing lead/customer retention policy.
 - Minimum suppression identity is retained to prevent re-import or recontact after opt-out.
 - Suppression is checked during contact enrichment and must be checked again by any future promotion path.
@@ -322,7 +323,7 @@ The pilot is technically viable only when all gates pass:
 5. Manual review finds at least 85% primary-route precision.
 6. Fewer than 5% of records end in unexpected processing failure; valid provider no-match outcomes are excluded from this calculation.
 7. No duplicate, suppressed, held, rejected, or out-of-region prospect is marked review-ready.
-8. Provider spend and Apollo credits are reported per discovered, usable, routed, and verified prospect.
+8. Provider spend and Apollo credits are reported per discovered, usable, routed, and verified prospect. If either provider does not return authoritative usage, the run remains cost-gate incomplete until the operator reconciles it from the provider account; PrinterIQ must not invent a cost.
 9. Route A and Route B yields and contact match rates are reported separately.
 
 Passing these gates produces a go/no-go recommendation. It does not enable live outreach.
