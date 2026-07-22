@@ -789,7 +789,7 @@ async def smoke_check() -> str:
     redis = get_redis_client()
     try:
         await cast(Awaitable[object], redis.ping())
-        pending_count = await cast(Awaitable[int], redis.llen("bull:pipeline:wait"))
+        pending_count = await _redis_int(redis.llen("bull:pipeline:wait"))
     finally:
         await redis.aclose()
 
@@ -800,6 +800,12 @@ async def smoke_check() -> str:
         f"pipeline concurrency: {PIPELINE_CONCURRENCY}; "
         f"pending jobs: {pending_count}"
     )
+
+
+async def _redis_int(value: Awaitable[int] | int) -> int:
+    if isinstance(value, int):
+        return value
+    return await value
 
 
 async def build_production_manager() -> PipelineQueueManager:
