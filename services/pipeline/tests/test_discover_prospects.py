@@ -4,7 +4,11 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from clients.outscraper_client import OutscraperRequest
+from clients.outscraper_client import (
+    OutscraperAPIError,
+    OutscraperRequest,
+    OutscraperRetryableError,
+)
 from workers.discover_prospects import (
     APPROVED_DISCOVERY_QUERIES,
     poll_outscraper,
@@ -75,6 +79,18 @@ class _FailingSubmitClient(_Client):
     ) -> OutscraperRequest:
         self.submit_calls.append((queries, total_limit))
         raise RuntimeError("ambiguous transport failure")
+
+
+class _FailingPollClient(_Client):
+    async def get_request(self, request_id: str) -> OutscraperRequest:
+        self.poll_calls.append(request_id)
+        raise OutscraperRetryableError("provider transport failed")
+
+
+class _RejectedPollClient(_Client):
+    async def get_request(self, request_id: str) -> OutscraperRequest:
+        self.poll_calls.append(request_id)
+        raise OutscraperAPIError("request rejected")
 
 
 def _payload(*, poll_count: int | None = None) -> dict[str, object]:
@@ -241,6 +257,52 @@ def test_poll_limit_marks_run_failed_without_another_provider_call() -> None:
     asyncio.run(scenario())
 
 
+def test_exhausted_poll_transport_retries_mark_run_failed() -> None:
+    async def scenario() -> None:
+        store = _Store({"status": "polling", "source_request_id": "request-123"})
+        client = _FailingPollClient(OutscraperRequest("unused", "Pending", []))
+        payload = _payload(poll_count=4) | {"attempt_count": 5}
+
+        await poll_outscraper(
+            payload,
+            store=store,
+            queue=_Queue(store.events),
+            outscraper_client=client,
+            now=lambda: NOW,
+        )
+
+        assert client.poll_calls == ["request-123"]
+        transition = store.events[0][1]
+        assert isinstance(transition, dict)
+        assert transition["to_status"] == "failed"
+        assert transition["failure_code"] == "outscraper_transport_exhausted"
+        assert "provider transport failed" not in str(transition["failure_detail"])
+
+    asyncio.run(scenario())
+
+
+def test_permanent_poll_error_fails_run_without_queue_retry() -> None:
+    async def scenario() -> None:
+        store = _Store({"status": "polling", "source_request_id": "request-123"})
+        client = _RejectedPollClient(OutscraperRequest("unused", "Pending", []))
+
+        await poll_outscraper(
+            _payload(poll_count=4),
+            store=store,
+            queue=_Queue(store.events),
+            outscraper_client=client,
+            now=lambda: NOW,
+        )
+
+        transition = store.events[0][1]
+        assert isinstance(transition, dict)
+        assert transition["to_status"] == "failed"
+        assert transition["failure_code"] == "outscraper_request_rejected"
+        assert "request rejected" not in str(transition["failure_detail"])
+
+    asyncio.run(scenario())
+
+
 def test_poll_retry_after_persistence_requeues_normalization_without_provider_call() -> None:
     async def scenario() -> None:
         store = _Store({"status": "persisted", "source_request_id": "request-123"})
@@ -337,5 +399,35 @@ def test_provider_failure_marks_run_failed_without_exposing_provider_data() -> N
         assert transition["to_status"] == "failed"
         assert transition["failure_code"] == "outscraper_provider_failure"
         assert transition["failure_detail"] == "Outscraper reported a terminal failure."
+
+    asyncio.run(scenario())
+
+
+def test_success_locally_caps_and_deduplicates_persisted_businesses() -> None:
+    async def scenario() -> None:
+        records = [
+            {"place_id": "place-0", "name": "First"},
+            {"place_id": "place-0", "name": "Duplicate"},
+            *[
+                {"place_id": f"place-{index}", "name": f"Business {index}"}
+                for index in range(1, 501)
+            ],
+        ]
+        store = _Store({"status": "polling", "source_request_id": "request-123"})
+        client = _Client(OutscraperRequest("request-123", "Success", records))
+
+        await poll_outscraper(
+            _payload(poll_count=1),
+            store=store,
+            queue=_Queue(store.events),
+            outscraper_client=client,
+            now=lambda: NOW,
+        )
+
+        assert len(store.snapshots) == 500
+        assert len({snapshot.source_business_id for snapshot in store.snapshots}) == 500
+        transition = next(event[1] for event in store.events if event[0] == "transition")
+        assert isinstance(transition, dict)
+        assert transition["discovered_count"] == 500
 
     asyncio.run(scenario())

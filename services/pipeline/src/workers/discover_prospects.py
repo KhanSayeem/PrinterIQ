@@ -7,7 +7,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
-from clients.outscraper_client import OutscraperClient, OutscraperRequest
+from clients.outscraper_client import (
+    OutscraperAPIError,
+    OutscraperClient,
+    OutscraperRequest,
+    OutscraperRetryableError,
+)
 from db.queries import SourceProspectUpsert
 
 APPROVED_CATEGORIES = ("Plumber", "Drainage service", "Gas fitter")
@@ -19,6 +24,7 @@ APPROVED_DISCOVERY_QUERIES = tuple(
 )
 DISCOVERY_TOTAL_LIMIT = 500
 MAX_PROVIDER_POLLS = 30
+MAX_POLL_TRANSPORT_ATTEMPTS = 5
 
 
 class DiscoveryRunError(RuntimeError):
@@ -161,7 +167,28 @@ async def poll_outscraper(
         )
         return
 
-    response = await outscraper_client.get_request(request_id)
+    try:
+        response = await outscraper_client.get_request(request_id)
+    except OutscraperRetryableError:
+        if _attempt_count(payload) < MAX_POLL_TRANSPORT_ATTEMPTS:
+            raise
+        await _fail_run(
+            store,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            failure_code="outscraper_transport_exhausted",
+            failure_detail="Outscraper polling failed after bounded transport retries.",
+        )
+        return
+    except OutscraperAPIError:
+        await _fail_run(
+            store,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            failure_code="outscraper_request_rejected",
+            failure_detail="Outscraper rejected the poll request or returned an invalid response.",
+        )
+        return
     await _handle_provider_response(
         response,
         tenant_id=tenant_id,
@@ -201,14 +228,6 @@ async def _handle_provider_response(
             source_request_id=response.request_id if record_request_id else None,
         )
         return
-    if record_request_id:
-        await _transition_or_raise(
-            store,
-            tenant_id=tenant_id,
-            discovery_run_id=run_id,
-            to_status="polling",
-            source_request_id=response.request_id,
-        )
     if response.status == "Failure":
         await _fail_run(
             store,
@@ -218,23 +237,38 @@ async def _handle_provider_response(
             failure_detail="Outscraper reported a terminal failure.",
         )
         return
-
-    for record in response.data:
-        await store.upsert_source_prospect(
-            _source_snapshot(
-                record,
-                tenant_id=tenant_id,
-                run_id=run_id,
-                now=now,
-                raw_retention_days=raw_retention_days,
-            )
+    if record_request_id:
+        await _transition_or_raise(
+            store,
+            tenant_id=tenant_id,
+            discovery_run_id=run_id,
+            to_status="polling",
+            source_request_id=response.request_id,
         )
+
+    persisted_identities: set[str] = set()
+    for record in response.data:
+        snapshot = _source_snapshot(
+            record,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            now=now,
+            raw_retention_days=raw_retention_days,
+        )
+        if snapshot.source_business_id in persisted_identities:
+            continue
+        await store.upsert_source_prospect(
+            snapshot
+        )
+        persisted_identities.add(snapshot.source_business_id)
+        if len(persisted_identities) == DISCOVERY_TOTAL_LIMIT:
+            break
     await _transition_or_raise(
         store,
         tenant_id=tenant_id,
         discovery_run_id=run_id,
         to_status="persisted",
-        discovered_count=len(response.data),
+        discovered_count=len(persisted_identities),
     )
     await _enqueue_normalization(queue, tenant_id=tenant_id, run_id=run_id)
 
@@ -358,6 +392,13 @@ def _poll_count(payload: Mapping[str, object]) -> int:
     if value < 1:
         raise DiscoveryRunError("Invalid discovery poll count")
     return value
+
+
+def _attempt_count(payload: Mapping[str, object]) -> int:
+    try:
+        return int(str(payload.get("attempt_count", 1)))
+    except ValueError as error:
+        raise DiscoveryRunError("Invalid discovery attempt count") from error
 
 
 def _utc_now() -> datetime:

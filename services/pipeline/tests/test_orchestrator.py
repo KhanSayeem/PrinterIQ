@@ -9,6 +9,7 @@ from uuid import UUID
 
 import pytest
 
+from clients.outscraper_client import OutscraperRetryableError
 from db.queries import QueueJobInsert, QueueJobLease, QueueJobUpdate
 from pipeline_queue.definitions import JobType
 from workers.orchestrator import (
@@ -60,6 +61,11 @@ class FakeQueueTransport:
     payloads: list[dict[str, object]] = field(default_factory=list)
     enqueued: list[tuple[dict[str, object], datetime | None]] = field(default_factory=list)
     acked: list[QueueMessage] = field(default_factory=list)
+    recovery_calls: int = 0
+
+    async def recover_active(self) -> int:
+        self.recovery_calls += 1
+        return 0
 
     async def pop(self) -> QueueMessage | None:
         if not self.payloads:
@@ -1018,6 +1024,8 @@ def test_pipeline_queue_manager_run_forever_processes_jobs_concurrently() -> Non
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
+        assert transport.recovery_calls == 1
+
     asyncio.run(scenario())
 
 
@@ -1083,6 +1091,61 @@ def test_redis_pipeline_queue_moves_undecodable_item_to_dead_list() -> None:
         assert redis.lists[redis.wait_key] == []
         assert redis.lists[redis.active_key] == []
         assert redis.lists[redis.dead_key] == ["missing-bullmq-job-id"]
+
+    asyncio.run(scenario())
+
+
+def test_pipeline_queue_manager_backs_off_retryable_outscraper_poll() -> None:
+    async def scenario() -> None:
+        payload = {
+            "job_type": JobType.POLL_OUTSCRAPER.value,
+            "tenant_id": str(TENANT_ID),
+            "discovery_run_id": "20000000-0000-0000-0000-000000000001",
+            "poll_count": 2,
+            "attempt_count": 1,
+        }
+        transport = FakeQueueTransport(payloads=[payload])
+        store = FakeQueueStore()
+
+        async def handler(_: dict[str, object]) -> None:
+            raise OutscraperRetryableError("rate limited", retry_after_seconds=45)
+
+        manager = PipelineQueueManager(
+            queue=transport,
+            store=store,
+            handlers={JobType.POLL_OUTSCRAPER: handler},
+        )
+        earliest = datetime.now(UTC) + timedelta(seconds=44)
+        latest = datetime.now(UTC) + timedelta(seconds=61)
+
+        await manager.run_once()
+
+        retry_payload, retry_at = transport.enqueued[0]
+        assert retry_payload["attempt_count"] == 2
+        assert retry_at is not None
+        assert earliest <= retry_at <= latest
+
+    asyncio.run(scenario())
+
+
+def test_redis_pipeline_queue_recovers_stranded_active_item_for_redelivery() -> None:
+    async def scenario() -> None:
+        redis = FakeRedis()
+        payload = (
+            '{"job_type":"start_discovery","tenant_id":"'
+            + str(TENANT_ID)
+            + '","discovery_run_id":"20000000-0000-0000-0000-000000000001"}'
+        )
+        redis.lists[redis.active_key].append(payload)
+        queue = RedisPipelineQueue(redis)
+
+        recovered = await queue.recover_active()
+        message = await queue.pop()
+
+        assert recovered == 1
+        assert message is not None
+        assert message.payload["job_type"] == JobType.START_DISCOVERY.value
+        assert redis.lists[redis.active_key] == [payload]
 
     asyncio.run(scenario())
 

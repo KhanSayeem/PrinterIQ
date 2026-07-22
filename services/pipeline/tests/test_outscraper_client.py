@@ -10,6 +10,7 @@ from clients.outscraper_client import (
     OutscraperAPIError,
     OutscraperClient,
     OutscraperRequest,
+    OutscraperRetryableError,
 )
 
 
@@ -91,6 +92,63 @@ def test_get_request_uses_flat_poll_contract() -> None:
             await client.get_request("request-123")
 
         assert str(requests[0].url) == "https://api.outscraper.com/requests/request-123?flat=true"
+
+    asyncio.run(scenario())
+
+
+def test_get_request_maps_empty_204_to_terminal_provider_failure() -> None:
+    async def scenario() -> None:
+        transport = httpx.MockTransport(lambda _: httpx.Response(204))
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OutscraperClient(api_key="secret", http_client=http_client)
+            result = await client.get_request("request-123")
+
+        assert result == OutscraperRequest("request-123", "Failure", [])
+
+    asyncio.run(scenario())
+
+
+def test_submit_maps_empty_204_to_terminal_provider_failure() -> None:
+    async def scenario() -> None:
+        transport = httpx.MockTransport(lambda _: httpx.Response(204))
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OutscraperClient(api_key="secret", http_client=http_client)
+            result = await client.submit_google_maps_search(["Plumber Brisbane QLD"], 500)
+
+        assert result == OutscraperRequest("", "Failure", [])
+
+    asyncio.run(scenario())
+
+
+def test_retryable_status_preserves_numeric_retry_after_without_provider_body() -> None:
+    async def scenario() -> None:
+        transport = httpx.MockTransport(
+            lambda _: httpx.Response(
+                429,
+                headers={"Retry-After": "45"},
+                json={"error": "private account details"},
+            )
+        )
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OutscraperClient(api_key="secret", http_client=http_client)
+            with pytest.raises(OutscraperRetryableError) as exc_info:
+                await client.get_request("request-123")
+
+        assert exc_info.value.retry_after_seconds == 45
+        assert "private account details" not in str(exc_info.value)
+
+    asyncio.run(scenario())
+
+
+def test_permanent_status_is_not_retryable() -> None:
+    async def scenario() -> None:
+        transport = httpx.MockTransport(lambda _: httpx.Response(401))
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OutscraperClient(api_key="secret", http_client=http_client)
+            with pytest.raises(OutscraperAPIError) as exc_info:
+                await client.get_request("request-123")
+
+        assert not isinstance(exc_info.value, OutscraperRetryableError)
 
     asyncio.run(scenario())
 

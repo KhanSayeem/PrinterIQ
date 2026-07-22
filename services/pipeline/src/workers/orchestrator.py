@@ -5,6 +5,7 @@ import importlib
 import json
 import logging
 import os
+import random
 import sys
 import time
 from argparse import ArgumentParser
@@ -20,7 +21,7 @@ if __package__ == "src.workers":
 
 from clients.claude_client import RealClaudeClient
 from clients.instantly_client import InstantlyClient
-from clients.outscraper_client import OutscraperClient
+from clients.outscraper_client import OutscraperClient, OutscraperRetryableError
 from clients.playwright_audit import PlaywrightAuditor
 from clients.redis_client import get_redis_client
 from db.queries import (
@@ -65,6 +66,9 @@ class QueueMessage:
 
 
 class QueueTransport(Protocol):
+    async def recover_active(self) -> int:
+        """Return active items to the waiting queue after a process restart."""
+
     async def pop(self) -> QueueMessage | None:
         """Return one queued payload, or None if no job is ready."""
 
@@ -557,6 +561,7 @@ class PipelineQueueManager:
         self._max_attempts = max_attempts_by_job_type()
 
     async def run_forever(self) -> None:
+        await self._queue.recover_active()
         await asyncio.gather(*(self._run_loop() for _ in range(self._concurrency)))
 
     async def _run_loop(self) -> None:
@@ -620,11 +625,17 @@ class PipelineQueueManager:
             await self._queue.enqueue(payload, delay_until=retry_at)
             await self._queue.ack(message)
             return False
-        except Exception:
+        except Exception as error:
             if attempt_count < max_attempts:
                 retry_payload = dict(payload)
                 retry_payload["attempt_count"] = attempt_count + 1
-                await self._queue.enqueue(retry_payload)
+                delay_until = (
+                    _outscraper_retry_at(error, attempt_count=attempt_count)
+                    if job_type == JobType.POLL_OUTSCRAPER
+                    and isinstance(error, OutscraperRetryableError)
+                    else None
+                )
+                await self._queue.enqueue(retry_payload, delay_until=delay_until)
             await self._queue.ack(message)
             return True
         await self._queue.ack(message)
@@ -639,6 +650,12 @@ class RedisPipelineQueue:
         self._delayed_key = f"bull:{queue_name}:delayed"
         self._dead_key = f"bull:{queue_name}:dead"
         self._job_key_prefix = f"bull:{queue_name}:"
+
+    async def recover_active(self) -> int:
+        recovered = 0
+        while await self._redis.rpoplpush(self._active_key, self._wait_key) is not None:
+            recovered += 1
+        return recovered
 
     async def pop(self) -> QueueMessage | None:
         await self._promote_due_jobs()
@@ -753,6 +770,18 @@ def _future_send_after(payload: dict[str, object]) -> datetime | None:
     if send_after > datetime.now(UTC):
         return send_after
     return None
+
+
+def _outscraper_retry_at(
+    error: OutscraperRetryableError, *, attempt_count: int
+) -> datetime:
+    exponential_seconds = min(30 * (2 ** max(0, attempt_count - 1)), 300)
+    jitter_seconds = random.uniform(0, min(10, exponential_seconds * 0.25))
+    delay_seconds = max(
+        exponential_seconds + jitter_seconds,
+        float(error.retry_after_seconds or 0),
+    )
+    return datetime.now(UTC) + timedelta(seconds=delay_seconds)
 
 
 async def smoke_check() -> str:

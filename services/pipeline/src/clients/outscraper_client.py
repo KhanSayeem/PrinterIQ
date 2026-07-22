@@ -39,6 +39,14 @@ class OutscraperAPIError(RuntimeError):
     """Raised when Outscraper transport or response validation fails."""
 
 
+class OutscraperRetryableError(OutscraperAPIError):
+    """Raised for transient provider failures that may be retried safely."""
+
+    def __init__(self, message: str, *, retry_after_seconds: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
 @dataclass(frozen=True)
 class OutscraperRequest:
     request_id: str
@@ -91,19 +99,36 @@ class OutscraperClient:
 
     async def get_request(self, request_id: str) -> OutscraperRequest:
         path = f"/requests/{quote(request_id, safe='')}"
-        return await self._request(path, params=httpx.QueryParams({"flat": "true"}))
+        return await self._request(
+            path,
+            params=httpx.QueryParams({"flat": "true"}),
+            empty_failure_request_id=request_id,
+        )
 
     async def _request(
         self,
         path: str,
         *,
         params: httpx.QueryParams,
+        empty_failure_request_id: str | None = None,
     ) -> OutscraperRequest:
         headers = {"X-API-KEY": self._api_key}
         if self._http_client is None:
             async with httpx.AsyncClient(timeout=30) as http_client:
-                return await self._send(http_client, path, headers=headers, params=params)
-        return await self._send(self._http_client, path, headers=headers, params=params)
+                return await self._send(
+                    http_client,
+                    path,
+                    headers=headers,
+                    params=params,
+                    empty_failure_request_id=empty_failure_request_id,
+                )
+        return await self._send(
+            self._http_client,
+            path,
+            headers=headers,
+            params=params,
+            empty_failure_request_id=empty_failure_request_id,
+        )
 
     async def _send(
         self,
@@ -112,16 +137,35 @@ class OutscraperClient:
         *,
         headers: dict[str, str],
         params: httpx.QueryParams,
+        empty_failure_request_id: str | None,
     ) -> OutscraperRequest:
-        response = await http_client.get(
-            f"{self._base_url}{path}",
-            headers=headers,
-            params=params,
-        )
+        try:
+            response = await http_client.get(
+                f"{self._base_url}{path}",
+                headers=headers,
+                params=params,
+            )
+        except httpx.HTTPError as error:
+            raise OutscraperRetryableError(
+                f"Outscraper API GET {path} failed in transport; response body omitted"
+            ) from error
+        if response.status_code == 204:
+            return OutscraperRequest(empty_failure_request_id or "", "Failure", [])
         if not 200 <= response.status_code < 300:
-            raise OutscraperAPIError(
+            error_type = (
+                OutscraperRetryableError
+                if response.status_code == 429 or response.status_code >= 500
+                else OutscraperAPIError
+            )
+            error_kwargs = (
+                {"retry_after_seconds": _retry_after_seconds(response)}
+                if error_type is OutscraperRetryableError
+                else {}
+            )
+            raise error_type(
                 f"Outscraper API GET {path} failed with {response.status_code}; "
-                "response body omitted"
+                "response body omitted",
+                **error_kwargs,
             )
         try:
             payload: Any = response.json()
@@ -160,3 +204,14 @@ def _parse_request(payload: object, *, path: str) -> OutscraperRequest:
         status=cast(OutscraperStatus, status),
         data=data,
     )
+
+
+def _retry_after_seconds(response: httpx.Response) -> int | None:
+    value = response.headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        seconds = int(value)
+    except ValueError:
+        return None
+    return max(0, min(seconds, 3600))
