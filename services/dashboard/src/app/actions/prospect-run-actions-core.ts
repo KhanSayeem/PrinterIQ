@@ -1,4 +1,8 @@
-import type { createDiscoveryRun, markDiscoveryRunFailed } from "@/db/queries";
+import type {
+  createDiscoveryRun,
+  failStaleActiveDiscoveryRuns,
+  markDiscoveryRunFailed,
+} from "@/db/queries";
 import type { enqueueStartDiscoveryJob } from "@/queue/pipeline";
 
 export const GREATER_BRISBANE_PLUMBERS_V1 = {
@@ -22,6 +26,7 @@ export const initialProspectRunActionState: ProspectRunActionState = {
 
 export type ProspectRunActionDeps = {
   createDiscoveryRun: typeof createDiscoveryRun;
+  failStaleActiveDiscoveryRuns: typeof failStaleActiveDiscoveryRuns;
   markDiscoveryRunFailed: typeof markDiscoveryRunFailed;
   enqueueStartDiscoveryJob: typeof enqueueStartDiscoveryJob;
   revalidatePath(path: string): void;
@@ -51,6 +56,11 @@ export function createProspectRunActions(deps: ProspectRunActionDeps) {
       if (!context.tenantId || !context.operatorId) {
         throw new Error("Missing server-derived discovery run identity");
       }
+
+      await deps.failStaleActiveDiscoveryRuns({
+        tenantId: context.tenantId,
+        staleBefore: new Date(Date.now() - 10 * 60 * 1000),
+      });
 
       let run: Awaited<ReturnType<typeof deps.createDiscoveryRun>>;
       try {

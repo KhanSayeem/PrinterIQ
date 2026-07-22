@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   createDiscoveryRunMock,
+  failStaleActiveDiscoveryRunsMock,
   markDiscoveryRunFailedMock,
   enqueueStartDiscoveryJobMock,
   requireDashboardTenantIdMock,
@@ -9,6 +10,7 @@ const {
   revalidatePathMock,
 } = vi.hoisted(() => ({
   createDiscoveryRunMock: vi.fn(),
+  failStaleActiveDiscoveryRunsMock: vi.fn(),
   markDiscoveryRunFailedMock: vi.fn(),
   enqueueStartDiscoveryJobMock: vi.fn(),
   requireDashboardTenantIdMock: vi.fn(),
@@ -20,6 +22,7 @@ vi.mock("@/auth/server", () => ({ requireOperator: requireOperatorMock }));
 vi.mock("@/auth/tenant", () => ({ requireDashboardTenantId: requireDashboardTenantIdMock }));
 vi.mock("@/db/queries", () => ({
   createDiscoveryRun: createDiscoveryRunMock,
+  failStaleActiveDiscoveryRuns: failStaleActiveDiscoveryRunsMock,
   markDiscoveryRunFailed: markDiscoveryRunFailedMock,
 }));
 vi.mock("@/queue/pipeline", () => ({ enqueueStartDiscoveryJob: enqueueStartDiscoveryJobMock }));
@@ -38,6 +41,7 @@ const operatorId = "22222222-2222-4222-8222-222222222222";
 function createDeps() {
   return {
     createDiscoveryRun: vi.fn().mockResolvedValue({ id: "run-1" }),
+    failStaleActiveDiscoveryRuns: vi.fn().mockResolvedValue([]),
     markDiscoveryRunFailed: vi.fn().mockResolvedValue({ id: "run-1", status: "failed" }),
     enqueueStartDiscoveryJob: vi.fn().mockResolvedValue({
       id: "start-discovery-run-1",
@@ -50,6 +54,7 @@ function createDeps() {
 describe("prospect run actions", () => {
   beforeEach(() => {
     createDiscoveryRunMock.mockReset().mockResolvedValue({ id: "run-1" });
+    failStaleActiveDiscoveryRunsMock.mockReset().mockResolvedValue([]);
     markDiscoveryRunFailedMock.mockReset().mockResolvedValue({ id: "run-1", status: "failed" });
     enqueueStartDiscoveryJobMock.mockReset().mockResolvedValue({
       id: "start-discovery-run-1",
@@ -80,10 +85,17 @@ describe("prospect run actions", () => {
       tenantId,
       querySpec: GREATER_BRISBANE_PLUMBERS_V1,
     });
+    expect(deps.failStaleActiveDiscoveryRuns).toHaveBeenCalledWith({
+      tenantId,
+      staleBefore: expect.any(Date),
+    });
     expect(deps.enqueueStartDiscoveryJob).toHaveBeenCalledWith({
       tenantId,
       discoveryRunId: "run-1",
     });
+    expect(deps.failStaleActiveDiscoveryRuns.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.createDiscoveryRun.mock.invocationCallOrder[0],
+    );
     expect(deps.createDiscoveryRun.mock.invocationCallOrder[0]).toBeLessThan(
       deps.enqueueStartDiscoveryJob.mock.invocationCallOrder[0],
     );
@@ -151,6 +163,10 @@ describe("prospect run actions", () => {
 
     expect(requireOperatorMock).toHaveBeenCalledOnce();
     expect(requireDashboardTenantIdMock).toHaveBeenCalledOnce();
+    expect(failStaleActiveDiscoveryRunsMock).toHaveBeenCalledWith({
+      tenantId,
+      staleBefore: expect.any(Date),
+    });
     expect(createDiscoveryRunMock).toHaveBeenCalledWith({
       tenantId,
       querySpec: GREATER_BRISBANE_PLUMBERS_V1,

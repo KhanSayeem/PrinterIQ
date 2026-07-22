@@ -202,18 +202,22 @@ def test_create_queue_job_reacquires_failed_job_for_retry() -> None:
     asyncio.run(scenario())
 
 
-def test_start_discovery_can_take_over_only_a_stale_active_lease() -> None:
+def test_lead_queue_job_can_take_over_a_stale_active_lease_after_redis_recovery() -> None:
     async def scenario() -> None:
         connection = RecordingConnection()
 
         await create_queue_job(
             connection,
             QueueJobInsert(
-                job_type="start_discovery",
+                job_type="enrich_lead",
                 tenant_id=UUID(TENANT_ID),
-                lead_id=None,
-                payload={"job_type": "start_discovery", "tenant_id": TENANT_ID},
-                max_attempts=3,
+                lead_id=UUID(LEAD_ID),
+                payload={
+                    "job_type": "enrich_lead",
+                    "tenant_id": TENANT_ID,
+                    "lead_id": LEAD_ID,
+                },
+                max_attempts=5,
                 attempt_count=2,
             ),
         )
@@ -221,9 +225,32 @@ def test_start_discovery_can_take_over_only_a_stale_active_lease() -> None:
         query = connection.queries[0]
         assert "queue_jobs.status = 'failed'" in query
         assert "queue_jobs.status = 'active'" in query
-        assert "queue_jobs.job_type = 'start_discovery'" in query
         assert "queue_jobs.started_at < NOW() - INTERVAL '10 minutes'" in query
-        assert "queue_jobs.job_type = 'poll_outscraper'" not in query
+
+    asyncio.run(scenario())
+
+
+def test_leadless_queue_jobs_can_take_over_stale_active_leases() -> None:
+    async def scenario() -> None:
+        for job_type in ("start_discovery", "poll_outscraper"):
+            connection = RecordingConnection()
+
+            await create_queue_job(
+                connection,
+                QueueJobInsert(
+                    job_type=job_type,
+                    tenant_id=UUID(TENANT_ID),
+                    lead_id=None,
+                    payload={"job_type": job_type, "tenant_id": TENANT_ID},
+                    max_attempts=3,
+                    attempt_count=2,
+                ),
+            )
+
+            query = connection.queries[0]
+            assert "queue_jobs.status = 'failed'" in query
+            assert "queue_jobs.status = 'active'" in query
+            assert "queue_jobs.started_at < NOW() - INTERVAL '10 minutes'" in query
 
     asyncio.run(scenario())
 

@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { requireOperator } from "@/auth/server";
 import { requireDashboardTenantId } from "@/auth/tenant";
-import { createDiscoveryRun, markDiscoveryRunFailed } from "@/db/queries";
+import {
+  createDiscoveryRun,
+  failStaleActiveDiscoveryRuns,
+  markDiscoveryRunFailed,
+} from "@/db/queries";
 import { enqueueStartDiscoveryJob } from "@/queue/pipeline";
 import {
   createProspectRunActions,
@@ -16,6 +20,7 @@ export type { ProspectRunActionState } from "./prospect-run-actions-core";
 function defaultDeps(): ProspectRunActionDeps {
   return {
     createDiscoveryRun,
+    failStaleActiveDiscoveryRuns,
     markDiscoveryRunFailed,
     enqueueStartDiscoveryJob,
     revalidatePath,

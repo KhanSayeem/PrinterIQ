@@ -66,6 +66,11 @@ def test_canonical_schema_includes_prospect_staging_contract() -> None:
     ):
         assert f"CREATE TABLE {table}" in schema
     assert "discovery_runs_one_active_per_tenant_idx" in schema
+    active_index = schema.split(
+        "CREATE UNIQUE INDEX discovery_runs_one_active_per_tenant_idx", maxsplit=1
+    )[1].split(";", maxsplit=1)[0]
+    assert "'created','submitted','polling','processing'" in active_index
+    assert "persisted" not in active_index
     assert "business_prospects_source_identity_key" in schema
     assert "business_prospects_tenant_run_id_key" in schema
     assert "FOREIGN KEY (tenant_id, discovery_run_id)" in schema

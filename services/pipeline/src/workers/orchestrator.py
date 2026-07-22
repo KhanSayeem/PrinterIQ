@@ -611,7 +611,7 @@ class PipelineQueueManager:
                 handler=handler,
                 attempt_count=attempt_count,
                 max_attempts=max_attempts,
-                retry_if_unavailable=job_type == JobType.START_DISCOVERY,
+                retry_if_unavailable=True,
             )
         except QueueLeaseUnavailableError:
             await self._queue.enqueue(

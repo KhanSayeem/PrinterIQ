@@ -249,7 +249,7 @@ export const discoveryRuns = pgTable(
     uniqueIndex("discovery_runs_one_active_per_tenant_idx")
       .on(table.tenantId)
       .where(
-        sql`${table.status} IN ('created','submitted','polling','persisted','processing')`,
+        sql`${table.status} IN ('created','submitted','polling','processing')`,
       ),
   ],
 );

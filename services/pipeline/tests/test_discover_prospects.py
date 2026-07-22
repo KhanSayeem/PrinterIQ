@@ -145,6 +145,30 @@ def test_start_submits_fixed_preset_stores_request_then_schedules_poll() -> None
     asyncio.run(scenario())
 
 
+def test_start_with_empty_provider_request_id_fails_without_polling() -> None:
+    async def scenario() -> None:
+        store = _Store({"status": "created", "source_request_id": None})
+        client = _Client(OutscraperRequest("", "Pending", []))
+
+        await start_discovery(
+            _payload(),
+            store=store,
+            queue=_Queue(store.events),
+            outscraper_client=client,
+            now=lambda: NOW,
+            poll_seconds=30,
+        )
+
+        assert len(client.submit_calls) == 1
+        assert [event[0] for event in store.events] == ["transition", "transition"]
+        failed = store.events[-1][1]
+        assert isinstance(failed, dict)
+        assert failed["to_status"] == "failed"
+        assert failed["failure_code"] == "outscraper_missing_request_id"
+
+    asyncio.run(scenario())
+
+
 def test_start_retry_with_stored_request_does_not_resubmit() -> None:
     async def scenario() -> None:
         store = _Store({"status": "submitted", "source_request_id": "request-123"})
@@ -303,7 +327,7 @@ def test_permanent_poll_error_fails_run_without_queue_retry() -> None:
     asyncio.run(scenario())
 
 
-def test_poll_retry_after_persistence_requeues_normalization_without_provider_call() -> None:
+def test_poll_retry_after_persistence_is_noop_without_provider_call() -> None:
     async def scenario() -> None:
         store = _Store({"status": "persisted", "source_request_id": "request-123"})
         client = _Client(OutscraperRequest("unused", "Pending", []))
@@ -317,15 +341,68 @@ def test_poll_retry_after_persistence_requeues_normalization_without_provider_ca
         )
 
         assert client.poll_calls == []
-        assert len(store.events) == 1
-        payload, delay_until = store.events[0][1]
-        assert payload["job_type"] == "normalize_prospects"
-        assert delay_until is None
+        assert store.events == []
 
     asyncio.run(scenario())
 
 
-def test_success_persists_every_record_before_enqueueing_normalization() -> None:
+def test_late_poll_replay_after_processing_does_not_call_provider_or_rewrite_snapshots() -> None:
+    async def scenario() -> None:
+        store = _Store({"status": "processing", "source_request_id": "request-123"})
+        client = _Client(
+            OutscraperRequest(
+                "request-123",
+                "Success",
+                [{"place_id": "place-1", "name": "Replay Plumbing"}],
+            )
+        )
+
+        await poll_outscraper(
+            _payload(poll_count=2),
+            store=store,
+            queue=_Queue(store.events),
+            outscraper_client=client,
+            now=lambda: NOW,
+        )
+
+        assert client.poll_calls == []
+        assert store.events == []
+        assert store.snapshots == []
+
+    asyncio.run(scenario())
+
+
+def test_poll_response_request_id_mismatch_fails_run_without_persisting_records() -> None:
+    async def scenario() -> None:
+        store = _Store({"status": "polling", "source_request_id": "request-123"})
+        client = _Client(
+            OutscraperRequest(
+                "request-456",
+                "Success",
+                [{"place_id": "place-1", "name": "Wrong Run Plumbing"}],
+            )
+        )
+
+        await poll_outscraper(
+            _payload(poll_count=2),
+            store=store,
+            queue=_Queue(store.events),
+            outscraper_client=client,
+            now=lambda: NOW,
+        )
+
+        assert client.poll_calls == ["request-123"]
+        assert store.snapshots == []
+        assert len(store.events) == 1
+        transition = store.events[0][1]
+        assert isinstance(transition, dict)
+        assert transition["to_status"] == "failed"
+        assert transition["failure_code"] == "outscraper_request_mismatch"
+
+    asyncio.run(scenario())
+
+
+def test_success_persists_every_record_and_stops_at_raw_persisted_status() -> None:
     async def scenario() -> None:
         records: list[dict[str, object]] = [
             {"place_id": "place-1", "name": "Northside Plumbing"},
@@ -347,7 +424,6 @@ def test_success_persists_every_record_before_enqueueing_normalization() -> None
             "persist",
             "persist",
             "transition",
-            "enqueue",
         ]
         first, malformed = store.snapshots
         assert first.source_business_id == "place-1"
@@ -355,9 +431,9 @@ def test_success_persists_every_record_before_enqueueing_normalization() -> None
         assert malformed.source_business_id.startswith("invalid:")
         assert malformed.status == "failed"
         assert malformed.outcome_reason == "missing_place_id"
-        normalize_payload, delay_until = store.events[-1][1]
-        assert normalize_payload["job_type"] == "normalize_prospects"
-        assert delay_until is None
+        transition = store.events[-1][1]
+        assert isinstance(transition, dict)
+        assert transition["to_status"] == "persisted"
 
     asyncio.run(scenario())
 

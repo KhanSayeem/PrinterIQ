@@ -69,6 +69,11 @@ export type MarkDiscoveryRunFailedInput = {
   failureCode: string;
 };
 
+export type FailStaleActiveDiscoveryRunsInput = {
+  tenantId: string;
+  staleBefore: Date;
+};
+
 export type OperatorConversationInput = LeadIdentity & {
   direction: "note" | "outbound";
   channel: "note" | "email";
@@ -726,6 +731,30 @@ export function buildLatestDiscoveryRunQuery(
     .limit(1);
 }
 
+export function buildFailStaleActiveDiscoveryRunsQuery(
+  db: DashboardDb,
+  input: FailStaleActiveDiscoveryRunsInput,
+) {
+  requireTenantId(input.tenantId);
+
+  return db
+    .update(discoveryRuns)
+    .set({
+      status: "failed",
+      failureCode: "discovery_run_stale_active",
+      failureDetail: "Discovery run did not advance before the recovery deadline.",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(discoveryRuns.tenantId, input.tenantId),
+        inArray(discoveryRuns.status, ["created", "submitted", "polling", "processing"]),
+        lte(discoveryRuns.updatedAt, input.staleBefore),
+      ),
+    )
+    .returning();
+}
+
 export function buildMarkDiscoveryRunFailedQuery(
   db: DashboardDb,
   input: MarkDiscoveryRunFailedInput,
@@ -807,6 +836,11 @@ export async function createDiscoveryRun(input: CreateDiscoveryRunInput) {
     throw new Error("Discovery run insert failed");
   }
   return run;
+}
+
+export async function failStaleActiveDiscoveryRuns(input: FailStaleActiveDiscoveryRunsInput) {
+  const db = getDb();
+  return buildFailStaleActiveDiscoveryRunsQuery(db, input);
 }
 
 export async function getLatestDiscoveryRun(identity: string | { tenantId: string }) {

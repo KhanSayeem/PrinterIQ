@@ -22,6 +22,7 @@ import {
   buildUpdateLeadStatusQuery,
   buildDeleteOperatorNoteQuery,
   buildCreateDiscoveryRunQuery,
+  buildFailStaleActiveDiscoveryRunsQuery,
   buildLatestDiscoveryRunQuery,
   buildMarkDiscoveryRunFailedQuery,
   normalizeWebsitePreview,
@@ -366,6 +367,28 @@ describe("dashboard discovery run queries", () => {
     expect(query.params).toContain("created");
     expect(query.params).toContain(true);
     expect(query.params).toContain(JSON.stringify(discoveryQuerySpec));
+  });
+
+  it("fails only tenant-scoped stale active discovery runs before starting another run", () => {
+    const staleBefore = new Date("2026-07-22T12:00:00.000Z");
+    const query = buildFailStaleActiveDiscoveryRunsQuery(db, {
+      tenantId,
+      staleBefore,
+    }).toSQL();
+
+    expect(query.sql).toContain('update "discovery_runs"');
+    expect(query.sql).toContain('"discovery_runs"."tenant_id" =');
+    expect(query.sql).toContain('"discovery_runs"."status" in');
+    expect(query.sql).toContain('"discovery_runs"."updated_at" <=');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain("created");
+    expect(query.params).toContain("submitted");
+    expect(query.params).toContain("polling");
+    expect(query.params).toContain("processing");
+    expect(query.params).not.toContain("persisted");
+    expect(query.params).toContain("failed");
+    expect(query.params).toContain("discovery_run_stale_active");
+    expect(query.params.map(String)).toContain(staleBefore.toISOString());
   });
 
   it("fetches only the tenant's latest discovery run", () => {

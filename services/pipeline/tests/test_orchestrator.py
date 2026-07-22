@@ -728,6 +728,71 @@ def test_start_discovery_with_busy_lease_is_delayed_for_stale_takeover() -> None
     asyncio.run(scenario())
 
 
+def test_poll_outscraper_with_busy_lease_is_delayed_for_stale_takeover() -> None:
+    async def scenario() -> None:
+        payload = {
+            "job_type": JobType.POLL_OUTSCRAPER.value,
+            "tenant_id": str(TENANT_ID),
+            "discovery_run_id": "20000000-0000-0000-0000-000000000001",
+            "poll_count": 2,
+        }
+        transport = FakeQueueTransport(payloads=[payload])
+        store = FakeQueueStore(acquired=False)
+
+        async def unexpected_handler(_: dict[str, object]) -> None:
+            raise AssertionError("handler must not run without the lease")
+
+        manager = PipelineQueueManager(
+            queue=transport,
+            store=store,
+            handlers={JobType.POLL_OUTSCRAPER: unexpected_handler},
+        )
+        earliest_retry = datetime.now(UTC) + timedelta(minutes=9, seconds=55)
+
+        processed = await manager.run_once()
+
+        assert processed is False
+        assert transport.acked
+        assert len(transport.enqueued) == 1
+        retry_payload, retry_at = transport.enqueued[0]
+        assert retry_payload == payload
+        assert retry_at is not None and retry_at >= earliest_retry
+
+    asyncio.run(scenario())
+
+
+def test_recovered_lead_job_with_busy_lease_is_delayed_for_stale_takeover() -> None:
+    async def scenario() -> None:
+        payload = {
+            "job_type": JobType.ENRICH_LEAD.value,
+            "tenant_id": str(TENANT_ID),
+            "lead_id": str(LEAD_ID),
+        }
+        transport = FakeQueueTransport(payloads=[payload])
+        store = FakeQueueStore(acquired=False)
+
+        async def unexpected_handler(_: dict[str, object]) -> None:
+            raise AssertionError("handler must not run without the lease")
+
+        manager = PipelineQueueManager(
+            queue=transport,
+            store=store,
+            handlers={JobType.ENRICH_LEAD: unexpected_handler},
+        )
+        earliest_retry = datetime.now(UTC) + timedelta(minutes=9, seconds=55)
+
+        processed = await manager.run_once()
+
+        assert processed is False
+        assert transport.acked
+        assert len(transport.enqueued) == 1
+        retry_payload, retry_at = transport.enqueued[0]
+        assert retry_payload == payload
+        assert retry_at is not None and retry_at >= earliest_retry
+
+    asyncio.run(scenario())
+
+
 def test_pipeline_queue_manager_requeues_future_send_after_without_handling() -> None:
     async def scenario() -> None:
         future = datetime.now(UTC) + timedelta(hours=1)

@@ -430,6 +430,6 @@ describe("dashboard Drizzle schema", () => {
     const predicateSql = new PgDialect().sqlToQuery(activeRunIndex!.config.where!).sql;
     expect(predicateSql).toContain("status");
     const activeStatuses = [...predicateSql.matchAll(/'([^']+)'/g)].map((match) => match[1]);
-    expect(activeStatuses).toEqual(["created", "submitted", "polling", "persisted", "processing"]);
+    expect(activeStatuses).toEqual(["created", "submitted", "polling", "processing"]);
   });
 });

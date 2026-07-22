@@ -1370,6 +1370,10 @@ async def _create_queue_job_for_lead(
             error_message = NULL,
             completed_at = NULL
         WHERE queue_jobs.status = 'failed'
+           OR (
+             queue_jobs.status = 'active'
+             AND queue_jobs.started_at < NOW() - INTERVAL '10 minutes'
+           )
         RETURNING id, TRUE AS acquired, started_at
         ),
         existing_job AS (
@@ -1428,7 +1432,6 @@ async def _create_queue_job_without_lead(
         WHERE queue_jobs.status = 'failed'
            OR (
              queue_jobs.status = 'active'
-             AND queue_jobs.job_type = 'start_discovery'
              AND queue_jobs.started_at < NOW() - INTERVAL '10 minutes'
            )
         RETURNING id, TRUE AS acquired, started_at

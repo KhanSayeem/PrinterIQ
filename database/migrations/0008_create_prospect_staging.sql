@@ -29,7 +29,7 @@ CREATE TABLE discovery_runs (
 
 CREATE UNIQUE INDEX discovery_runs_one_active_per_tenant_idx
 ON discovery_runs (tenant_id)
-WHERE status IN ('created','submitted','polling','persisted','processing');
+WHERE status IN ('created','submitted','polling','processing');
 
 CREATE TABLE business_prospects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

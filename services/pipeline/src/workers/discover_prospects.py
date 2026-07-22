@@ -153,9 +153,11 @@ async def poll_outscraper(
     if not isinstance(request_id, str) or not request_id:
         raise DiscoveryRunError("Discovery run has no provider request id")
 
-    if run.get("status") == "persisted":
-        await _enqueue_normalization(queue, tenant_id=tenant_id, run_id=run_id)
+    status = run.get("status")
+    if status in {"persisted", "processing", "review_ready", "completed", "failed"}:
         return
+    if status != "polling":
+        raise DiscoveryRunError("Discovery run is not eligible for provider polling")
 
     if poll_count >= MAX_PROVIDER_POLLS:
         await _fail_run(
@@ -189,6 +191,15 @@ async def poll_outscraper(
             failure_detail="Outscraper rejected the poll request or returned an invalid response.",
         )
         return
+    if response.request_id != request_id:
+        await _fail_run(
+            store,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            failure_code="outscraper_request_mismatch",
+            failure_detail="Outscraper returned a response for a different provider request.",
+        )
+        return
     await _handle_provider_response(
         response,
         tenant_id=tenant_id,
@@ -217,6 +228,15 @@ async def _handle_provider_response(
     record_request_id: bool,
 ) -> None:
     if response.status == "Pending":
+        if not response.request_id:
+            await _fail_run(
+                store,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                failure_code="outscraper_missing_request_id",
+                failure_detail="Outscraper did not return a usable provider request id.",
+            )
+            return
         await _schedule_poll(
             store=store,
             queue=queue,
@@ -270,7 +290,6 @@ async def _handle_provider_response(
         to_status="persisted",
         discovered_count=len(persisted_identities),
     )
-    await _enqueue_normalization(queue, tenant_id=tenant_id, run_id=run_id)
 
 
 async def _enqueue_normalization(
