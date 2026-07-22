@@ -24,6 +24,7 @@ import {
   buildCreateDiscoveryRunQuery,
   buildFailStaleActiveDiscoveryRunsQuery,
   buildLatestDiscoveryRunQuery,
+  buildListProspectEvidenceForRunQuery,
   buildMarkDiscoveryRunFailedQuery,
   normalizeWebsitePreview,
   normalizeLeadFilterCounts,
@@ -399,6 +400,28 @@ describe("dashboard discovery run queries", () => {
     expect(query.sql).toContain('order by "discovery_runs"."created_at" desc');
     expect(query.sql).toContain("limit");
     expect(query.params).toContain(tenantId);
+  });
+
+  it("fetches tenant-scoped prospect evidence for the latest run without lead pipeline joins", () => {
+    const query = buildListProspectEvidenceForRunQuery(db, {
+      tenantId,
+      discoveryRunId: "20000000-0000-0000-0000-000000000001",
+    }).toSQL();
+
+    expect(query.sql).toContain('from "business_prospects"');
+    expect(query.sql).toContain('left join "prospect_assessments"');
+    expect(query.sql).toContain('"business_prospects"."tenant_id" =');
+    expect(query.sql).toContain('"business_prospects"."discovery_run_id" =');
+    expect(query.sql).toContain('"prospect_assessments"."tenant_id" =');
+    expect(query.sql).toContain('"prospect_assessments"."prospect_id" =');
+    expect(query.sql).toContain('"prospect_assessments"."assessment_type" =');
+    expect(query.sql).toContain('"prospect_assessments"."assessment_version" =');
+    expect(query.sql).not.toContain('join "leads"');
+    expect(query.sql).not.toContain('join "outreach_sends"');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain("20000000-0000-0000-0000-000000000001");
+    expect(query.params).toContain("automated");
+    expect(query.params).toContain("route-a-normalization-v1");
   });
 
   it("marks only the tenant's created run failed after queue rejection", () => {

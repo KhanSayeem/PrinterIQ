@@ -79,4 +79,41 @@ describe("ProspectsWorkbench", () => {
 
     expect(refresh).toHaveBeenCalledOnce();
   });
+
+  it("shows Route A website ownership and exact evidence for social-only prospects", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={{ ...activeRun, status: "processing", routeACount: 1, usableCount: 1 }}
+        initialProspects={[
+          {
+            id: "prospect-1",
+            businessName: "Northside Plumbing",
+            route: "A",
+            status: "assessed",
+            websiteOwnership: "social",
+            outcomeReason: "no_owned_website",
+            sourceWebsiteUrl: "https://facebook.com/northsideplumbing",
+            normalizedDomain: "facebook.com",
+            ruleEvidence: {
+              eligibility: { outcome: "eligible" },
+              website: {
+                ownership: "social",
+                reason: "no_owned_website",
+                final_url: "https://facebook.com/northsideplumbing",
+              },
+            },
+          },
+        ]}
+        startAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Northside Plumbing")).toBeInTheDocument();
+    expect(screen.getAllByText("Route A").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Social profile")).toBeInTheDocument();
+    expect(screen.getByText("no_owned_website")).toBeInTheDocument();
+    expect(screen.getAllByText(/facebook.com\/northsideplumbing/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole("button", { name: /send/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Instantly/i)).not.toBeInTheDocument();
+  });
 });

@@ -2,7 +2,11 @@ import { startProspectRun } from "@/app/actions/prospect-run-actions";
 import { getDashboardTenantId } from "@/auth/tenant";
 import { ProspectsWorkbench } from "@/components/ProspectsWorkbench";
 import { ShadowModeBanner } from "@/components/ShadowModeBanner";
-import { failStaleActiveDiscoveryRunsForTenant, getLatestDiscoveryRun } from "@/db/queries";
+import {
+  failStaleActiveDiscoveryRunsForTenant,
+  getLatestDiscoveryRun,
+  listProspectEvidenceForRun,
+} from "@/db/queries";
 
 export default async function ProspectsPage() {
   const tenantId = getDashboardTenantId();
@@ -12,6 +16,9 @@ export default async function ProspectsPage() {
 
   await failStaleActiveDiscoveryRunsForTenant({ tenantId });
   const latestRun = await getLatestDiscoveryRun({ tenantId });
+  const prospects = latestRun
+    ? await listProspectEvidenceForRun({ tenantId, discoveryRunId: latestRun.id })
+    : [];
 
   return (
     <>
@@ -22,7 +29,11 @@ export default async function ProspectsPage() {
         </div>
       </div>
       <ShadowModeBanner />
-      <ProspectsWorkbench initialRun={latestRun} startAction={startProspectRun} />
+      <ProspectsWorkbench
+        initialRun={latestRun}
+        initialProspects={prospects}
+        startAction={startProspectRun}
+      />
     </>
   );
 }

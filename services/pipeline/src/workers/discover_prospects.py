@@ -290,6 +290,7 @@ async def _handle_provider_response(
         to_status="persisted",
         discovered_count=len(persisted_identities),
     )
+    await _enqueue_normalization(queue, tenant_id=tenant_id, run_id=run_id)
 
 
 async def _enqueue_normalization(

@@ -44,6 +44,7 @@ from workers.discover_prospects import poll_outscraper, start_discovery
 from workers.enrich import enrich_lead
 from workers.generate_preview import generate_preview
 from workers.ingest import ingest_csv_file
+from workers.normalize_prospects import normalize_prospects
 from workers.qualify import qualify_lead
 from workers.schedule_outreach import SendWindowNotReachedError, schedule_outreach
 
@@ -183,6 +184,7 @@ def build_production_pipeline_handlers(
     schedule_worker: FlexibleWorker | None = None,
     start_discovery_worker: FlexibleWorker | None = None,
     poll_outscraper_worker: FlexibleWorker | None = None,
+    normalize_prospects_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
@@ -195,6 +197,9 @@ def build_production_pipeline_handlers(
     )
     poll_prospects: FlexibleWorker = poll_outscraper_worker or cast(
         FlexibleWorker, poll_outscraper
+    )
+    normalize_prospect_batch: FlexibleWorker = normalize_prospects_worker or cast(
+        FlexibleWorker, normalize_prospects
     )
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
     qualify_claude_client = (
@@ -278,6 +283,15 @@ def build_production_pipeline_handlers(
             outscraper_client=outscraper_client,
         )
 
+    async def handle_normalize_prospects(payload: dict[str, object]) -> object:
+        if prospect_store is None:
+            return await _unconfigured_prospect_handler(payload)
+        return await normalize_prospect_batch(
+            payload,
+            store=prospect_store,
+            queue=queue,
+        )
+
     handlers: dict[JobType, PipelineHandler] = {
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
@@ -286,7 +300,7 @@ def build_production_pipeline_handlers(
         JobType.SCHEDULE_OUTREACH: schedule_handler,
         JobType.START_DISCOVERY: handle_start_discovery,
         JobType.POLL_OUTSCRAPER: handle_poll_outscraper,
-        JobType.NORMALIZE_PROSPECTS: _unconfigured_prospect_handler,
+        JobType.NORMALIZE_PROSPECTS: handle_normalize_prospects,
         JobType.ASSESS_PROSPECTS: _unconfigured_prospect_handler,
         JobType.ENRICH_PROSPECT_CONTACTS: _unconfigured_prospect_handler,
         JobType.PREPARE_SHADOW_REVIEW: _unconfigured_prospect_handler,
@@ -320,6 +334,7 @@ def build_pooled_production_pipeline_handlers(
     schedule_worker: FlexibleWorker | None = None,
     start_discovery_worker: FlexibleWorker | None = None,
     poll_outscraper_worker: FlexibleWorker | None = None,
+    normalize_prospects_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
@@ -332,6 +347,9 @@ def build_pooled_production_pipeline_handlers(
     )
     poll_prospects: FlexibleWorker = poll_outscraper_worker or cast(
         FlexibleWorker, poll_outscraper
+    )
+    normalize_prospect_batch: FlexibleWorker = normalize_prospects_worker or cast(
+        FlexibleWorker, normalize_prospects
     )
     connection_pool = cast(Any, pool)
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
@@ -428,6 +446,14 @@ def build_pooled_production_pipeline_handlers(
                 outscraper_client=outscraper_client,
             )
 
+    async def handle_normalize_prospects(payload: dict[str, object]) -> object:
+        async with connection_pool.acquire() as connection:
+            return await normalize_prospect_batch(
+                payload,
+                store=ProspectStore(connection),
+                queue=queue,
+            )
+
     handlers: dict[JobType, PipelineHandler] = {
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
@@ -436,7 +462,7 @@ def build_pooled_production_pipeline_handlers(
         JobType.SCHEDULE_OUTREACH: handle_schedule,
         JobType.START_DISCOVERY: handle_start_discovery,
         JobType.POLL_OUTSCRAPER: handle_poll_outscraper,
-        JobType.NORMALIZE_PROSPECTS: _unconfigured_prospect_handler,
+        JobType.NORMALIZE_PROSPECTS: handle_normalize_prospects,
         JobType.ASSESS_PROSPECTS: _unconfigured_prospect_handler,
         JobType.ENRICH_PROSPECT_CONTACTS: _unconfigured_prospect_handler,
         JobType.PREPARE_SHADOW_REVIEW: _unconfigured_prospect_handler,

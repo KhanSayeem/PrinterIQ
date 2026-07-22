@@ -402,7 +402,7 @@ def test_poll_response_request_id_mismatch_fails_run_without_persisting_records(
     asyncio.run(scenario())
 
 
-def test_success_persists_every_record_and_stops_at_raw_persisted_status() -> None:
+def test_success_persists_every_record_then_enqueues_normalization() -> None:
     async def scenario() -> None:
         records: list[dict[str, object]] = [
             {"place_id": "place-1", "name": "Northside Plumbing"},
@@ -424,6 +424,7 @@ def test_success_persists_every_record_and_stops_at_raw_persisted_status() -> No
             "persist",
             "persist",
             "transition",
+            "enqueue",
         ]
         first, malformed = store.snapshots
         assert first.source_business_id == "place-1"
@@ -432,8 +433,17 @@ def test_success_persists_every_record_and_stops_at_raw_persisted_status() -> No
         assert malformed.status == "failed"
         assert malformed.outcome_reason == "missing_place_id"
         transition = store.events[-1][1]
+        if not isinstance(transition, dict):
+            transition = store.events[-2][1]
         assert isinstance(transition, dict)
         assert transition["to_status"] == "persisted"
+        queued, delay_until = store.events[-1][1]
+        assert queued == {
+            "job_type": "normalize_prospects",
+            "tenant_id": str(TENANT_ID),
+            "discovery_run_id": str(RUN_ID),
+        }
+        assert delay_until is None
 
     asyncio.run(scenario())
 
