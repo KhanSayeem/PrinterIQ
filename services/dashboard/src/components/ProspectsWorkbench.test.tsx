@@ -111,9 +111,16 @@ describe("ProspectsWorkbench", () => {
     expect(screen.getByText("Northside Plumbing")).toBeInTheDocument();
     expect(screen.getAllByText("Route A").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Social profile")).toBeInTheDocument();
-    expect(screen.getByText("no_owned_website")).toBeInTheDocument();
+    expect(screen.getAllByText("no_owned_website").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/facebook.com\/northsideplumbing/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Final URL")).toBeInTheDocument();
+    expect(screen.getByText("Ownership reason")).toBeInTheDocument();
+    expect(screen.getByText("facebook.com")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /send/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/preview/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/outreach/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/campaign/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/promote/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Instantly/i)).not.toBeInTheDocument();
   });
 });

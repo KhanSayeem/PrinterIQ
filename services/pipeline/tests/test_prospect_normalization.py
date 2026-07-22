@@ -69,6 +69,15 @@ def test_normalizers_create_stable_replay_identities() -> None:
             ),
         ),
         (
+            prospect(business_status="closed_permanently"),
+            NormalizationDecision(
+                status="rejected",
+                route=None,
+                website_ownership=None,
+                reason="permanently_closed",
+            ),
+        ),
+        (
             prospect(primary_category="Building materials supplier"),
             NormalizationDecision(
                 status="rejected",
@@ -84,6 +93,34 @@ def test_normalizers_create_stable_replay_identities() -> None:
                 route=None,
                 website_ownership=None,
                 reason="outside_region",
+            ),
+        ),
+        (
+            prospect(
+                locality="Brisbane",
+                state="California",
+                postcode="94005",
+                full_address="Brisbane, California 94005",
+            ),
+            NormalizationDecision(
+                status="rejected",
+                route=None,
+                website_ownership=None,
+                reason="outside_region",
+            ),
+        ),
+        (
+            prospect(
+                locality="Fortitude Valley",
+                state="QLD",
+                postcode="4006",
+                full_address="100 Wickham Street, Fortitude Valley QLD 4006",
+            ),
+            NormalizationDecision(
+                status="assessed",
+                route="A",
+                website_ownership="none",
+                reason="no_owned_website",
             ),
         ),
         (

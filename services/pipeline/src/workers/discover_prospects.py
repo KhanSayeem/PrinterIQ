@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Protocol
 from uuid import UUID
 
@@ -154,7 +155,10 @@ async def poll_outscraper(
         raise DiscoveryRunError("Discovery run has no provider request id")
 
     status = run.get("status")
-    if status in {"persisted", "processing", "review_ready", "completed", "failed"}:
+    if status == "persisted":
+        await _enqueue_normalization(queue, tenant_id=tenant_id, run_id=run_id)
+        return
+    if status in {"processing", "review_ready", "completed", "failed"}:
         return
     if status != "polling":
         raise DiscoveryRunError("Discovery run is not eligible for provider polling")
@@ -384,11 +388,58 @@ def _source_snapshot(
         source_business_id=source_business_id,
         business_name=business_name,
         normalized_name=" ".join(business_name.lower().split()),
+        primary_category=_string_field(record, "category"),
+        additional_categories=_string_list_field(record.get("subtypes")),
+        phone=_string_field(record, "phone"),
+        full_address=_string_field(record, "full_address"),
+        locality=_string_field(record, "city"),
+        state=_string_field(record, "state"),
+        postcode=_string_field(record, "postal_code") or _string_field(record, "postcode"),
+        latitude=_decimal_field(record, "latitude"),
+        longitude=_decimal_field(record, "longitude"),
+        business_status=_string_field(record, "business_status"),
+        rating=_decimal_field(record, "rating"),
+        review_count=_int_field(record, "reviews") or _int_field(record, "review_count"),
+        google_profile_url=_string_field(record, "location_link"),
+        source_website_url=_string_field(record, "site") or _string_field(record, "website"),
         source_payload=record,
         source_payload_expires_at=now + timedelta(days=raw_retention_days),
         status="discovered" if valid_place_id else "failed",
         outcome_reason=None if valid_place_id else "missing_place_id",
     )
+
+
+def _string_field(record: Mapping[str, object], key: str) -> str | None:
+    value = record.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _string_list_field(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(part.strip() for part in value.split(",") if part.strip())
+    if isinstance(value, (list, tuple)):
+        return tuple(str(part).strip() for part in value if str(part).strip())
+    return ()
+
+
+def _decimal_field(record: Mapping[str, object], key: str) -> Decimal | None:
+    value = record.get(key)
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _int_field(record: Mapping[str, object], key: str) -> int | None:
+    value = record.get(key)
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except ValueError:
+        return None
 
 
 def _invalid_identity(record: dict[str, object]) -> str:

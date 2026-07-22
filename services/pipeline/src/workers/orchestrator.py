@@ -23,6 +23,7 @@ from clients.claude_client import RealClaudeClient
 from clients.instantly_client import InstantlyClient
 from clients.outscraper_client import OutscraperClient, OutscraperRetryableError
 from clients.playwright_audit import PlaywrightAuditor
+from clients.prospect_website_resolver import ProspectWebsiteResolver
 from clients.redis_client import get_redis_client
 from db.queries import (
     LeadStore,
@@ -177,6 +178,7 @@ def build_production_pipeline_handlers(
     claude_client: object,
     instantly_client: object,
     outscraper_client: object | None = None,
+    prospect_website_resolver: object | None = None,
     ingest_worker: FlexibleWorker | None = None,
     enrich_worker: FlexibleWorker | None = None,
     qualify_worker: FlexibleWorker | None = None,
@@ -290,6 +292,7 @@ def build_production_pipeline_handlers(
             payload,
             store=prospect_store,
             queue=queue,
+            website_resolver=prospect_website_resolver or ProspectWebsiteResolver(),
         )
 
     handlers: dict[JobType, PipelineHandler] = {
@@ -327,6 +330,7 @@ def build_pooled_production_pipeline_handlers(
     claude_client: object,
     instantly_client: object,
     outscraper_client: object | None = None,
+    prospect_website_resolver: object | None = None,
     ingest_worker: FlexibleWorker | None = None,
     enrich_worker: FlexibleWorker | None = None,
     qualify_worker: FlexibleWorker | None = None,
@@ -452,6 +456,7 @@ def build_pooled_production_pipeline_handlers(
                 payload,
                 store=ProspectStore(connection),
                 queue=queue,
+                website_resolver=prospect_website_resolver or ProspectWebsiteResolver(),
             )
 
     handlers: dict[JobType, PipelineHandler] = {

@@ -420,7 +420,7 @@ export const prospectAssessments = pgTable(
       name: "fk_prospect_assessments_prospect_run_tenant",
     }),
     uniqueIndex("prospect_automated_assessment_version_idx")
-      .on(table.tenantId, table.prospectId, table.assessmentVersion)
+      .on(table.tenantId, table.discoveryRunId, table.prospectId, table.assessmentVersion)
       .where(sql`${table.assessmentType} = 'automated'`),
     uniqueIndex("prospect_manual_assessment_idempotency_idx")
       .on(table.tenantId, table.prospectId, table.idempotencyKey)

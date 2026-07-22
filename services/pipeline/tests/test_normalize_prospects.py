@@ -30,6 +30,7 @@ def prospect(**overrides: object) -> dict[str, object]:
         "review_count": 42,
         "source_website_url": None,
         "source_payload": {},
+        "status": "discovered",
     }
     values.update(overrides)
     return values
@@ -60,6 +61,13 @@ class Store:
         assert values["tenant_id"] == TENANT_ID
         assert values["discovery_run_id"] == RUN_ID
         self.updates.append(values)
+        return values
+
+    async def apply_prospect_normalization_with_assessment(self, **values: object):
+        assert values["tenant_id"] == TENANT_ID
+        assert values["discovery_run_id"] == RUN_ID
+        self.updates.append(values)
+        self.assessments.append(values)
         return values
 
     async def upsert_prospect_assessment(self, **values: object):
@@ -186,6 +194,200 @@ def test_four_matched_locations_are_held_with_stable_location_count() -> None:
 
         assert {update["outcome_reason"] for update in store.updates} == {"too_many_locations"}
         assert {update["matched_location_count"] for update in store.updates} == {4}
+
+    asyncio.run(scenario())
+
+
+def test_shared_social_hosts_do_not_create_duplicate_holds() -> None:
+    async def scenario() -> None:
+        rows = [
+            prospect(
+                id=UUID(f"30000000-0000-0000-0000-{index:012d}"),
+                source_business_id=f"place-{index}",
+                business_name=f"Independent Plumbing {index}",
+                phone=f"+61 7 3000 00{index:02d}",
+                full_address=f"{index} Creek Street, Brisbane QLD 4000",
+                source_website_url=f"https://facebook.com/independentplumbing{index}",
+            )
+            for index in range(1, 5)
+        ]
+        store = Store(prospects=rows)
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=Queue(),
+        )
+
+        assert {update["outcome_reason"] for update in store.updates} == {"no_owned_website"}
+        assert {update["matched_location_count"] for update in store.updates} == {1}
+        assert all("domain" not in update["duplicate_evidence"] for update in store.updates)
+
+    asyncio.run(scenario())
+
+
+def test_partial_batch_replay_keeps_duplicate_decisions_and_does_not_reenqueue_twice() -> None:
+    @dataclass
+    class ReplayStore(Store):
+        fail_after_updates: int | None = 1
+
+        async def list_discovered_prospects(self, *, tenant_id: UUID, discovery_run_id: UUID):
+            assert tenant_id == TENANT_ID
+            assert discovery_run_id == RUN_ID
+            return self.prospects
+
+        async def apply_prospect_normalization_with_assessment(self, **values: object):
+            await super().apply_prospect_normalization_with_assessment(**values)
+            for row in self.prospects:
+                if row["id"] == values["prospect_id"]:
+                    row["status"] = values["status"]
+                    row["outcome_reason"] = values["outcome_reason"]
+                    row["matched_location_count"] = values["matched_location_count"]
+                    row["duplicate_evidence"] = values["duplicate_evidence"]
+                    break
+            if self.fail_after_updates is not None and len(self.updates) >= self.fail_after_updates:
+                self.fail_after_updates = None
+                raise RuntimeError("simulated crash after partial batch")
+            return values
+
+    async def scenario() -> None:
+        first = prospect(
+            id=UUID("30000000-0000-0000-0000-000000000001"),
+            source_business_id="place-1",
+            phone="+61 7 3000 0000",
+            source_website_url="https://northside.example",
+        )
+        second = prospect(
+            id=UUID("30000000-0000-0000-0000-000000000002"),
+            source_business_id="place-2",
+            phone="+61 7 3000 0000",
+            source_website_url="https://northside-alt.example",
+        )
+        store = ReplayStore(prospects=[first, second])
+        queue = Queue()
+
+        try:
+            await normalize_prospects(
+                {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+                store=store,
+                queue=queue,
+            )
+        except RuntimeError as error:
+            assert str(error) == "simulated crash after partial batch"
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=queue,
+        )
+
+        outcomes = {row["source_business_id"]: row["outcome_reason"] for row in store.prospects}
+        assert outcomes == {
+            "place-1": "ambiguous_duplicate",
+            "place-2": "ambiguous_duplicate",
+        }
+        assert queue.enqueued == [
+            {
+                "job_type": "assess_prospects",
+                "tenant_id": str(TENANT_ID),
+                "discovery_run_id": str(RUN_ID),
+            }
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_atomic_normalization_crash_persists_assessment_before_replay_skip() -> None:
+    @dataclass
+    class CrashAfterAtomicWriteStore(Store):
+        async def apply_prospect_normalization_with_assessment(self, **values: object):
+            await super().apply_prospect_normalization_with_assessment(**values)
+            for row in self.prospects:
+                if row["id"] == values["prospect_id"]:
+                    row["status"] = values["status"]
+                    row["outcome_reason"] = values["outcome_reason"]
+                    break
+            raise RuntimeError("simulated crash after atomic normalization")
+
+    async def scenario() -> None:
+        store = CrashAfterAtomicWriteStore(prospects=[prospect(source_website_url=None)])
+
+        try:
+            await normalize_prospects(
+                {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+                store=store,
+                queue=Queue(),
+            )
+        except RuntimeError as error:
+            assert str(error) == "simulated crash after atomic normalization"
+
+        assert store.prospects[0]["status"] == "assessed"
+        assert store.assessments[0]["assessment_version"] == "route-a-normalization-v1"
+        assert store.assessments[0]["computed_route"] == "A"
+
+    asyncio.run(scenario())
+
+
+def test_processing_replay_with_no_discovered_rows_refreshes_and_enqueues_assessment() -> None:
+    async def scenario() -> None:
+        store = Store(
+            run={"status": "processing", "source_request_id": "request-123"},
+            prospects=[
+                prospect(
+                    status="assessed",
+                    outcome_reason="no_owned_website",
+                    source_website_url=None,
+                )
+            ],
+        )
+        queue = Queue()
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=queue,
+        )
+
+        assert store.updates == []
+        assert store.assessments == []
+        assert store.refreshed == [(TENANT_ID, RUN_ID)]
+        assert queue.enqueued == [
+            {
+                "job_type": "assess_prospects",
+                "tenant_id": str(TENANT_ID),
+                "discovery_run_id": str(RUN_ID),
+            }
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_normalization_produces_redirect_placeholder_and_inaccessible_website_evidence() -> None:
+    class Resolver:
+        async def resolve(self, url: str) -> dict[str, object]:
+            assert url == "https://northside.example"
+            return {
+                "resolved_website_url": "https://facebook.com/northsideplumbing",
+                "website_fetch_failures": 0,
+                "website_title": "Northside Plumbing on Facebook",
+                "website_text": "Northside Plumbing",
+            }
+
+    async def scenario() -> None:
+        store = Store(prospects=[prospect(source_website_url="https://northside.example")])
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=Queue(),
+            website_resolver=Resolver(),
+        )
+
+        assert store.updates[0]["status"] == "assessed"
+        assert store.updates[0]["website_ownership"] == "social"
+        assert store.assessments[0]["rule_evidence"]["website"]["final_url"] == (
+            "https://facebook.com/northsideplumbing"
+        )
 
     asyncio.run(scenario())
 

@@ -7,10 +7,13 @@ from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
+from clients.prospect_website_resolver import merge_website_evidence
 from prospects.normalization import (
     NormalizationDecision,
     ProspectInput,
     classify_prospect,
+    classify_website_ownership,
+    is_owned_domain,
     normalize_domain,
     normalize_name,
     normalize_phone,
@@ -32,9 +35,9 @@ class ProspectNormalizationStore(Protocol):
         self, *, tenant_id: UUID, discovery_run_id: UUID
     ) -> list[Mapping[str, object]]: ...
 
-    async def apply_prospect_normalization(self, **values: object) -> Mapping[str, object]: ...
-
-    async def upsert_prospect_assessment(self, **values: object) -> Mapping[str, object]: ...
+    async def apply_prospect_normalization_with_assessment(
+        self, **values: object
+    ) -> Mapping[str, object]: ...
 
     async def refresh_discovery_run_aggregates(
         self, tenant_id: UUID, discovery_run_id: UUID
@@ -50,6 +53,10 @@ class ProspectQueue(Protocol):
         *,
         delay_until: object = None,
     ) -> None: ...
+
+
+class WebsiteResolver(Protocol):
+    async def resolve(self, url: str) -> Mapping[str, object]: ...
 
 
 @dataclass(frozen=True)
@@ -68,6 +75,7 @@ async def normalize_prospects(
     preview_queue: object | None = None,
     outreach_queue: object | None = None,
     instantly_client: object | None = None,
+    website_resolver: WebsiteResolver | None = None,
 ) -> None:
     del lead_repository, preview_queue, outreach_queue, instantly_client
     tenant_id = UUID(str(payload["tenant_id"]))
@@ -91,9 +99,14 @@ async def normalize_prospects(
         tenant_id=tenant_id,
         discovery_run_id=run_id,
     )
-    prospects = [_to_input(row) for row in rows]
+    prospect_rows = [(row, _to_input(row)) for row in rows]
+    prospects = [prospect for _, prospect in prospect_rows]
     duplicate_context = _duplicate_context(prospects)
-    for prospect in prospects:
+    processed_any = False
+    for row, prospect in prospect_rows:
+        if str(row.get("status")) != "discovered":
+            continue
+        prospect = await _with_website_evidence(prospect, website_resolver)
         context = duplicate_context[prospect.id]
         decision = classify_prospect(
             prospect,
@@ -107,7 +120,7 @@ async def normalize_prospects(
             duplicate_context=context,
             normalized_domain=normalized_domain,
         )
-        await store.apply_prospect_normalization(
+        await store.apply_prospect_normalization_with_assessment(
             tenant_id=tenant_id,
             discovery_run_id=run_id,
             prospect_id=prospect.id,
@@ -121,24 +134,56 @@ async def normalize_prospects(
             route=decision.route,
             status=decision.status,
             outcome_reason=decision.reason,
-        )
-        await store.upsert_prospect_assessment(
-            tenant_id=tenant_id,
-            discovery_run_id=run_id,
-            prospect_id=prospect.id,
             assessment_version=ASSESSMENT_VERSION,
             eligible=decision.status not in {"held", "rejected"},
             computed_route=decision.route,
             rule_evidence=evidence,
             forced_route_reason=decision.reason if decision.route == "A" else None,
         )
-    await store.refresh_discovery_run_aggregates(tenant_id, run_id)
-    await queue.enqueue(
-        {
-            "job_type": "assess_prospects",
-            "tenant_id": str(tenant_id),
-            "discovery_run_id": str(run_id),
-        }
+        processed_any = True
+    should_finalize = processed_any or (
+        status == "processing"
+        and bool(rows)
+        and all(str(row.get("status")) != "discovered" for row in rows)
+    )
+    if should_finalize:
+        await store.refresh_discovery_run_aggregates(tenant_id, run_id)
+        await queue.enqueue(
+            {
+                "job_type": "assess_prospects",
+                "tenant_id": str(tenant_id),
+                "discovery_run_id": str(run_id),
+            }
+        )
+
+
+async def _with_website_evidence(
+    prospect: ProspectInput,
+    website_resolver: WebsiteResolver | None,
+) -> ProspectInput:
+    if website_resolver is None or not prospect.source_website_url:
+        return prospect
+    if classify_website_ownership(prospect) != "owned":
+        return prospect
+    evidence = await website_resolver.resolve(prospect.source_website_url)
+    payload = merge_website_evidence(prospect.source_payload, evidence)
+    return ProspectInput(
+        id=prospect.id,
+        discovery_run_id=prospect.discovery_run_id,
+        source_business_id=prospect.source_business_id,
+        business_name=prospect.business_name,
+        primary_category=prospect.primary_category,
+        additional_categories=prospect.additional_categories,
+        phone=prospect.phone,
+        full_address=prospect.full_address,
+        locality=prospect.locality,
+        state=prospect.state,
+        postcode=prospect.postcode,
+        business_status=prospect.business_status,
+        rating=prospect.rating,
+        review_count=prospect.review_count,
+        source_website_url=prospect.source_website_url,
+        source_payload=payload,
     )
 
 
@@ -171,7 +216,7 @@ def _duplicate_context(prospects: list[ProspectInput]) -> dict[UUID, DuplicateCo
     }
     for prospect in prospects:
         phone = normalize_phone(prospect.phone)
-        domain = _final_domain(prospect)
+        domain = _owned_duplicate_domain(prospect)
         name_address = _name_address_key(prospect)
         if phone:
             groups["phone"][phone].append(prospect)
@@ -187,7 +232,7 @@ def _duplicate_context(prospects: list[ProspectInput]) -> dict[UUID, DuplicateCo
         for group_name, values in groups.items():
             key = {
                 "phone": normalize_phone(prospect.phone),
-                "domain": _final_domain(prospect),
+                "domain": _owned_duplicate_domain(prospect),
                 "name_address": _name_address_key(prospect),
             }[group_name]
             if not key:
@@ -237,6 +282,11 @@ def _rule_evidence(
 
 def _final_domain(prospect: ProspectInput) -> str | None:
     return normalize_domain(_resolved_url(prospect))
+
+
+def _owned_duplicate_domain(prospect: ProspectInput) -> str | None:
+    resolved_url = _resolved_url(prospect)
+    return normalize_domain(resolved_url) if is_owned_domain(resolved_url) else None
 
 
 def _resolved_url(prospect: ProspectInput) -> str | None:

@@ -174,6 +174,13 @@ class ProspectStore:
     async def apply_prospect_normalization(self, **values: object) -> dict[str, object]:
         return await apply_prospect_normalization(self._connection, **values)
 
+    async def apply_prospect_normalization_with_assessment(
+        self, **values: object
+    ) -> dict[str, object]:
+        return await apply_prospect_normalization_with_assessment(
+            self._connection, **values
+        )
+
     async def upsert_prospect_assessment(self, **values: object) -> dict[str, object]:
         return await upsert_prospect_assessment(self._connection, **values)
 
@@ -616,7 +623,7 @@ async def list_discovered_prospects(
         FROM business_prospects
         WHERE tenant_id = $1
           AND discovery_run_id = $2
-          AND status = 'discovered'
+          AND status IN ('discovered', 'normalized', 'assessed', 'held', 'rejected')
         ORDER BY created_at, id
         """,
         tenant_id,
@@ -646,6 +653,7 @@ async def apply_prospect_normalization(
         WHERE tenant_id = $1
           AND discovery_run_id = $2
           AND id = $3
+          AND status = 'discovered'
           AND lead_id IS NULL
         RETURNING id, tenant_id, discovery_run_id, source, source_business_id,
                   business_name, normalized_name, normalized_phone,
@@ -684,7 +692,7 @@ async def upsert_prospect_assessment(
           forced_route_reason
         )
         VALUES ($1, $2, $3, 'automated', $4, $5, $6, $7::jsonb, $8)
-        ON CONFLICT (tenant_id, prospect_id, assessment_version)
+        ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)
         WHERE assessment_type = 'automated'
         DO UPDATE SET
           eligible = EXCLUDED.eligible,
@@ -710,6 +718,82 @@ async def upsert_prospect_assessment(
     return dict(cast(Mapping[str, object], result))
 
 
+async def apply_prospect_normalization_with_assessment(
+    connection: DatabaseConnection,
+    **values: object,
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        WITH normalized AS (
+          UPDATE business_prospects
+          SET normalized_name = $4,
+              normalized_phone = $5,
+              normalized_domain = $6,
+              website_ownership = $7,
+              duplicate_evidence = $8::jsonb,
+              is_franchise = $9,
+              matched_location_count = $10,
+              route = $11,
+              status = $12,
+              outcome_reason = $13,
+              updated_at = NOW()
+          WHERE tenant_id = $1
+            AND discovery_run_id = $2
+            AND id = $3
+            AND status = 'discovered'
+            AND lead_id IS NULL
+          RETURNING id, tenant_id, discovery_run_id, source, source_business_id,
+                    business_name, normalized_name, normalized_phone,
+                    normalized_domain, website_ownership, duplicate_evidence,
+                    is_franchise, matched_location_count, route, status,
+                    outcome_reason, updated_at
+        ),
+        assessment AS (
+          INSERT INTO prospect_assessments (
+            tenant_id, discovery_run_id, prospect_id, assessment_type,
+            assessment_version, eligible, computed_route, rule_evidence,
+            forced_route_reason
+          )
+          SELECT tenant_id, discovery_run_id, id, 'automated',
+                 $14, $15, $16, $17::jsonb, $18
+          FROM normalized
+          ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)
+          WHERE assessment_type = 'automated'
+          DO UPDATE SET
+            eligible = EXCLUDED.eligible,
+            computed_route = EXCLUDED.computed_route,
+            rule_evidence = EXCLUDED.rule_evidence,
+            forced_route_reason = EXCLUDED.forced_route_reason
+          RETURNING id AS assessment_id
+        )
+        SELECT normalized.*, assessment.assessment_id
+        FROM normalized
+        CROSS JOIN assessment
+        """,
+        values["tenant_id"],
+        values["discovery_run_id"],
+        values["prospect_id"],
+        values["normalized_name"],
+        values.get("normalized_phone"),
+        values.get("normalized_domain"),
+        values.get("website_ownership"),
+        json.dumps(dict(cast(Mapping[str, object], values["duplicate_evidence"]))),
+        values["is_franchise"],
+        values["matched_location_count"],
+        values.get("route"),
+        values["status"],
+        values["outcome_reason"],
+        values["assessment_version"],
+        values["eligible"],
+        values.get("computed_route"),
+        json.dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
+        values.get("forced_route_reason"),
+    )
+    if result is None:
+        raise LookupError("Prospect normalization target not found for tenant/run")
+    return dict(cast(Mapping[str, object], result))
+
+
 async def refresh_discovery_run_aggregates(
     connection: DatabaseConnection,
     *,
@@ -720,7 +804,9 @@ async def refresh_discovery_run_aggregates(
         """
         WITH prospect_counts AS (
           SELECT COUNT(*)::integer AS discovered_count,
-                 COUNT(*) FILTER (WHERE status <> 'failed')::integer AS usable_count,
+                 COUNT(*) FILTER (
+                   WHERE status IN ('normalized', 'assessed', 'contact_enriched', 'review_ready')
+                 )::integer AS usable_count,
                  COUNT(*) FILTER (WHERE route = 'A')::integer AS route_a_count,
                  COUNT(*) FILTER (WHERE route = 'B')::integer AS route_b_count
           FROM business_prospects

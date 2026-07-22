@@ -38,6 +38,18 @@ APPROVED_LOCALITIES = {
     "moreton bay",
     "redlands",
 }
+GREATER_BRISBANE_POSTCODE_RANGES = (
+    (4000, 4209),
+    (4300, 4349),
+    (4500, 4512),
+)
+QUEENSLAND_STATES = {"qld", "queensland"}
+PERMANENTLY_CLOSED_STATUSES = {
+    "permanently closed",
+    "permanently_closed",
+    "closed permanently",
+    "closed_permanently",
+}
 SOCIAL_HOSTS = {
     "facebook.com",
     "instagram.com",
@@ -139,13 +151,26 @@ def normalize_domain(value: str | None) -> str | None:
     return host or None
 
 
+def is_owned_domain(value: str | None) -> bool:
+    domain = normalize_domain(value)
+    if domain is None:
+        return False
+    return not (
+        _domain_in(domain, SOCIAL_HOSTS)
+        or _domain_in(domain, DIRECTORY_HOSTS)
+        or _domain_in(domain, MARKETPLACE_HOSTS)
+        or any(term in domain for term in PARKED_HOST_TERMS)
+    )
+
+
 def classify_prospect(
     prospect: ProspectInput,
     *,
     matched_location_count: int,
     ambiguous_duplicate: bool = False,
 ) -> NormalizationDecision:
-    if (prospect.business_status or "").casefold() == "permanently_closed":
+    status = (prospect.business_status or "").strip().casefold()
+    if status in PERMANENTLY_CLOSED_STATUSES:
         return _reject("permanently_closed")
     if not _is_plumbing_category(prospect):
         return _reject("wrong_category")
@@ -229,10 +254,20 @@ def _is_plumbing_category(prospect: ProspectInput) -> bool:
 def _is_inside_region(prospect: ProspectInput) -> bool:
     locality = normalize_name(prospect.locality)
     address = normalize_name(prospect.full_address)
+    state = normalize_name(prospect.state)
+    if state and state not in QUEENSLAND_STATES:
+        return False
+    if not state and " qld " not in f" {address} " and " queensland " not in f" {address} ":
+        return False
+    postcode = _postcode_int(prospect.postcode)
+    if postcode is not None and any(
+        start <= postcode <= end for start, end in GREATER_BRISBANE_POSTCODE_RANGES
+    ):
+        return True
     if locality:
         return locality in APPROVED_LOCALITIES
     return locality in APPROVED_LOCALITIES or any(
-        locality in address for locality in APPROVED_LOCALITIES
+        approved in address for approved in APPROVED_LOCALITIES
     )
 
 
@@ -261,6 +296,13 @@ def _int_value(value: object) -> int:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return 0
+
+
+def _postcode_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    match = re.search(r"\d{4}", value)
+    return int(match.group(0)) if match else None
 
 
 def _reject(reason: str) -> NormalizationDecision:

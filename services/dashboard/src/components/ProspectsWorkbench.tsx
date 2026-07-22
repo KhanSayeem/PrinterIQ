@@ -147,8 +147,16 @@ function ProspectEvidenceList({ prospects }: { prospects: ProspectEvidenceView[]
               <dd>{prospect.sourceWebsiteUrl ?? "No URL"}</dd>
             </div>
             <div>
+              <dt>Final URL</dt>
+              <dd>{finalUrl(prospect.ruleEvidence) ?? prospect.sourceWebsiteUrl ?? "No URL"}</dd>
+            </div>
+            <div>
               <dt>Domain</dt>
               <dd>{prospect.normalizedDomain ?? "None"}</dd>
+            </div>
+            <div>
+              <dt>Ownership reason</dt>
+              <dd>{websiteReason(prospect.ruleEvidence) ?? prospect.outcomeReason ?? "No reason"}</dd>
             </div>
             <div>
               <dt>Evidence</dt>
@@ -184,6 +192,18 @@ function evidenceSummary(value: unknown) {
   const finalUrl = typeof website.final_url === "string" ? website.final_url : null;
   const ownership = typeof website.ownership === "string" ? website.ownership : null;
   return [ownership ? ownershipLabel(ownership) : null, finalUrl].filter(Boolean).join(" - ");
+}
+
+function finalUrl(value: unknown) {
+  if (!isRecord(value)) return null;
+  const website = isRecord(value.website) ? value.website : {};
+  return typeof website.final_url === "string" ? website.final_url : null;
+}
+
+function websiteReason(value: unknown) {
+  if (!isRecord(value)) return null;
+  const website = isRecord(value.website) ? value.website : {};
+  return typeof website.reason === "string" ? website.reason : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
