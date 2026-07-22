@@ -1307,6 +1307,32 @@ def test_redis_pipeline_queue_does_not_scan_active_bullmq_hash_as_new_work() -> 
     asyncio.run(scenario())
 
 
+def test_redis_pipeline_queue_deletes_bullmq_hash_after_list_id_ack() -> None:
+    async def scenario() -> None:
+        redis = FakeRedis()
+        redis.lists[redis.wait_key].append("job-1")
+        redis.hashes["bull:pipeline:job-1"] = {
+            "data": (
+                '{"job_type":"enrich_lead","tenant_id":"'
+                + str(TENANT_ID)
+                + '","lead_id":"'
+                + str(LEAD_ID)
+                + '"}'
+            )
+        }
+        queue = RedisPipelineQueue(redis)
+
+        message = await queue.pop()
+        assert message is not None
+        await queue.ack(message)
+
+        assert "job-1" not in redis.lists[redis.active_key]
+        assert redis.deleted_keys == ["bull:pipeline:job-1"]
+        assert await queue.pop() is None
+
+    asyncio.run(scenario())
+
+
 def test_pipeline_queue_manager_backs_off_retryable_outscraper_poll() -> None:
     async def scenario() -> None:
         payload = {

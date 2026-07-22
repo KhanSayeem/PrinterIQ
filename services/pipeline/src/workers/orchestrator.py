@@ -715,6 +715,8 @@ class RedisPipelineQueue:
             await self._redis.delete(message.ack_token.removeprefix("hash:"))
             return
         await self._redis.lrem(self._active_key, 1, message.ack_token)
+        if not message.ack_token.startswith("{"):
+            await self._redis.delete(f"{self._job_key_prefix}{message.ack_token}")
 
     async def _pop_bullmq_hash_job(self) -> QueueMessage | None:
         raw_active_items = await self._redis.lrange(self._active_key, 0, -1)
