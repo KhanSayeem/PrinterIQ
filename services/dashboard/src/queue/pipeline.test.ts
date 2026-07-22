@@ -34,7 +34,11 @@ vi.mock("bullmq", () => ({
   }),
 }));
 
-import { enqueueIngestCsvJob, hasActiveIngestCsvJob } from "./pipeline";
+import {
+  enqueueIngestCsvJob,
+  enqueueStartDiscoveryJob,
+  hasActiveIngestCsvJob,
+} from "./pipeline";
 
 describe("enqueueIngestCsvJob", () => {
   beforeEach(() => {
@@ -294,5 +298,46 @@ describe("enqueueIngestCsvJob", () => {
 
     expect(removeMock).toHaveBeenCalledOnce();
     expect(addMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("enqueueStartDiscoveryJob", () => {
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+    addMock.mockReset();
+    closeMock.mockReset();
+    queueConstructorMock.mockClear();
+    addMock.mockResolvedValue({ id: "start-discovery-run-1" });
+    closeMock.mockResolvedValue(undefined);
+  });
+
+  it("enqueues only the tenant-scoped start_discovery identity", async () => {
+    vi.stubEnv("REDIS_URL", "redis://redis.example:6379");
+
+    const result = await enqueueStartDiscoveryJob({
+      tenantId: "tenant-1",
+      discoveryRunId: "run-1",
+    });
+
+    expect(result).toEqual({ id: "start-discovery-run-1", acquired: true });
+    expect(addMock).toHaveBeenCalledWith(
+      "start_discovery",
+      {
+        job_type: "start_discovery",
+        tenant_id: "tenant-1",
+        discovery_run_id: "run-1",
+      },
+      {
+        attempts: 3,
+        jobId: "start-discovery-run-1",
+        removeOnComplete: true,
+      },
+    );
+    expect(Object.keys(addMock.mock.calls[0][1])).toEqual([
+      "job_type",
+      "tenant_id",
+      "discovery_run_id",
+    ]);
+    expect(closeMock).toHaveBeenCalledOnce();
   });
 });

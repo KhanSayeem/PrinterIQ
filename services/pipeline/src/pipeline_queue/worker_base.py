@@ -28,6 +28,10 @@ class InvalidQueuePayloadError(ValueError):
     """Raised when a queue payload contains malformed identifiers."""
 
 
+class QueueLeaseUnavailableError(RuntimeError):
+    """Raised when a recovery-sensitive job must be retried after its active lease ages."""
+
+
 async def run_tracked_job[ResultT](
     store: QueueJobRepository,
     *,
@@ -36,6 +40,8 @@ async def run_tracked_job[ResultT](
     handler: JobHandler[ResultT],
     attempt_count: int = 1,
     max_attempts: int = 5,
+    retry_if_unavailable: bool = False,
+    recover_stale_active: bool = False,
 ) -> ResultT | None:
     normalised_payload = dict(payload)
     tenant_id = _required_uuid(normalised_payload, "tenant_id")
@@ -49,9 +55,12 @@ async def run_tracked_job[ResultT](
             payload=normalised_payload,
             max_attempts=max_attempts,
             attempt_count=attempt_count,
+            recover_stale_active=recover_stale_active,
         )
     )
     if not lease.acquired:
+        if retry_if_unavailable:
+            raise QueueLeaseUnavailableError("Queue job lease is still active")
         return None
 
     try:
@@ -64,6 +73,7 @@ async def run_tracked_job[ResultT](
                 status="dead" if should_dead_letter(attempt_count, max_attempts) else "failed",
                 attempt_count=attempt_count,
                 error_message=str(exc),
+                lease_started_at=lease.lease_started_at,
             )
         )
         raise
@@ -75,6 +85,7 @@ async def run_tracked_job[ResultT](
             status="completed",
             attempt_count=attempt_count,
             error_message=None,
+            lease_started_at=lease.lease_started_at,
         )
     )
     return result

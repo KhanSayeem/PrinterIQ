@@ -5,6 +5,7 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { getDb } from "./client";
 import {
   conversations,
+  discoveryRuns,
   enrichments,
   leads,
   outreachSends,
@@ -55,6 +56,22 @@ export type LeadFilterCounts = {
 export type LeadIdentity = {
   tenantId: string;
   leadId: string;
+};
+
+export type CreateDiscoveryRunInput = {
+  tenantId: string;
+  querySpec: Record<string, unknown>;
+};
+
+export type MarkDiscoveryRunFailedInput = {
+  tenantId: string;
+  discoveryRunId: string;
+  failureCode: string;
+};
+
+export type FailStaleActiveDiscoveryRunsInput = {
+  tenantId: string;
+  staleBefore: Date;
 };
 
 export type OperatorConversationInput = LeadIdentity & {
@@ -682,6 +699,86 @@ export function buildRevenuePaymentsSummaryQuery(
     );
 }
 
+export function buildCreateDiscoveryRunQuery(
+  db: DashboardDb,
+  input: CreateDiscoveryRunInput,
+) {
+  requireTenantId(input.tenantId);
+
+  return db
+    .insert(discoveryRuns)
+    .values({
+      tenantId: input.tenantId,
+      source: "outscraper",
+      querySpec: input.querySpec,
+      status: "created",
+      shadowMode: true,
+    })
+    .returning();
+}
+
+export function buildLatestDiscoveryRunQuery(
+  db: DashboardDb,
+  identity: { tenantId: string },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select()
+    .from(discoveryRuns)
+    .where(eq(discoveryRuns.tenantId, identity.tenantId))
+    .orderBy(desc(discoveryRuns.createdAt))
+    .limit(1);
+}
+
+export function buildFailStaleActiveDiscoveryRunsQuery(
+  db: DashboardDb,
+  input: FailStaleActiveDiscoveryRunsInput,
+) {
+  requireTenantId(input.tenantId);
+
+  return db
+    .update(discoveryRuns)
+    .set({
+      status: "failed",
+      failureCode: "discovery_run_stale_active",
+      failureDetail: "Discovery run did not advance before the recovery deadline.",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(discoveryRuns.tenantId, input.tenantId),
+        inArray(discoveryRuns.status, ["created", "submitted", "polling", "processing"]),
+        lte(discoveryRuns.updatedAt, input.staleBefore),
+      ),
+    )
+    .returning();
+}
+
+export function buildMarkDiscoveryRunFailedQuery(
+  db: DashboardDb,
+  input: MarkDiscoveryRunFailedInput,
+) {
+  requireTenantId(input.tenantId);
+
+  return db
+    .update(discoveryRuns)
+    .set({
+      status: "failed",
+      failureCode: input.failureCode,
+      failureDetail: "Discovery run could not be queued.",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(discoveryRuns.tenantId, input.tenantId),
+        eq(discoveryRuns.id, input.discoveryRunId),
+        eq(discoveryRuns.status, "created"),
+      ),
+    )
+    .returning();
+}
+
 export function buildRevenueImportedCountQuery(
   db: DashboardDb,
   identity: { tenantId: string; periodStart: Date },
@@ -730,6 +827,43 @@ export async function getLeadList(filters: LeadListFilters) {
   const db = getDb();
   const rows = await buildLeadListQuery(db, filters);
   return addLatestConversationsToLeadRows(db, filters.tenantId, rows);
+}
+
+export async function createDiscoveryRun(input: CreateDiscoveryRunInput) {
+  const db = getDb();
+  const [run] = await buildCreateDiscoveryRunQuery(db, input);
+  if (!run) {
+    throw new Error("Discovery run insert failed");
+  }
+  return run;
+}
+
+export async function failStaleActiveDiscoveryRuns(input: FailStaleActiveDiscoveryRunsInput) {
+  const db = getDb();
+  return buildFailStaleActiveDiscoveryRunsQuery(db, input);
+}
+
+export async function failStaleActiveDiscoveryRunsForTenant(identity: { tenantId: string }) {
+  return failStaleActiveDiscoveryRuns({
+    tenantId: identity.tenantId,
+    staleBefore: new Date(Date.now() - 10 * 60 * 1000),
+  });
+}
+
+export async function getLatestDiscoveryRun(identity: string | { tenantId: string }) {
+  const tenantId = typeof identity === "string" ? identity : identity.tenantId;
+  const db = getDb();
+  const [run] = await buildLatestDiscoveryRunQuery(db, { tenantId });
+  return run ?? null;
+}
+
+export async function markDiscoveryRunFailed(input: MarkDiscoveryRunFailedInput) {
+  const db = getDb();
+  const [run] = await buildMarkDiscoveryRunFailedQuery(db, input);
+  if (!run) {
+    throw new Error("Created discovery run could not be marked failed");
+  }
+  return run;
 }
 
 export async function getLeadListPage(filters: LeadListFilters) {
