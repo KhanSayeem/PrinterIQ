@@ -843,6 +843,13 @@ export async function failStaleActiveDiscoveryRuns(input: FailStaleActiveDiscove
   return buildFailStaleActiveDiscoveryRunsQuery(db, input);
 }
 
+export async function failStaleActiveDiscoveryRunsForTenant(identity: { tenantId: string }) {
+  return failStaleActiveDiscoveryRuns({
+    tenantId: identity.tenantId,
+    staleBefore: new Date(Date.now() - 10 * 60 * 1000),
+  });
+}
+
 export async function getLatestDiscoveryRun(identity: string | { tenantId: string }) {
   const tenantId = typeof identity === "string" ? identity : identity.tenantId;
   const db = getDb();

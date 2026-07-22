@@ -41,6 +41,18 @@ describe("ProspectsWorkbench", () => {
     expect(screen.getByText(/A discovery run is active/i)).toBeInTheDocument();
   });
 
+  it("allows another run after raw discovery results are persisted", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={{ ...activeRun, status: "persisted" }}
+        startAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /start discovery run/i })).toBeInTheDocument();
+    expect(screen.queryByText(/A discovery run is active/i)).not.toBeInTheDocument();
+  });
+
   it("surfaces a rejected start action", async () => {
     const startAction = vi.fn().mockResolvedValue({ ok: false, message: "A discovery run is already active." });
     render(<ProspectsWorkbench initialRun={null} startAction={startAction} />);

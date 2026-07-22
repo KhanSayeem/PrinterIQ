@@ -39,6 +39,13 @@ describe("ProspectRunSummary", () => {
     expect(screen.getByText("Provider processing")).toBeInTheDocument();
   });
 
+  it("does not describe raw persisted results as active processing", () => {
+    render(<ProspectRunSummary run={{ ...run, status: "persisted" }} />);
+
+    expect(screen.getAllByText("Results persisted")).toHaveLength(2);
+    expect(screen.queryByText(/partial results/i)).not.toBeInTheDocument();
+  });
+
   it("shows a terminal provider failure without hiding collected counts", () => {
     render(
       <ProspectRunSummary

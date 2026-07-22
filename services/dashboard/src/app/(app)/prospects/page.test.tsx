@@ -1,14 +1,23 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getDashboardTenantIdMock, getLatestDiscoveryRunMock, workbenchMock } = vi.hoisted(() => ({
+const {
+  failStaleActiveDiscoveryRunsForTenantMock,
+  getDashboardTenantIdMock,
+  getLatestDiscoveryRunMock,
+  workbenchMock,
+} = vi.hoisted(() => ({
+  failStaleActiveDiscoveryRunsForTenantMock: vi.fn(),
   getDashboardTenantIdMock: vi.fn(),
   getLatestDiscoveryRunMock: vi.fn(),
   workbenchMock: vi.fn(() => null),
 }));
 
 vi.mock("@/auth/tenant", () => ({ getDashboardTenantId: getDashboardTenantIdMock }));
-vi.mock("@/db/queries", () => ({ getLatestDiscoveryRun: getLatestDiscoveryRunMock }));
+vi.mock("@/db/queries", () => ({
+  failStaleActiveDiscoveryRunsForTenant: failStaleActiveDiscoveryRunsForTenantMock,
+  getLatestDiscoveryRun: getLatestDiscoveryRunMock,
+}));
 vi.mock("@/components/ProspectsWorkbench", () => ({ ProspectsWorkbench: workbenchMock }));
 vi.mock("@/components/ShadowModeBanner", () => ({ ShadowModeBanner: () => null }));
 
@@ -19,6 +28,7 @@ import ProspectsError from "./error";
 describe("ProspectsPage", () => {
   beforeEach(() => {
     getDashboardTenantIdMock.mockReset();
+    failStaleActiveDiscoveryRunsForTenantMock.mockReset().mockResolvedValue([]);
     getLatestDiscoveryRunMock.mockReset();
     workbenchMock.mockClear();
     getDashboardTenantIdMock.mockReturnValue("10000000-0000-0000-0000-000000000001");
@@ -28,9 +38,15 @@ describe("ProspectsPage", () => {
   it("loads the latest run for the configured tenant", async () => {
     render(await ProspectsPage());
 
+    expect(failStaleActiveDiscoveryRunsForTenantMock).toHaveBeenCalledWith({
+      tenantId: "10000000-0000-0000-0000-000000000001",
+    });
     expect(getLatestDiscoveryRunMock).toHaveBeenCalledWith({
       tenantId: "10000000-0000-0000-0000-000000000001",
     });
+    expect(failStaleActiveDiscoveryRunsForTenantMock.mock.invocationCallOrder[0]).toBeLessThan(
+      getLatestDiscoveryRunMock.mock.invocationCallOrder[0],
+    );
     expect(workbenchMock).toHaveBeenCalledWith(expect.objectContaining({ initialRun: null }), undefined);
   });
 

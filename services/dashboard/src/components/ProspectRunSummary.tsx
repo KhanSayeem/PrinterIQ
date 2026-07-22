@@ -25,7 +25,7 @@ const RUN_LABELS: Record<string, string> = {
   failed: "Run failed",
 };
 
-const PARTIAL_STATUSES = new Set(["submitted", "polling", "persisted", "processing"]);
+const PARTIAL_STATUSES = new Set(["submitted", "polling", "processing"]);
 
 function providerState(run: ProspectRunView) {
   if (run.status === "failed") return "Provider failed";

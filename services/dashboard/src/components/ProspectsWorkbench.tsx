@@ -17,7 +17,7 @@ type StartProspectRunAction = (
 ) => Promise<ProspectRunActionState>;
 
 const INITIAL_ACTION_STATE: ProspectRunActionState = { ok: false, message: "" };
-const ACTIVE_STATUSES = new Set(["created", "submitted", "polling", "persisted", "processing"]);
+const ACTIVE_STATUSES = new Set(["created", "submitted", "polling", "processing"]);
 
 export function ProspectsWorkbench({
   initialRun,
