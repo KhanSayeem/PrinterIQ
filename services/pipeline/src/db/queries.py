@@ -58,6 +58,7 @@ class QueueJobInsert:
     payload: Mapping[str, object]
     max_attempts: int
     attempt_count: int = 0
+    recover_stale_active: bool = False
 
 
 @dataclass(frozen=True)
@@ -1371,6 +1372,8 @@ async def _create_queue_job_for_lead(
             completed_at = NULL
         WHERE queue_jobs.status = 'failed'
            OR (
+             $7 = TRUE
+             AND
              queue_jobs.status = 'active'
              AND queue_jobs.started_at < NOW() - INTERVAL '10 minutes'
            )
@@ -1397,6 +1400,7 @@ async def _create_queue_job_for_lead(
         insert.attempt_count,
         insert.max_attempts,
         json.dumps(dict(insert.payload)),
+        insert.recover_stale_active,
     )
 
 
@@ -1431,6 +1435,8 @@ async def _create_queue_job_without_lead(
             completed_at = NULL
         WHERE queue_jobs.status = 'failed'
            OR (
+             $6 = TRUE
+             AND
              queue_jobs.status = 'active'
              AND queue_jobs.started_at < NOW() - INTERVAL '10 minutes'
            )
@@ -1456,6 +1462,7 @@ async def _create_queue_job_without_lead(
         insert.attempt_count,
         insert.max_attempts,
         json.dumps(dict(insert.payload)),
+        insert.recover_stale_active,
     )
 
 

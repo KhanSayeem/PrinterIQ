@@ -30,6 +30,7 @@ class RecordedInsert:
     lead_id: UUID | None
     payload: dict[str, Any]
     max_attempts: int
+    recover_stale_active: bool
 
 
 class FakeQueueJobStore:
@@ -47,6 +48,7 @@ class FakeQueueJobStore:
                 lead_id=insert.lead_id,
                 payload=dict(insert.payload),
                 max_attempts=insert.max_attempts,
+                recover_stale_active=insert.recover_stale_active,
             )
         )
         return QueueJobLease(
@@ -219,18 +221,48 @@ def test_lead_queue_job_can_take_over_a_stale_active_lease_after_redis_recovery(
                 },
                 max_attempts=5,
                 attempt_count=2,
+                recover_stale_active=True,
             ),
         )
 
         query = connection.queries[0]
         assert "queue_jobs.status = 'failed'" in query
+        assert "$7 = TRUE" in query
         assert "queue_jobs.status = 'active'" in query
         assert "queue_jobs.started_at < NOW() - INTERVAL '10 minutes'" in query
+        assert connection.args[0][-1] is True
 
     asyncio.run(scenario())
 
 
-def test_leadless_queue_jobs_can_take_over_stale_active_leases() -> None:
+def test_lead_queue_job_does_not_take_over_stale_active_lease_by_default() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection()
+
+        await create_queue_job(
+            connection,
+            QueueJobInsert(
+                job_type="enrich_lead",
+                tenant_id=UUID(TENANT_ID),
+                lead_id=UUID(LEAD_ID),
+                payload={
+                    "job_type": "enrich_lead",
+                    "tenant_id": TENANT_ID,
+                    "lead_id": LEAD_ID,
+                },
+                max_attempts=5,
+                attempt_count=2,
+            ),
+        )
+
+        query = connection.queries[0]
+        assert "$7 = TRUE" in query
+        assert connection.args[0][-1] is False
+
+    asyncio.run(scenario())
+
+
+def test_leadless_queue_jobs_can_take_over_stale_active_leases_after_redis_recovery() -> None:
     async def scenario() -> None:
         for job_type in ("start_discovery", "poll_outscraper"):
             connection = RecordingConnection()
@@ -244,13 +276,16 @@ def test_leadless_queue_jobs_can_take_over_stale_active_leases() -> None:
                     payload={"job_type": job_type, "tenant_id": TENANT_ID},
                     max_attempts=3,
                     attempt_count=2,
+                    recover_stale_active=True,
                 ),
             )
 
             query = connection.queries[0]
             assert "queue_jobs.status = 'failed'" in query
+            assert "$6 = TRUE" in query
             assert "queue_jobs.status = 'active'" in query
             assert "queue_jobs.started_at < NOW() - INTERVAL '10 minutes'" in query
+            assert connection.args[0][-1] is True
 
     asyncio.run(scenario())
 
@@ -383,6 +418,7 @@ def test_run_tracked_job_writes_active_and_completed_states() -> None:
                 lead_id=UUID(LEAD_ID),
                 payload=payload,
                 max_attempts=5,
+                recover_stale_active=False,
             )
         ]
         assert len(store.updates) == 1
@@ -390,6 +426,31 @@ def test_run_tracked_job_writes_active_and_completed_states() -> None:
         assert store.updates[0].tenant_id == UUID(TENANT_ID)
         assert store.updates[0].status == "completed"
         assert store.updates[0].error_message is None
+
+    asyncio.run(scenario())
+
+
+def test_run_tracked_job_forwards_recovered_stale_takeover_opt_in() -> None:
+    async def scenario() -> None:
+        store = FakeQueueJobStore()
+
+        async def handler(_: dict[str, Any]) -> str:
+            return "ok"
+
+        await run_tracked_job(
+            store,
+            job_type=JobType.ENRICH_LEAD,
+            payload={
+                "job_type": "enrich_lead",
+                "tenant_id": TENANT_ID,
+                "lead_id": LEAD_ID,
+            },
+            handler=handler,
+            max_attempts=5,
+            recover_stale_active=True,
+        )
+
+        assert store.inserts[0].recover_stale_active is True
 
     asyncio.run(scenario())
 

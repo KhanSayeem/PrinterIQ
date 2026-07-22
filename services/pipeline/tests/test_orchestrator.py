@@ -13,6 +13,7 @@ from clients.outscraper_client import OutscraperRetryableError
 from db.queries import QueueJobInsert, QueueJobLease, QueueJobUpdate
 from pipeline_queue.definitions import JobType
 from workers.orchestrator import (
+    _RECOVERED_ACTIVE_RETRY_MARKER,
     CLAUDE_RATE_LIMIT_PER_MINUTE,
     INSTANTLY_RATE_LIMIT_PER_MINUTE,
     PIPELINE_CONCURRENCY,
@@ -62,6 +63,7 @@ class FakeQueueTransport:
     enqueued: list[tuple[dict[str, object], datetime | None]] = field(default_factory=list)
     acked: list[QueueMessage] = field(default_factory=list)
     recovery_calls: int = 0
+    recovered_active: bool = False
 
     async def recover_active(self) -> int:
         self.recovery_calls += 1
@@ -71,7 +73,11 @@ class FakeQueueTransport:
         if not self.payloads:
             return None
         payload = self.payloads.pop(0)
-        return QueueMessage(payload=payload, ack_token=str(len(self.acked)))
+        return QueueMessage(
+            payload=payload,
+            ack_token=str(len(self.acked)),
+            recovered_active=self.recovered_active,
+        )
 
     async def enqueue(
         self,
@@ -114,6 +120,12 @@ class FakeRedis:
     async def lrem(self, key: str, count: int, item: str) -> None:
         assert count == 1
         self.lists[key].remove(item)
+
+    async def lrange(self, key: str, start: int, end: int) -> list[str]:
+        values = self.lists.get(key, [])
+        if end == -1:
+            return values[start:]
+        return values[start : end + 1]
 
     async def zrangebyscore(self, key: str, minimum: int, maximum: int) -> list[str]:
         return [
@@ -703,7 +715,7 @@ def test_start_discovery_with_busy_lease_is_delayed_for_stale_takeover() -> None
             "tenant_id": str(TENANT_ID),
             "discovery_run_id": "20000000-0000-0000-0000-000000000001",
         }
-        transport = FakeQueueTransport(payloads=[payload])
+        transport = FakeQueueTransport(payloads=[payload], recovered_active=True)
         store = FakeQueueStore(acquired=False)
 
         async def unexpected_handler(_: dict[str, object]) -> None:
@@ -722,7 +734,10 @@ def test_start_discovery_with_busy_lease_is_delayed_for_stale_takeover() -> None
         assert transport.acked
         assert len(transport.enqueued) == 1
         retry_payload, retry_at = transport.enqueued[0]
-        assert retry_payload == payload
+        assert retry_payload == {
+            **payload,
+            _RECOVERED_ACTIVE_RETRY_MARKER: True,
+        }
         assert retry_at is not None and retry_at >= earliest_retry
 
     asyncio.run(scenario())
@@ -736,7 +751,7 @@ def test_poll_outscraper_with_busy_lease_is_delayed_for_stale_takeover() -> None
             "discovery_run_id": "20000000-0000-0000-0000-000000000001",
             "poll_count": 2,
         }
-        transport = FakeQueueTransport(payloads=[payload])
+        transport = FakeQueueTransport(payloads=[payload], recovered_active=True)
         store = FakeQueueStore(acquired=False)
 
         async def unexpected_handler(_: dict[str, object]) -> None:
@@ -755,7 +770,10 @@ def test_poll_outscraper_with_busy_lease_is_delayed_for_stale_takeover() -> None
         assert transport.acked
         assert len(transport.enqueued) == 1
         retry_payload, retry_at = transport.enqueued[0]
-        assert retry_payload == payload
+        assert retry_payload == {
+            **payload,
+            _RECOVERED_ACTIVE_RETRY_MARKER: True,
+        }
         assert retry_at is not None and retry_at >= earliest_retry
 
     asyncio.run(scenario())
@@ -768,7 +786,7 @@ def test_recovered_lead_job_with_busy_lease_is_delayed_for_stale_takeover() -> N
             "tenant_id": str(TENANT_ID),
             "lead_id": str(LEAD_ID),
         }
-        transport = FakeQueueTransport(payloads=[payload])
+        transport = FakeQueueTransport(payloads=[payload], recovered_active=True)
         store = FakeQueueStore(acquired=False)
 
         async def unexpected_handler(_: dict[str, object]) -> None:
@@ -787,8 +805,113 @@ def test_recovered_lead_job_with_busy_lease_is_delayed_for_stale_takeover() -> N
         assert transport.acked
         assert len(transport.enqueued) == 1
         retry_payload, retry_at = transport.enqueued[0]
-        assert retry_payload == payload
+        assert retry_payload == {
+            **payload,
+            _RECOVERED_ACTIVE_RETRY_MARKER: True,
+        }
         assert retry_at is not None and retry_at >= earliest_retry
+
+    asyncio.run(scenario())
+
+
+def test_recovered_retry_marker_permits_stale_takeover_without_reaching_handler() -> None:
+    async def scenario() -> None:
+        payload = {
+            "job_type": JobType.ENRICH_LEAD.value,
+            "tenant_id": str(TENANT_ID),
+            "lead_id": str(LEAD_ID),
+            _RECOVERED_ACTIVE_RETRY_MARKER: True,
+        }
+        transport = FakeQueueTransport(payloads=[payload], recovered_active=False)
+        store = FakeQueueStore(acquired=True)
+        handled: list[dict[str, object]] = []
+
+        async def handler(payload: dict[str, object]) -> None:
+            handled.append(payload)
+
+        manager = PipelineQueueManager(
+            queue=transport,
+            store=store,
+            handlers={JobType.ENRICH_LEAD: handler},
+        )
+
+        processed = await manager.run_once()
+
+        assert processed is True
+        assert handled == [
+            {
+                "job_type": JobType.ENRICH_LEAD.value,
+                "tenant_id": str(TENANT_ID),
+                "lead_id": str(LEAD_ID),
+            }
+        ]
+        assert store.inserts[0].recover_stale_active is True
+        assert _RECOVERED_ACTIVE_RETRY_MARKER not in store.inserts[0].payload
+
+    asyncio.run(scenario())
+
+
+def test_recovered_retry_marker_is_stripped_when_redis_recovery_flag_is_also_set() -> None:
+    async def scenario() -> None:
+        payload = {
+            "job_type": JobType.ENRICH_LEAD.value,
+            "tenant_id": str(TENANT_ID),
+            "lead_id": str(LEAD_ID),
+            _RECOVERED_ACTIVE_RETRY_MARKER: True,
+        }
+        transport = FakeQueueTransport(payloads=[payload], recovered_active=True)
+        store = FakeQueueStore(acquired=True)
+        handled: list[dict[str, object]] = []
+
+        async def handler(payload: dict[str, object]) -> None:
+            handled.append(payload)
+
+        manager = PipelineQueueManager(
+            queue=transport,
+            store=store,
+            handlers={JobType.ENRICH_LEAD: handler},
+        )
+
+        processed = await manager.run_once()
+
+        assert processed is True
+        assert handled == [
+            {
+                "job_type": JobType.ENRICH_LEAD.value,
+                "tenant_id": str(TENANT_ID),
+                "lead_id": str(LEAD_ID),
+            }
+        ]
+        assert store.inserts[0].recover_stale_active is True
+        assert _RECOVERED_ACTIVE_RETRY_MARKER not in store.inserts[0].payload
+
+    asyncio.run(scenario())
+
+
+def test_non_recovered_busy_lease_is_acked_without_delayed_duplicate() -> None:
+    async def scenario() -> None:
+        payload = {
+            "job_type": JobType.ENRICH_LEAD.value,
+            "tenant_id": str(TENANT_ID),
+            "lead_id": str(LEAD_ID),
+        }
+        transport = FakeQueueTransport(payloads=[payload], recovered_active=False)
+        store = FakeQueueStore(acquired=False)
+
+        async def unexpected_handler(_: dict[str, object]) -> None:
+            raise AssertionError("handler must not run without the lease")
+
+        manager = PipelineQueueManager(
+            queue=transport,
+            store=store,
+            handlers={JobType.ENRICH_LEAD: unexpected_handler},
+        )
+
+        processed = await manager.run_once()
+
+        assert processed is True
+        assert transport.acked
+        assert transport.enqueued == []
 
     asyncio.run(scenario())
 
@@ -1156,6 +1279,30 @@ def test_redis_pipeline_queue_moves_undecodable_item_to_dead_list() -> None:
         assert redis.lists[redis.wait_key] == []
         assert redis.lists[redis.active_key] == []
         assert redis.lists[redis.dead_key] == ["missing-bullmq-job-id"]
+
+    asyncio.run(scenario())
+
+
+def test_redis_pipeline_queue_does_not_scan_active_bullmq_hash_as_new_work() -> None:
+    async def scenario() -> None:
+        redis = FakeRedis()
+        redis.lists[redis.active_key].append("job-1")
+        redis.hashes["bull:pipeline:job-1"] = {
+            "data": (
+                '{"job_type":"enrich_lead","tenant_id":"'
+                + str(TENANT_ID)
+                + '","lead_id":"'
+                + str(LEAD_ID)
+                + '"}'
+            )
+        }
+        queue = RedisPipelineQueue(redis)
+
+        message = await queue.pop()
+
+        assert message is None
+        assert redis.deleted_keys == []
+        assert "bull:pipeline:job-1" in redis.hashes
 
     asyncio.run(scenario())
 

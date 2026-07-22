@@ -51,6 +51,7 @@ PIPELINE_CONCURRENCY = 5
 INSTANTLY_RATE_LIMIT_PER_MINUTE = 50
 CLAUDE_RATE_LIMIT_PER_MINUTE = 50
 logger = logging.getLogger(__name__)
+_RECOVERED_ACTIVE_RETRY_MARKER = "_printeriq_recovered_active_retry"
 
 PipelineHandler = Callable[[dict[str, object]], Awaitable[object]]
 Clock = Callable[[], float]
@@ -63,6 +64,7 @@ FlexibleWorker = Callable[..., Awaitable[object]]
 class QueueMessage:
     payload: dict[str, object]
     ack_token: str
+    recovered_active: bool = False
 
 
 class QueueTransport(Protocol):
@@ -574,7 +576,9 @@ class PipelineQueueManager:
         message = await self._queue.pop()
         if message is None:
             return False
-        payload = message.payload
+        payload = dict(message.payload)
+        marker_recovered = _pop_recovered_active_marker(payload)
+        recovered_active = message.recovered_active or marker_recovered
 
         try:
             job_type = JobType(str(payload["job_type"]))
@@ -611,11 +615,17 @@ class PipelineQueueManager:
                 handler=handler,
                 attempt_count=attempt_count,
                 max_attempts=max_attempts,
-                retry_if_unavailable=True,
+                retry_if_unavailable=recovered_active,
+                recover_stale_active=recovered_active,
             )
         except QueueLeaseUnavailableError:
+            if not recovered_active:
+                await self._queue.ack(message)
+                return True
+            retry_payload = dict(payload)
+            retry_payload[_RECOVERED_ACTIVE_RETRY_MARKER] = True
             await self._queue.enqueue(
-                payload,
+                retry_payload,
                 delay_until=datetime.now(UTC) + timedelta(minutes=10),
             )
             await self._queue.ack(message)
@@ -642,6 +652,10 @@ class PipelineQueueManager:
         return True
 
 
+def _pop_recovered_active_marker(payload: dict[str, object]) -> bool:
+    return payload.pop(_RECOVERED_ACTIVE_RETRY_MARKER, False) is True
+
+
 class RedisPipelineQueue:
     def __init__(self, redis: object, *, queue_name: str = "pipeline") -> None:
         self._redis = cast(Any, redis)
@@ -650,10 +664,15 @@ class RedisPipelineQueue:
         self._delayed_key = f"bull:{queue_name}:delayed"
         self._dead_key = f"bull:{queue_name}:dead"
         self._job_key_prefix = f"bull:{queue_name}:"
+        self._recovered_active_items: set[str] = set()
 
     async def recover_active(self) -> int:
         recovered = 0
-        while await self._redis.rpoplpush(self._active_key, self._wait_key) is not None:
+        while True:
+            raw_item = await self._redis.rpoplpush(self._active_key, self._wait_key)
+            if raw_item is None:
+                break
+            self._recovered_active_items.add(_decode_redis_value(raw_item))
             recovered += 1
         return recovered
 
@@ -666,10 +685,17 @@ class RedisPipelineQueue:
         try:
             payload = await self._payload_from_item(item)
         except ValueError:
+            self._recovered_active_items.discard(item)
             await self._redis.rpush(self._dead_key, item)
             await self._redis.lrem(self._active_key, 1, item)
             return None
-        return QueueMessage(payload=payload, ack_token=item)
+        recovered_active = item in self._recovered_active_items
+        self._recovered_active_items.discard(item)
+        return QueueMessage(
+            payload=payload,
+            ack_token=item,
+            recovered_active=recovered_active,
+        )
 
     async def enqueue(
         self,
@@ -691,6 +717,8 @@ class RedisPipelineQueue:
         await self._redis.lrem(self._active_key, 1, message.ack_token)
 
     async def _pop_bullmq_hash_job(self) -> QueueMessage | None:
+        raw_active_items = await self._redis.lrange(self._active_key, 0, -1)
+        active_items = {_decode_redis_value(item) for item in raw_active_items}
         async for raw_key in self._redis.scan_iter(match=f"{self._job_key_prefix}*"):
             key = _decode_redis_value(raw_key)
             if key in {
@@ -703,6 +731,9 @@ class RedisPipelineQueue:
                 f"{self._job_key_prefix}marker",
                 f"{self._job_key_prefix}meta",
             }:
+                continue
+            job_id = key.removeprefix(self._job_key_prefix)
+            if job_id in active_items:
                 continue
             job_hash = await self._redis.hgetall(key)
             raw_data = job_hash.get("data") if isinstance(job_hash, dict) else None

@@ -41,6 +41,7 @@ async def run_tracked_job[ResultT](
     attempt_count: int = 1,
     max_attempts: int = 5,
     retry_if_unavailable: bool = False,
+    recover_stale_active: bool = False,
 ) -> ResultT | None:
     normalised_payload = dict(payload)
     tenant_id = _required_uuid(normalised_payload, "tenant_id")
@@ -54,6 +55,7 @@ async def run_tracked_job[ResultT](
             payload=normalised_payload,
             max_attempts=max_attempts,
             attempt_count=attempt_count,
+            recover_stale_active=recover_stale_active,
         )
     )
     if not lease.acquired:
