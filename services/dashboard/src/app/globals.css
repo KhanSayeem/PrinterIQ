@@ -362,7 +362,7 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .shadow-mode-banner div { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .shadow-mode-banner strong { font-size: 12px; }
 .shadow-mode-banner span { font-size: 11px; color: #92400e; }
-.prospects-workbench { width: min(980px, calc(100% - 56px)); margin: 16px 28px 28px; display: grid; gap: 12px; }
+.prospects-workbench { margin: 16px 28px 28px; display: grid; gap: 12px; }
 .prospect-preset { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); }
 .prospect-eyebrow { display: block; margin-bottom: 5px; color: var(--text-tertiary); font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0; }
 .prospect-preset h2, .prospect-section-heading h2 { margin: 0; font-size: 15px; font-weight: 500; letter-spacing: 0; }
