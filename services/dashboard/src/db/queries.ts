@@ -86,6 +86,8 @@ export type ProspectEvidenceView = {
   outcomeReason: string | null;
   sourceWebsiteUrl: string | null;
   normalizedDomain: string | null;
+  matchedLocationCount: number;
+  duplicateEvidence: unknown;
   ruleEvidence: unknown;
 };
 
@@ -762,6 +764,8 @@ export function buildListProspectEvidenceForRunQuery(
       outcomeReason: businessProspects.outcomeReason,
       sourceWebsiteUrl: businessProspects.sourceWebsiteUrl,
       normalizedDomain: businessProspects.normalizedDomain,
+      matchedLocationCount: businessProspects.matchedLocationCount,
+      duplicateEvidence: businessProspects.duplicateEvidence,
       ruleEvidence: prospectAssessments.ruleEvidence,
     })
     .from(businessProspects)

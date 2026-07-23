@@ -416,6 +416,8 @@ describe("dashboard discovery run queries", () => {
     expect(query.sql).toContain('"prospect_assessments"."prospect_id" =');
     expect(query.sql).toContain('"prospect_assessments"."assessment_type" =');
     expect(query.sql).toContain('"prospect_assessments"."assessment_version" =');
+    expect(query.sql).toContain('"business_prospects"."matched_location_count"');
+    expect(query.sql).toContain('"business_prospects"."duplicate_evidence"');
     expect(query.sql).not.toContain('join "leads"');
     expect(query.sql).not.toContain('join "outreach_sends"');
     expect(query.params).toContain(tenantId);

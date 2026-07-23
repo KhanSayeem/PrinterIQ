@@ -99,14 +99,15 @@ async def normalize_prospects(
         tenant_id=tenant_id,
         discovery_run_id=run_id,
     )
-    prospect_rows = [(row, _to_input(row)) for row in rows]
+    prospect_rows = [
+        (row, await _resolved_input(row, _to_input(row), website_resolver)) for row in rows
+    ]
     prospects = [prospect for _, prospect in prospect_rows]
     duplicate_context = _duplicate_context(prospects)
     processed_any = False
     for row, prospect in prospect_rows:
         if str(row.get("status")) != "discovered":
             continue
-        prospect = await _with_website_evidence(prospect, website_resolver)
         context = duplicate_context[prospect.id]
         decision = classify_prospect(
             prospect,
@@ -134,6 +135,7 @@ async def normalize_prospects(
             route=decision.route,
             status=decision.status,
             outcome_reason=decision.reason,
+            source_payload=prospect.source_payload,
             assessment_version=ASSESSMENT_VERSION,
             eligible=decision.status not in {"held", "rejected"},
             computed_route=decision.route,
@@ -157,6 +159,21 @@ async def normalize_prospects(
         )
 
 
+async def _resolved_input(
+    row: Mapping[str, object],
+    prospect: ProspectInput,
+    website_resolver: WebsiteResolver | None,
+) -> ProspectInput:
+    if str(row.get("status")) == "discovered":
+        return await _with_website_evidence(prospect, website_resolver)
+    normalized_domain = _optional_str(row.get("normalized_domain"))
+    if not normalized_domain:
+        return prospect
+    payload = dict(prospect.source_payload)
+    payload.setdefault("resolved_website_url", f"https://{normalized_domain}")
+    return _replace_source_payload(prospect, payload)
+
+
 async def _with_website_evidence(
     prospect: ProspectInput,
     website_resolver: WebsiteResolver | None,
@@ -165,8 +182,22 @@ async def _with_website_evidence(
         return prospect
     if classify_website_ownership(prospect) != "owned":
         return prospect
-    evidence = await website_resolver.resolve(prospect.source_website_url)
+    try:
+        evidence = await website_resolver.resolve(prospect.source_website_url)
+    except Exception as error:
+        evidence = {
+            "resolved_website_url": prospect.source_website_url,
+            "website_fetch_failures": 1,
+            "website_error": error.__class__.__name__,
+        }
     payload = merge_website_evidence(prospect.source_payload, evidence)
+    return _replace_source_payload(prospect, payload)
+
+
+def _replace_source_payload(
+    prospect: ProspectInput,
+    payload: Mapping[str, object],
+) -> ProspectInput:
     return ProspectInput(
         id=prospect.id,
         discovery_run_id=prospect.discovery_run_id,

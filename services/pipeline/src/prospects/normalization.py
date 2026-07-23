@@ -39,9 +39,10 @@ APPROVED_LOCALITIES = {
     "redlands",
 }
 GREATER_BRISBANE_POSTCODE_RANGES = (
-    (4000, 4209),
-    (4300, 4349),
-    (4500, 4512),
+    (4000, 4184),
+    (4205, 4208),
+    (4300, 4306),
+    (4500, 4521),
 )
 QUEENSLAND_STATES = {"qld", "queensland"}
 PERMANENTLY_CLOSED_STATUSES = {
@@ -210,6 +211,8 @@ def classify_website_ownership(prospect: ProspectInput) -> WebsiteOwnership:
     if not source_url:
         return "none"
     payload = prospect.source_payload
+    if _string_value(payload, "website_error") in {"unsafe_url", "unsafe_redirect"}:
+        return "none"
     if _int_value(payload.get("website_fetch_failures")) >= 2:
         return "inaccessible"
     final_url = _string_value(payload, "resolved_website_url") or _string_value(

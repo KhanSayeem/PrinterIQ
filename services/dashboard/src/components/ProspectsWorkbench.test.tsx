@@ -94,6 +94,8 @@ describe("ProspectsWorkbench", () => {
             outcomeReason: "no_owned_website",
             sourceWebsiteUrl: "https://facebook.com/northsideplumbing",
             normalizedDomain: "facebook.com",
+            matchedLocationCount: 1,
+            duplicateEvidence: {},
             ruleEvidence: {
               eligibility: { outcome: "eligible" },
               website: {
@@ -122,5 +124,48 @@ describe("ProspectsWorkbench", () => {
     expect(screen.queryByText(/campaign/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/promote/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Instantly/i)).not.toBeInTheDocument();
+  });
+
+  it("shows exact hold eligibility and duplicate evidence", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={{ ...activeRun, status: "review_ready", routeACount: 0, usableCount: 0 }}
+        initialProspects={[
+          {
+            id: "prospect-1",
+            businessName: "Northside Plumbing",
+            route: null,
+            status: "held",
+            websiteOwnership: "owned",
+            outcomeReason: "ambiguous_duplicate",
+            sourceWebsiteUrl: "https://northside.example",
+            normalizedDomain: "northsideplumbing.com.au",
+            matchedLocationCount: 2,
+            duplicateEvidence: { domain: ["place-2"], name_address: ["place-3"] },
+            ruleEvidence: {
+              eligibility: {
+                status: "held",
+                reason: "ambiguous_duplicate",
+                matched_location_count: 2,
+                duplicate_evidence: { domain: ["place-2"], name_address: ["place-3"] },
+              },
+              website: {
+                ownership: "owned",
+                reason: "ambiguous_duplicate",
+                final_url: "https://northsideplumbing.com.au",
+              },
+            },
+          },
+        ]}
+        startAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("held")).toBeInTheDocument();
+    expect(screen.getByText("Matched locations")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("Duplicate evidence")).toBeInTheDocument();
+    expect(screen.getByText(/domain: place-2/i)).toBeInTheDocument();
+    expect(screen.getByText(/name_address: place-3/i)).toBeInTheDocument();
   });
 });

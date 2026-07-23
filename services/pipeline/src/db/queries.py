@@ -736,6 +736,7 @@ async def apply_prospect_normalization_with_assessment(
               route = $11,
               status = $12,
               outcome_reason = $13,
+              source_payload = $14::jsonb,
               updated_at = NOW()
           WHERE tenant_id = $1
             AND discovery_run_id = $2
@@ -755,7 +756,7 @@ async def apply_prospect_normalization_with_assessment(
             forced_route_reason
           )
           SELECT tenant_id, discovery_run_id, id, 'automated',
-                 $14, $15, $16, $17::jsonb, $18
+                 $15, $16, $17, $18::jsonb, $19
           FROM normalized
           ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)
           WHERE assessment_type = 'automated'
@@ -783,6 +784,7 @@ async def apply_prospect_normalization_with_assessment(
         values.get("route"),
         values["status"],
         values["outcome_reason"],
+        json.dumps(dict(cast(Mapping[str, object], values["source_payload"]))),
         values["assessment_version"],
         values["eligible"],
         values.get("computed_route"),

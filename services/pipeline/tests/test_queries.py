@@ -234,6 +234,7 @@ def test_apply_prospect_normalization_with_assessment_is_atomic_and_run_scoped()
             route="A",
             status="assessed",
             outcome_reason="no_owned_website",
+            source_payload={"resolved_website_url": "https://facebook.com/northside"},
             assessment_version="route-a-normalization-v1",
             eligible=True,
             computed_route="A",
@@ -247,12 +248,16 @@ def test_apply_prospect_normalization_with_assessment_is_atomic_and_run_scoped()
         assert "UPDATE business_prospects" in query
         assert "AND status = 'discovered'" in query
         assert "AND lead_id IS NULL" in query
+        assert "source_payload = $14::jsonb" in query
         assert "INSERT INTO prospect_assessments" in query
         assert "ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)" in query
         assert "SELECT normalized.*, assessment.assessment_id" in query
         assert connection.args[0][:3] == (TENANT_ID, RUN_ID, PROSPECT_ID)
         assert json.loads(str(connection.args[0][7])) == {"phone": ["place-2"]}
-        assert json.loads(str(connection.args[0][16])) == {
+        assert json.loads(str(connection.args[0][13])) == {
+            "resolved_website_url": "https://facebook.com/northside"
+        }
+        assert json.loads(str(connection.args[0][17])) == {
             "website": {"ownership": "social"}
         }
 

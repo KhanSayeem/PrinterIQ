@@ -59,7 +59,7 @@ class ProspectWebsiteResolver:
                     "website_body_truncated": fetched.truncated,
                 }
             except UnsafeURL as error:
-                return _failed_evidence(error.url, error.reason)
+                return _failed_evidence(error.url, error.reason, failures=1)
             except (
                 httpx.HTTPError,
                 OSError,
@@ -163,15 +163,22 @@ async def _request_target(
     host = parsed.hostname.casefold()
     if host == "localhost" or host.endswith(".localhost"):
         raise UnsafeURL(url, "unsafe_url")
-    port = parsed.port or _default_port(parsed.scheme)
+    port = _safe_port(parsed)
+    if port is None:
+        raise UnsafeURL(url, "unsafe_url")
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
         if not resolve_dns:
             return _target_for_host(parsed, url, host)
-        resolved_ip = await _safe_resolved_ip(host, port, timeout_seconds=timeout_seconds)
+        resolved_ip = await _safe_resolved_ip(
+            host,
+            port,
+            timeout_seconds=timeout_seconds,
+            unsafe_url=url,
+        )
         if resolved_ip is None:
-            raise UnsafeURL(url, "unsafe_url") from None
+            raise httpx.ConnectError("dns_resolution_failed") from None
         return _target_for_host(parsed, url, str(resolved_ip), tls_hostname=host)
     if _is_unsafe_ip(ip):
         raise UnsafeURL(url, "unsafe_url")
@@ -320,12 +327,23 @@ async def _unsafe_reason(url: str, *, resolve_dns: bool) -> str | None:
     except ValueError:
         if not resolve_dns:
             return None
-        return await _unsafe_dns_reason(host, parsed.port or _default_port(parsed.scheme))
+        port = _safe_port(parsed)
+        if port is None:
+            return "unsafe_url"
+        return await _unsafe_dns_reason(host, port)
     return "unsafe_url" if _is_unsafe_ip(ip) else None
 
 
 async def _unsafe_dns_reason(host: str, port: int) -> str | None:
-    resolved_ip = await _safe_resolved_ip(host, port, timeout_seconds=8.0)
+    try:
+        resolved_ip = await _safe_resolved_ip(
+            host,
+            port,
+            timeout_seconds=8.0,
+            unsafe_url=host,
+        )
+    except UnsafeURL:
+        return "unsafe_url"
     return None if resolved_ip is not None else "unsafe_url"
 
 
@@ -334,6 +352,7 @@ async def _safe_resolved_ip(
     port: int,
     *,
     timeout_seconds: float,
+    unsafe_url: str,
 ) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     try:
         addresses = await asyncio.wait_for(
@@ -348,9 +367,9 @@ async def _safe_resolved_ip(
         try:
             ip = ipaddress.ip_address(raw_ip)
         except ValueError:
-            return None
+            raise UnsafeURL(unsafe_url, "unsafe_url") from None
         if _is_unsafe_ip(ip):
-            return None
+            raise UnsafeURL(unsafe_url, "unsafe_url")
         resolved.append(ip)
     return resolved[0] if resolved else None
 
@@ -365,7 +384,7 @@ def _target_for_host(
     return RequestTarget(
         evidence_url=evidence_url,
         connect_host=connect_host,
-        port=parsed.port or _default_port(parsed.scheme),
+        port=_safe_port(parsed) or _default_port(parsed.scheme),
         use_tls=parsed.scheme == "https",
         tls_server_hostname=tls_hostname if parsed.scheme == "https" else None,
         host_header=_host_header(parsed),
@@ -393,10 +412,17 @@ def _is_unsafe_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return not ip.is_global
 
 
-def _failed_evidence(url: str, error: str) -> dict[str, object]:
+def _safe_port(parsed: ParseResult) -> int | None:
+    try:
+        return parsed.port or _default_port(parsed.scheme)
+    except ValueError:
+        return None
+
+
+def _failed_evidence(url: str, error: str, *, failures: int = 2) -> dict[str, object]:
     return {
         "resolved_website_url": url,
-        "website_fetch_failures": 2,
+        "website_fetch_failures": failures,
         "website_error": error,
     }
 

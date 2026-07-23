@@ -226,6 +226,57 @@ def test_shared_social_hosts_do_not_create_duplicate_holds() -> None:
     asyncio.run(scenario())
 
 
+def test_redirect_resolved_owned_domains_participate_in_duplicate_context() -> None:
+    class Resolver:
+        async def resolve(self, url: str) -> dict[str, object]:
+            return {
+                "resolved_website_url": {
+                    "https://booking-one.example": "https://northsideplumbing.com.au",
+                    "https://booking-two.example": "https://northsideplumbing.com.au/contact",
+                }[url],
+                "website_fetch_failures": 0,
+                "website_title": "Northside Plumbing",
+                "website_text": "Emergency plumber",
+            }
+
+    async def scenario() -> None:
+        store = Store(
+            prospects=[
+                prospect(
+                    id=UUID("30000000-0000-0000-0000-000000000001"),
+                    source_business_id="place-1",
+                    source_website_url="https://booking-one.example",
+                    phone="+61 7 3000 0001",
+                ),
+                prospect(
+                    id=UUID("30000000-0000-0000-0000-000000000002"),
+                    source_business_id="place-2",
+                    source_website_url="https://booking-two.example",
+                    phone="+61 7 3000 0002",
+                ),
+            ]
+        )
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=Queue(),
+            website_resolver=Resolver(),
+        )
+
+        assert [update["status"] for update in store.updates] == ["held", "held"]
+        assert {update["outcome_reason"] for update in store.updates} == {
+            "ambiguous_duplicate"
+        }
+        assert all(
+            update["normalized_domain"] == "northsideplumbing.com.au"
+            for update in store.updates
+        )
+        assert all("domain" in update["duplicate_evidence"] for update in store.updates)
+
+    asyncio.run(scenario())
+
+
 def test_partial_batch_replay_keeps_duplicate_decisions_and_does_not_reenqueue_twice() -> None:
     @dataclass
     class ReplayStore(Store):

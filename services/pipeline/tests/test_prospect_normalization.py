@@ -87,7 +87,42 @@ def test_normalizers_create_stable_replay_identities() -> None:
             ),
         ),
         (
+            prospect(primary_category="Plumbing Training School"),
+            NormalizationDecision(
+                status="rejected",
+                route=None,
+                website_ownership=None,
+                reason="wrong_category",
+            ),
+        ),
+        (
             prospect(locality="Gold Coast", postcode="4217"),
+            NormalizationDecision(
+                status="rejected",
+                route=None,
+                website_ownership=None,
+                reason="outside_region",
+            ),
+        ),
+        (
+            prospect(
+                locality="Upper Coomera",
+                postcode="4209",
+                full_address="Upper Coomera QLD 4209",
+            ),
+            NormalizationDecision(
+                status="rejected",
+                route=None,
+                website_ownership=None,
+                reason="outside_region",
+            ),
+        ),
+        (
+            prospect(
+                locality="Gatton",
+                postcode="4343",
+                full_address="Gatton QLD 4343",
+            ),
             NormalizationDecision(
                 status="rejected",
                 route=None,
@@ -151,6 +186,15 @@ def test_normalizers_create_stable_replay_identities() -> None:
             ),
         ),
         (
+            prospect(source_website_url="https://northside.sedoparking.com"),
+            NormalizationDecision(
+                status="assessed",
+                route="A",
+                website_ownership="placeholder",
+                reason="no_owned_website",
+            ),
+        ),
+        (
             prospect(
                 source_website_url="https://northside.example",
                 source_payload={"website_fetch_failures": 2},
@@ -203,6 +247,30 @@ def test_redirect_destination_is_classified_before_original_domain() -> None:
     )
 
     assert decision.website_ownership == "social"
+    assert decision.route == "A"
+
+
+@pytest.mark.parametrize(
+    ("locality", "postcode"),
+    [
+        ("Brisbane", "4000"),
+        ("Logan", "4114"),
+        ("Ipswich", "4305"),
+        ("Moreton Bay", "4500"),
+        ("Redlands", "4163"),
+    ],
+)
+def test_approved_greater_brisbane_regions_are_accepted(locality: str, postcode: str) -> None:
+    decision = classify_prospect(
+        prospect(
+            locality=locality,
+            postcode=postcode,
+            full_address=f"{locality} QLD {postcode}",
+        ),
+        matched_location_count=1,
+    )
+
+    assert decision.reason == "no_owned_website"
     assert decision.route == "A"
 
 

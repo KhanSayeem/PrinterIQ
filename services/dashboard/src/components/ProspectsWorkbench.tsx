@@ -25,6 +25,8 @@ export type ProspectEvidenceView = {
   outcomeReason: string | null;
   sourceWebsiteUrl: string | null;
   normalizedDomain: string | null;
+  matchedLocationCount: number;
+  duplicateEvidence: unknown;
   ruleEvidence: unknown;
 };
 
@@ -159,6 +161,14 @@ function ProspectEvidenceList({ prospects }: { prospects: ProspectEvidenceView[]
               <dd>{websiteReason(prospect.ruleEvidence) ?? prospect.outcomeReason ?? "No reason"}</dd>
             </div>
             <div>
+              <dt>Matched locations</dt>
+              <dd>{matchedLocationCount(prospect)}</dd>
+            </div>
+            <div>
+              <dt>Duplicate evidence</dt>
+              <dd>{duplicateEvidenceSummary(prospect)}</dd>
+            </div>
+            <div>
               <dt>Evidence</dt>
               <dd>{evidenceSummary(prospect.ruleEvidence)}</dd>
             </div>
@@ -204,6 +214,34 @@ function websiteReason(value: unknown) {
   if (!isRecord(value)) return null;
   const website = isRecord(value.website) ? value.website : {};
   return typeof website.reason === "string" ? website.reason : null;
+}
+
+function matchedLocationCount(prospect: ProspectEvidenceView) {
+  const eligibility = eligibilityEvidence(prospect.ruleEvidence);
+  const count = typeof eligibility.matched_location_count === "number"
+    ? eligibility.matched_location_count
+    : prospect.matchedLocationCount;
+  return String(count);
+}
+
+function duplicateEvidenceSummary(prospect: ProspectEvidenceView) {
+  const eligibility = eligibilityEvidence(prospect.ruleEvidence);
+  const evidence = isRecord(eligibility.duplicate_evidence)
+    ? eligibility.duplicate_evidence
+    : prospect.duplicateEvidence;
+  if (!isRecord(evidence)) return "None";
+  const parts = Object.entries(evidence)
+    .map(([key, value]) => {
+      const values = Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+      return values.length > 0 ? `${key}: ${values.join(", ")}` : null;
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : "None";
+}
+
+function eligibilityEvidence(value: unknown) {
+  if (!isRecord(value)) return {};
+  return isRecord(value.eligibility) ? value.eligibility : {};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
