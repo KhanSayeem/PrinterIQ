@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -574,6 +575,83 @@ def test_refresh_discovery_run_aggregates_is_tenant_scoped() -> None:
         assert "discovery_run_id = $2" in query
         assert "status IN ('normalized', 'assessed', 'contact_enriched', 'review_ready')" in query
         assert connection.args[0] == (TENANT_ID, RUN_ID)
+
+    asyncio.run(scenario())
+
+
+def test_purge_expired_prospect_data_is_tenant_scoped_and_protects_live_leads() -> None:
+    async def scenario() -> None:
+        row = {
+            "source_payloads_cleared": 2,
+            "provider_payloads_cleared": 1,
+            "contacts_deleted": 3,
+            "assessments_deleted": 3,
+            "prospects_deleted": 3,
+            "runs_deleted": 1,
+            "raw_payload_retention_days": 30,
+            "snapshot_retention_days": 90,
+        }
+        connection = RecordingConnection(row=row)
+        now = datetime(2026, 7, 23, 12, 0, tzinfo=UTC)
+
+        result = await ProspectStore(connection).purge_expired_prospect_data(
+            tenant_id=TENANT_ID,
+            now=now,
+            raw_payload_retention_days=30,
+            snapshot_retention_days=90,
+        )
+
+        query = connection.queries[0]
+        assert result == row
+        assert "expired_source_payloads AS" in query
+        assert "expired_provider_payloads AS" in query
+        assert "source_payload = NULL" in query
+        assert "provider_payload = NULL" in query
+        assert "business_prospects.tenant_id = $1" in query
+        assert "prospect_contacts.tenant_id = $1" in query
+        assert "discovery_runs.status = 'completed'" in query
+        assert "business_prospects.lead_id IS NULL" in query
+        assert "'held'" in query
+        assert "'rejected'" in query
+        assert "'failed'" in query
+        assert "review_ready" in query
+        assert connection.args[0] == (TENANT_ID, now, 30, 90)
+
+    asyncio.run(scenario())
+
+
+def test_purge_expired_prospect_data_deletes_children_before_snapshots_and_runs() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection(
+            row={
+                "source_payloads_cleared": 0,
+                "provider_payloads_cleared": 0,
+                "contacts_deleted": 0,
+                "assessments_deleted": 0,
+                "prospects_deleted": 0,
+                "runs_deleted": 0,
+                "raw_payload_retention_days": 30,
+                "snapshot_retention_days": 90,
+            }
+        )
+
+        await ProspectStore(connection).purge_expired_prospect_data(
+            tenant_id=TENANT_ID,
+            now=datetime(2026, 7, 23, 12, 0, tzinfo=UTC),
+            raw_payload_retention_days=30,
+            snapshot_retention_days=90,
+        )
+
+        query = connection.queries[0]
+        assert query.index("deleted_contacts AS") < query.index("deleted_assessments AS")
+        assert query.index("deleted_assessments AS") < query.index("deleted_prospects AS")
+        assert query.index("deleted_prospects AS") < query.index("deleted_runs AS")
+        assert "NOT EXISTS" in query
+        assert "FROM business_prospects" in query
+        assert "website_previews" not in query
+        assert "outreach_sends" not in query
+        assert "DELETE FROM leads" not in query
+        assert "CASCADE" not in query.upper()
 
     asyncio.run(scenario())
 
