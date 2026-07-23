@@ -201,9 +201,13 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
         async def assess_worker(payload: dict[str, object], **deps: object) -> None:
             calls.append(("assess", payload, deps))
 
+        async def enrich_contacts_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("contacts", payload, deps))
+
         prospect_store = object()
         queue = object()
         outscraper_client = object()
+        apollo_client = object()
         website_resolver = object()
         website_auditor = object()
         handlers = build_production_pipeline_handlers(
@@ -215,12 +219,14 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
             claude_client=object(),
             instantly_client=object(),
             outscraper_client=outscraper_client,
+            apollo_client=apollo_client,
             prospect_website_resolver=website_resolver,
             prospect_website_auditor=website_auditor,
             start_discovery_worker=start_worker,
             poll_outscraper_worker=poll_worker,
             normalize_prospects_worker=normalize_worker,
             assess_prospects_worker=assess_worker,
+            enrich_prospect_contacts_worker=enrich_contacts_worker,
             rate_limits={},
         )
         payload = {
@@ -232,6 +238,7 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
         await handlers[JobType.POLL_OUTSCRAPER](payload)
         await handlers[JobType.NORMALIZE_PROSPECTS](payload)
         await handlers[JobType.ASSESS_PROSPECTS](payload)
+        await handlers[JobType.ENRICH_PROSPECT_CONTACTS](payload)
 
         assert calls == [
             (
@@ -268,6 +275,14 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
                     "store": prospect_store,
                     "queue": queue,
                     "website_auditor": website_auditor,
+                },
+            ),
+            (
+                "contacts",
+                payload,
+                {
+                    "store": prospect_store,
+                    "apollo_client": apollo_client,
                 },
             ),
         ]
@@ -673,8 +688,12 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
         async def assess_worker(payload: dict[str, object], **deps: object) -> None:
             calls.append(("assess", deps["store"], deps["queue"], deps["website_auditor"]))
 
+        async def enrich_contacts_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("contacts", deps["store"], deps["apollo_client"], None))
+
         queue = object()
         client = object()
+        apollo_client = object()
         website_auditor = object()
         handlers = build_pooled_production_pipeline_handlers(
             pool=FakePool(),
@@ -683,10 +702,12 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
             claude_client=object(),
             instantly_client=object(),
             outscraper_client=client,
+            apollo_client=apollo_client,
             prospect_website_auditor=website_auditor,
             start_discovery_worker=start_worker,
             poll_outscraper_worker=poll_worker,
             assess_prospects_worker=assess_worker,
+            enrich_prospect_contacts_worker=enrich_contacts_worker,
             rate_limits={},
         )
         payload = {
@@ -697,15 +718,18 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
         await handlers[JobType.START_DISCOVERY](payload)
         await handlers[JobType.POLL_OUTSCRAPER](payload)
         await handlers[JobType.ASSESS_PROSPECTS](payload)
+        await handlers[JobType.ENRICH_PROSPECT_CONTACTS](payload)
 
-        assert [call[0] for call in calls] == ["start", "poll", "assess"]
+        assert [call[0] for call in calls] == ["start", "poll", "assess", "contacts"]
         assert calls[0][1].__class__.__name__ == "ProspectStore"
         assert calls[0][1] is not calls[1][1]
         assert calls[1][1] is not calls[2][1]
-        assert all(call[2] is queue for call in calls)
+        assert calls[2][1] is not calls[3][1]
+        assert all(call[2] is queue for call in calls[:3])
         assert calls[0][3] is client
         assert calls[1][3] is client
         assert calls[2][3] is website_auditor
+        assert calls[3][2] is apollo_client
 
     asyncio.run(scenario())
 

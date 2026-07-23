@@ -12,6 +12,7 @@ import {
   payments,
   businessProspects,
   prospectAssessments,
+  prospectContacts,
   qualifications,
   websitePreviews,
 } from "./schema";
@@ -93,6 +94,12 @@ export type ProspectEvidenceView = {
   totalScore: number | null;
   categoryScores: unknown;
   forcedRouteReason: string | null;
+  contactStatus: string | null;
+  contactPersonName: string | null;
+  contactPersonTitle: string | null;
+  contactEmail: string | null;
+  contactEmailStatus: string | null;
+  contactEvidence: unknown;
 };
 
 export type OperatorConversationInput = LeadIdentity & {
@@ -774,6 +781,12 @@ export function buildListProspectEvidenceForRunQuery(
       totalScore: prospectAssessments.totalScore,
       categoryScores: prospectAssessments.categoryScores,
       forcedRouteReason: prospectAssessments.forcedRouteReason,
+      contactStatus: prospectContacts.status,
+      contactPersonName: prospectContacts.personName,
+      contactPersonTitle: prospectContacts.personTitle,
+      contactEmail: prospectContacts.email,
+      contactEmailStatus: prospectContacts.providerEmailStatus,
+      contactEvidence: prospectContacts.matchEvidence,
     })
     .from(businessProspects)
     .leftJoin(
@@ -788,6 +801,21 @@ export function buildListProspectEvidenceForRunQuery(
           THEN ${WEBSITE_HEALTH_ASSESSMENT_VERSION}
           ELSE ${ROUTE_A_ASSESSMENT_VERSION}
         END`,
+      ),
+    )
+    .leftJoin(
+      prospectContacts,
+      and(
+        eq(prospectContacts.tenantId, identity.tenantId),
+        eq(prospectContacts.prospectId, businessProspects.id),
+        eq(prospectContacts.provider, "apollo"),
+        sql`${prospectContacts.createdAt} = (
+          SELECT MAX(latest_prospect_contacts.created_at)
+          FROM prospect_contacts latest_prospect_contacts
+          WHERE latest_prospect_contacts.tenant_id = ${identity.tenantId}
+            AND latest_prospect_contacts.prospect_id = ${businessProspects.id}
+            AND latest_prospect_contacts.provider = 'apollo'
+        )`,
       ),
     )
     .where(

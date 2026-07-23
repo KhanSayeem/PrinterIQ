@@ -12,6 +12,15 @@ const run = {
   routeACount: 37,
   routeBCount: 41,
   verifiedContactCount: 18,
+  providerUsage: {
+    apollo_contact_match: {
+      route_a_verified_contact_count: 7,
+      route_b_verified_contact_count: 11,
+      route_a_match_rate: 0.1892,
+      route_b_match_rate: 0.2683,
+      cost_reconciliation_required: true,
+    },
+  },
   failureCode: null,
   failureDetail: null,
   createdAt: "2026-07-22T08:00:00.000Z",
@@ -29,6 +38,11 @@ describe("ProspectRunSummary", () => {
     expect(screen.getByText("37")).toBeInTheDocument();
     expect(screen.getByText("41")).toBeInTheDocument();
     expect(screen.getByText("18")).toBeInTheDocument();
+    expect(screen.getByText("7")).toBeInTheDocument();
+    expect(screen.getByText("11")).toBeInTheDocument();
+    expect(screen.getByText("19%")).toBeInTheDocument();
+    expect(screen.getByText("27%")).toBeInTheDocument();
+    expect(screen.getByText("Cost reconciliation required")).toBeInTheDocument();
   });
 
   it("keeps partial counts visible while processing", () => {

@@ -187,6 +187,28 @@ class ProspectStore:
     async def apply_prospect_assessment_result(self, **values: object) -> dict[str, object]:
         return await apply_prospect_assessment_result(self._connection, **values)
 
+    async def get_existing_prospect_contact(
+        self,
+        *,
+        tenant_id: UUID,
+        prospect_id: UUID,
+        provider: str,
+        input_fingerprint: str,
+    ) -> dict[str, object] | None:
+        return await get_existing_prospect_contact(
+            self._connection,
+            tenant_id=tenant_id,
+            prospect_id=prospect_id,
+            provider=provider,
+            input_fingerprint=input_fingerprint,
+        )
+
+    async def is_email_suppressed(self, *, tenant_id: UUID, email: str) -> bool:
+        return await is_email_suppressed(self._connection, tenant_id=tenant_id, email=email)
+
+    async def apply_prospect_contact_result(self, **values: object) -> dict[str, object]:
+        return await apply_prospect_contact_result(self._connection, **values)
+
     async def refresh_discovery_run_aggregates(
         self, tenant_id: UUID, discovery_run_id: UUID
     ) -> dict[str, object]:
@@ -799,6 +821,164 @@ async def apply_prospect_assessment_result(
     return dict(cast(Mapping[str, object], result))
 
 
+async def get_existing_prospect_contact(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    prospect_id: UUID,
+    provider: str,
+    input_fingerprint: str,
+) -> dict[str, object] | None:
+    result = await connection.fetchrow(
+        """
+        SELECT id, tenant_id, prospect_id, provider, input_fingerprint,
+               provider_request_id, provider_organization_id, provider_person_id,
+               person_name, person_title, email, provider_email_status,
+               credits_consumed, status, match_evidence, provider_payload,
+               provider_payload_expires_at, created_at, updated_at
+        FROM prospect_contacts
+        WHERE tenant_id = $1
+          AND prospect_id = $2
+          AND provider = $3
+          AND input_fingerprint = $4
+        """,
+        tenant_id,
+        prospect_id,
+        provider,
+        input_fingerprint,
+    )
+    if result is None:
+        return None
+    return dict(cast(Mapping[str, object], result))
+
+
+async def is_email_suppressed(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    email: str,
+) -> bool:
+    result = await connection.fetchval(
+        """
+        SELECT EXISTS (
+          SELECT 1
+          FROM leads
+          WHERE leads.tenant_id = $1
+            AND LOWER(leads.email) = LOWER($2)
+            AND (
+              leads.is_deleted = FALSE
+              OR leads.status = 'archived'
+            )
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM outreach_sends
+          INNER JOIN leads
+            ON leads.tenant_id = outreach_sends.tenant_id
+           AND leads.id = outreach_sends.lead_id
+          WHERE outreach_sends.tenant_id = $1
+            AND LOWER(leads.email) = LOWER($2)
+            AND (
+              outreach_sends.bounced = TRUE
+              OR outreach_sends.unsubscribed = TRUE
+              OR leads.status = 'archived'
+            )
+        )
+        """,
+        tenant_id,
+        email,
+    )
+    return bool(result)
+
+
+async def apply_prospect_contact_result(
+    connection: DatabaseConnection,
+    **values: object,
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        WITH target AS (
+          SELECT id, tenant_id, discovery_run_id
+          FROM business_prospects
+          WHERE tenant_id = $1
+            AND discovery_run_id = $2
+            AND id = $3
+            AND route IN ('A', 'B')
+            AND status = 'assessed'
+            AND lead_id IS NULL
+        ),
+        contact AS (
+          INSERT INTO prospect_contacts (
+            tenant_id, prospect_id, provider, input_fingerprint,
+            provider_request_id, provider_organization_id, provider_person_id,
+            person_name, person_title, email, provider_email_status,
+            credits_consumed, status, match_evidence, provider_payload,
+            provider_payload_expires_at
+          )
+          SELECT tenant_id, id, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                 $13, $14, $15::jsonb, $16::jsonb,
+                 CASE WHEN $16::jsonb IS NULL THEN NULL ELSE NOW() + INTERVAL '30 days' END
+          FROM target
+          ON CONFLICT (tenant_id, prospect_id, provider, input_fingerprint)
+          DO UPDATE SET
+            provider_request_id = EXCLUDED.provider_request_id,
+            provider_organization_id = EXCLUDED.provider_organization_id,
+            provider_person_id = EXCLUDED.provider_person_id,
+            person_name = EXCLUDED.person_name,
+            person_title = EXCLUDED.person_title,
+            email = EXCLUDED.email,
+            provider_email_status = EXCLUDED.provider_email_status,
+            credits_consumed = EXCLUDED.credits_consumed,
+            status = EXCLUDED.status,
+            match_evidence = EXCLUDED.match_evidence,
+            provider_payload = EXCLUDED.provider_payload,
+            provider_payload_expires_at = EXCLUDED.provider_payload_expires_at,
+            updated_at = NOW()
+          RETURNING id, tenant_id, prospect_id, provider, input_fingerprint,
+                    provider_request_id, provider_organization_id,
+                    provider_person_id, person_name, person_title, email,
+                    provider_email_status, credits_consumed, status,
+                    match_evidence, provider_payload, provider_payload_expires_at,
+                    created_at, updated_at
+        ),
+        updated_prospect AS (
+          UPDATE business_prospects
+          SET status = 'contact_enriched',
+              updated_at = NOW()
+          FROM target
+          WHERE business_prospects.tenant_id = target.tenant_id
+            AND business_prospects.discovery_run_id = target.discovery_run_id
+            AND business_prospects.id = target.id
+          RETURNING business_prospects.id
+        )
+        SELECT contact.*
+        FROM contact
+        CROSS JOIN updated_prospect
+        """,
+        values["tenant_id"],
+        values["discovery_run_id"],
+        values["prospect_id"],
+        values["provider"],
+        values["input_fingerprint"],
+        values.get("provider_request_id"),
+        values.get("provider_organization_id"),
+        values.get("provider_person_id"),
+        values.get("person_name"),
+        values.get("person_title"),
+        values.get("email"),
+        values.get("provider_email_status"),
+        values.get("credits_consumed"),
+        values["status"],
+        json.dumps(dict(cast(Mapping[str, object], values["match_evidence"]))),
+        None
+        if values.get("provider_payload") is None
+        else json.dumps(dict(cast(Mapping[str, object], values["provider_payload"]))),
+    )
+    if result is None:
+        raise LookupError("Prospect contact target not found for tenant/run")
+    return dict(cast(Mapping[str, object], result))
+
+
 async def apply_prospect_normalization_with_assessment(
     connection: DatabaseConnection,
     **values: object,
@@ -906,6 +1086,21 @@ async def refresh_discovery_run_aggregates(
           WHERE prospect_contacts.tenant_id = $1
             AND business_prospects.discovery_run_id = $2
             AND prospect_contacts.status = 'verified'
+        ),
+        verified_by_route AS (
+          SELECT COUNT(DISTINCT prospect_contacts.prospect_id) FILTER (
+                   WHERE business_prospects.route = 'A'
+                 )::integer AS route_a_verified_contact_count,
+                 COUNT(DISTINCT prospect_contacts.prospect_id) FILTER (
+                   WHERE business_prospects.route = 'B'
+                 )::integer AS route_b_verified_contact_count
+          FROM prospect_contacts
+          INNER JOIN business_prospects
+            ON business_prospects.tenant_id = prospect_contacts.tenant_id
+           AND business_prospects.id = prospect_contacts.prospect_id
+          WHERE prospect_contacts.tenant_id = $1
+            AND business_prospects.discovery_run_id = $2
+            AND prospect_contacts.status = 'verified'
         )
         UPDATE discovery_runs
         SET discovered_count = prospect_counts.discovered_count,
@@ -913,8 +1108,39 @@ async def refresh_discovery_run_aggregates(
             route_a_count = prospect_counts.route_a_count,
             route_b_count = prospect_counts.route_b_count,
             verified_contact_count = verified_contacts.verified_contact_count,
+            provider_usage = jsonb_set(
+              provider_usage,
+              '{apollo_contact_match}',
+              jsonb_build_object(
+                'route_a_verified_contact_count',
+                verified_by_route.route_a_verified_contact_count,
+                'route_b_verified_contact_count',
+                verified_by_route.route_b_verified_contact_count,
+                'route_a_match_rate',
+                CASE
+                  WHEN prospect_counts.route_a_count = 0 THEN NULL
+                  ELSE ROUND(
+                    verified_by_route.route_a_verified_contact_count::numeric
+                    / prospect_counts.route_a_count,
+                    4
+                  )
+                END,
+                'route_b_match_rate',
+                CASE
+                  WHEN prospect_counts.route_b_count = 0 THEN NULL
+                  ELSE ROUND(
+                    verified_by_route.route_b_verified_contact_count::numeric
+                    / prospect_counts.route_b_count,
+                    4
+                  )
+                END,
+                'cost_reconciliation_required',
+                TRUE
+              ),
+              TRUE
+            ),
             updated_at = NOW()
-        FROM prospect_counts, verified_contacts
+        FROM prospect_counts, verified_contacts, verified_by_route
         WHERE discovery_runs.tenant_id = $1
           AND discovery_runs.id = $2
         RETURNING discovery_runs.id, discovery_runs.tenant_id,

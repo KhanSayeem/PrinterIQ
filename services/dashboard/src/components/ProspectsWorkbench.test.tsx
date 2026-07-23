@@ -134,6 +134,81 @@ describe("ProspectsWorkbench", () => {
     expect(screen.queryByText(/Instantly/i)).not.toBeInTheDocument();
   });
 
+  it("shows Apollo verified contact evidence without provider payloads", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={{ ...activeRun, status: "processing", verifiedContactCount: 1 }}
+        initialProspects={[
+          {
+            id: "prospect-1",
+            businessName: "Northside Plumbing",
+            route: "B",
+            status: "contact_enriched",
+            websiteOwnership: "owned",
+            outcomeReason: null,
+            sourceWebsiteUrl: "https://northside.example",
+            normalizedDomain: "northside.example",
+            matchedLocationCount: 1,
+            duplicateEvidence: {},
+            ruleEvidence: {},
+            totalScore: 58,
+            categoryScores: {},
+            forcedRouteReason: null,
+            contactStatus: "verified",
+            contactPersonName: "Alex Owner",
+            contactPersonTitle: "Owner",
+            contactEmail: "alex@northside.example",
+            contactEmailStatus: "verified",
+            contactEvidence: {
+              strategy: "apollo-owner-verified-v1",
+              organization_match: "single",
+              person_seniority: "owner",
+              provider_payload: { secret: "must not render" },
+            },
+          },
+        ]}
+        startAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/Verified - Alex Owner - Owner - alex@northside.example/i)).toBeInTheDocument();
+    expect(screen.getByText(/apollo-owner-verified-v1/i)).toBeInTheDocument();
+    expect(screen.getByText(/Seniority: owner/i)).toBeInTheDocument();
+    expect(screen.queryByText(/must not render/i)).not.toBeInTheDocument();
+  });
+
+  it("shows actionable contact configuration failures", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={activeRun}
+        initialProspects={[
+          {
+            id: "prospect-1",
+            businessName: "Northside Plumbing",
+            route: "A",
+            status: "contact_enriched",
+            websiteOwnership: "none",
+            outcomeReason: "no_owned_website",
+            sourceWebsiteUrl: null,
+            normalizedDomain: null,
+            matchedLocationCount: 1,
+            duplicateEvidence: {},
+            ruleEvidence: {},
+            contactStatus: "failed",
+            contactEvidence: {
+              strategy: "apollo-owner-verified-v1",
+              failure_code: "apollo_master_key_required",
+            },
+          },
+        ]}
+        startAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText(/Failed - apollo_master_key_required/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Failure: apollo_master_key_required/i)).toBeInTheDocument();
+  });
+
   it("renders visible Route A evidence from the persisted provider social fixture", () => {
     render(
       <ProspectsWorkbench
