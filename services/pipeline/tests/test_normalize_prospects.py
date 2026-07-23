@@ -3,9 +3,18 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from decimal import Decimal
+from math import ceil
 from uuid import UUID
 
-from workers.normalize_prospects import normalize_prospects
+from clients.prospect_website_resolver import (
+    DEFAULT_RETRY_DELAY_SECONDS,
+    DEFAULT_TIMEOUT_SECONDS,
+)
+from workers.discover_prospects import DISCOVERY_TOTAL_LIMIT
+from workers.normalize_prospects import (
+    MAX_WEBSITE_RESOLUTION_CONCURRENCY,
+    normalize_prospects,
+)
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 RUN_ID = UUID("20000000-0000-0000-0000-000000000001")
@@ -275,6 +284,122 @@ def test_redirect_resolved_owned_domains_participate_in_duplicate_context() -> N
         assert all("domain" in update["duplicate_evidence"] for update in store.updates)
 
     asyncio.run(scenario())
+
+
+def test_name_address_only_duplicates_are_held_for_review() -> None:
+    async def scenario() -> None:
+        rows = [
+            prospect(
+                id=UUID("30000000-0000-0000-0000-000000000001"),
+                source_business_id="place-1",
+                phone=None,
+                source_website_url=None,
+                business_name="Northside Plumbing Pty Ltd",
+                full_address="100 Creek Street, Brisbane QLD 4000",
+            ),
+            prospect(
+                id=UUID("30000000-0000-0000-0000-000000000002"),
+                source_business_id="place-2",
+                phone=None,
+                source_website_url=None,
+                business_name="Northside Plumbing Pty. Ltd.",
+                full_address="100 Creek Street, Brisbane QLD 4000",
+            ),
+        ]
+        store = Store(prospects=rows)
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=Queue(),
+        )
+
+        assert [update["status"] for update in store.updates] == ["held", "held"]
+        assert all(update["outcome_reason"] == "ambiguous_duplicate" for update in store.updates)
+        assert all("name_address" in update["duplicate_evidence"] for update in store.updates)
+
+    asyncio.run(scenario())
+
+
+def test_unexpected_resolver_exception_becomes_inaccessible_route_a_evidence() -> None:
+    class BrokenResolver:
+        async def resolve(self, url: str) -> dict[str, object]:
+            assert url == "https://northside.example"
+            raise RuntimeError("unexpected parser failure")
+
+    async def scenario() -> None:
+        store = Store(prospects=[prospect(source_website_url="https://northside.example")])
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=Queue(),
+            website_resolver=BrokenResolver(),
+        )
+
+        assert store.updates[0]["status"] == "assessed"
+        assert store.updates[0]["route"] == "A"
+        assert store.updates[0]["website_ownership"] == "inaccessible"
+        assert store.updates[0]["source_payload"]["website_fetch_failures"] == 2
+        assert store.assessments[0]["rule_evidence"]["website"]["ownership"] == "inaccessible"
+
+    asyncio.run(scenario())
+
+
+def test_website_resolution_is_concurrent_before_duplicate_context() -> None:
+    class ConcurrentResolver:
+        def __init__(self) -> None:
+            self.active = 0
+            self.max_active = 0
+
+        async def resolve(self, url: str) -> dict[str, object]:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return {
+                "resolved_website_url": url,
+                "website_fetch_failures": 0,
+                "website_title": "Owned website",
+                "website_text": "Emergency plumber",
+            }
+
+    async def scenario() -> None:
+        resolver = ConcurrentResolver()
+        store = Store(
+            prospects=[
+                prospect(
+                    id=UUID(f"30000000-0000-0000-0000-{index:012d}"),
+                    source_business_id=f"place-{index}",
+                    phone=f"+61 7 3000 {index:04d}",
+                    source_website_url=f"https://owned-{index}.example",
+                )
+                for index in range(30)
+            ]
+        )
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=Queue(),
+            website_resolver=resolver,
+        )
+
+        assert resolver.max_active > 1
+        assert len(store.updates) == 30
+
+    asyncio.run(scenario())
+
+
+def test_resolution_concurrency_keeps_full_batch_under_stale_lease_budget() -> None:
+    stale_lease_seconds = 10 * 60
+    worst_case_attempt_window = (DEFAULT_TIMEOUT_SECONDS * 2) + DEFAULT_RETRY_DELAY_SECONDS
+    worst_case_full_batch_seconds = (
+        ceil(DISCOVERY_TOTAL_LIMIT / MAX_WEBSITE_RESOLUTION_CONCURRENCY)
+        * worst_case_attempt_window
+    )
+
+    assert worst_case_full_batch_seconds < stale_lease_seconds
 
 
 def test_partial_batch_replay_keeps_duplicate_decisions_and_does_not_reenqueue_twice() -> None:

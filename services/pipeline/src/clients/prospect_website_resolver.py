@@ -13,6 +13,8 @@ import httpx
 
 _MAX_REDIRECTS = 5
 _DEFAULT_MAX_BODY_BYTES = 64 * 1024
+DEFAULT_TIMEOUT_SECONDS = 8.0
+DEFAULT_RETRY_DELAY_SECONDS = 1.0
 
 
 class ProspectWebsiteResolver:
@@ -20,14 +22,16 @@ class ProspectWebsiteResolver:
         self,
         *,
         http_client: httpx.AsyncClient | None = None,
-        timeout_seconds: float = 8.0,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES,
         resolve_dns: bool = True,
+        retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
     ) -> None:
         self._http_client = http_client
         self._timeout_seconds = timeout_seconds
         self._max_body_bytes = max_body_bytes
         self._resolve_dns = resolve_dns
+        self._retry_delay_seconds = retry_delay_seconds
 
     async def resolve(self, url: str) -> dict[str, object]:
         unsafe = None if self._resolve_dns else await _unsafe_reason(url, resolve_dns=False)
@@ -47,7 +51,7 @@ class ProspectWebsiteResolver:
     ) -> dict[str, object]:
         last_error: str | None = None
         final_url = url
-        for _ in range(2):
+        for attempt in range(2):
             try:
                 fetched = await self._fetch_with_redirects(http_client, url)
                 return {
@@ -68,6 +72,8 @@ class ProspectWebsiteResolver:
                 asyncio.LimitOverrunError,
             ) as error:
                 last_error = error.__class__.__name__
+                if attempt == 0 and self._retry_delay_seconds > 0:
+                    await asyncio.sleep(self._retry_delay_seconds)
         return _failed_evidence(final_url, last_error or "HTTPError")
 
     async def _fetch_with_redirects(

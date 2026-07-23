@@ -280,9 +280,10 @@ def test_resolver_body_read_uses_absolute_deadline(
             fake_open_connection,
         )
 
-        evidence = await ProspectWebsiteResolver(timeout_seconds=0.01).resolve(
-            "https://slow.example/path"
-        )
+        evidence = await ProspectWebsiteResolver(
+            timeout_seconds=0.01,
+            retry_delay_seconds=0,
+        ).resolve("https://slow.example/path")
 
         assert evidence["resolved_website_url"] == "https://slow.example/path"
         assert evidence["website_fetch_failures"] == 2
@@ -316,9 +317,10 @@ def test_resolver_dns_lookup_uses_resolver_timeout(
             fake_open_connection,
         )
 
-        evidence = await ProspectWebsiteResolver(timeout_seconds=0.01).resolve(
-            "https://slow-dns.example/path"
-        )
+        evidence = await ProspectWebsiteResolver(
+            timeout_seconds=0.01,
+            retry_delay_seconds=0,
+        ).resolve("https://slow-dns.example/path")
 
         assert connections == []
         assert dns_attempts == 2
@@ -388,6 +390,7 @@ def test_resolver_requires_two_failed_fetches_before_inaccessible_evidence() -> 
             evidence = await ProspectWebsiteResolver(
                 http_client=client,
                 resolve_dns=False,
+                retry_delay_seconds=0,
             ).resolve(
                 "https://offline.example"
             )
@@ -416,6 +419,7 @@ def test_resolver_recovers_when_first_fetch_fails_and_second_succeeds() -> None:
             evidence = await ProspectWebsiteResolver(
                 http_client=client,
                 resolve_dns=False,
+                retry_delay_seconds=0,
             ).resolve(
                 "https://northside.example"
             )
@@ -424,5 +428,29 @@ def test_resolver_recovers_when_first_fetch_fails_and_second_succeeds() -> None:
         assert evidence["resolved_website_url"] == "https://northside.example"
         assert evidence["website_fetch_failures"] == 0
         assert evidence["website_title"] == "Recovered"
+
+    asyncio.run(scenario())
+
+
+def test_resolver_waits_between_retry_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("network unavailable", request=request)
+
+        monkeypatch.setattr(prospect_website_resolver.asyncio, "sleep", fake_sleep)
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            await ProspectWebsiteResolver(
+                http_client=client,
+                resolve_dns=False,
+                retry_delay_seconds=3,
+            ).resolve("https://offline.example")
+
+        assert sleeps == [3]
 
     asyncio.run(scenario())

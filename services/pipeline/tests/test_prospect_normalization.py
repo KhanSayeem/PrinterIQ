@@ -96,6 +96,15 @@ def test_normalizers_create_stable_replay_identities() -> None:
             ),
         ),
         (
+            prospect(primary_category="Plumbing Directory"),
+            NormalizationDecision(
+                status="rejected",
+                route=None,
+                website_ownership=None,
+                reason="wrong_category",
+            ),
+        ),
+        (
             prospect(locality="Gold Coast", postcode="4217"),
             NormalizationDecision(
                 status="rejected",
@@ -109,6 +118,19 @@ def test_normalizers_create_stable_replay_identities() -> None:
                 locality="Upper Coomera",
                 postcode="4209",
                 full_address="Upper Coomera QLD 4209",
+            ),
+            NormalizationDecision(
+                status="rejected",
+                route=None,
+                website_ownership=None,
+                reason="outside_region",
+            ),
+        ),
+        (
+            prospect(
+                locality="Ormeau",
+                postcode="4208",
+                full_address="Ormeau QLD 4208",
             ),
             NormalizationDecision(
                 status="rejected",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from prospects.normalization import (
 )
 
 ASSESSMENT_VERSION = "route-a-normalization-v1"
+MAX_WEBSITE_RESOLUTION_CONCURRENCY = 25
 
 
 class NormalizeProspectsError(RuntimeError):
@@ -99,9 +101,10 @@ async def normalize_prospects(
         tenant_id=tenant_id,
         discovery_run_id=run_id,
     )
-    prospect_rows = [
-        (row, await _resolved_input(row, _to_input(row), website_resolver)) for row in rows
-    ]
+    prospect_rows = await _resolved_inputs(
+        [(row, _to_input(row)) for row in rows],
+        website_resolver,
+    )
     prospects = [prospect for _, prospect in prospect_rows]
     duplicate_context = _duplicate_context(prospects)
     processed_any = False
@@ -159,6 +162,24 @@ async def normalize_prospects(
         )
 
 
+async def _resolved_inputs(
+    prospect_rows: list[tuple[Mapping[str, object], ProspectInput]],
+    website_resolver: WebsiteResolver | None,
+) -> list[tuple[Mapping[str, object], ProspectInput]]:
+    semaphore = asyncio.Semaphore(MAX_WEBSITE_RESOLUTION_CONCURRENCY)
+
+    async def resolve_one(
+        row: Mapping[str, object],
+        prospect: ProspectInput,
+    ) -> tuple[Mapping[str, object], ProspectInput]:
+        async with semaphore:
+            return row, await _resolved_input(row, prospect, website_resolver)
+
+    return await asyncio.gather(
+        *(resolve_one(row, prospect) for row, prospect in prospect_rows)
+    )
+
+
 async def _resolved_input(
     row: Mapping[str, object],
     prospect: ProspectInput,
@@ -187,8 +208,8 @@ async def _with_website_evidence(
     except Exception as error:
         evidence = {
             "resolved_website_url": prospect.source_website_url,
-            "website_fetch_failures": 1,
-            "website_error": error.__class__.__name__,
+            "website_fetch_failures": 2,
+            "website_error": f"resolver_exception:{error.__class__.__name__}",
         }
     payload = merge_website_evidence(prospect.source_payload, evidence)
     return _replace_source_payload(prospect, payload)
