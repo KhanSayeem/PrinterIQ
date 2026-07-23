@@ -88,6 +88,81 @@ redis-cli
 > LLEN bull:replies:wait     # jobs waiting in replies queue
 ```
 
+## Prospect shadow discovery operations
+
+Use this section only for the Outscraper/Apollo shadow pilot. Shadow prospect
+jobs stop at `/prospects` review and export; they must not create leads, website
+previews, outreach sends, or Instantly activity.
+
+### Prerequisites
+
+- [ ] Confirm database migrations through `0008_create_prospect_staging.sql` are applied.
+- [ ] Confirm Redis is reachable and the `pipeline` PM2 process is online.
+- [ ] Confirm `TENANT_ID` is configured on the server for the intended tenant.
+- [ ] Confirm `OUTSCRAPER_API_KEY` is configured, and confirm the expected provider credit limit before starting.
+- [ ] Confirm Apollo has master-key capability if contact resolution will be run; missing capability is recorded as failed contact evidence.
+- [ ] Confirm no live outreach campaign is being activated as part of this shadow run.
+
+### Create Exactly One Run
+
+- [ ] Open `/prospects` as an authenticated operator for the configured tenant.
+- [ ] Start one Greater Brisbane plumbing shadow run only.
+- [ ] Do not start a second run while the first run has status `created`, `submitted`, `polling`, `persisted`, `processing`, or `review_ready`.
+- [ ] Do not edit the provider query set in the browser; the server owns the approved categories, localities, and limits.
+
+### Observe The Queue
+
+Run from the VPS:
+
+```bash
+cd /root/printeriq
+pm2 logs pipeline --lines 100
+redis-cli LLEN bull:pipeline:wait
+```
+
+Expected progression:
+
+```text
+start_discovery -> poll_outscraper -> normalize_prospects -> assess_prospects -> enrich_prospect_contacts -> prepare_shadow_review
+```
+
+Safe outcomes are `review_ready`, `failed` with actionable provider evidence, or
+an operator-aborted run that remains available for investigation. Do not delete
+or rewrite snapshots to force a run through review.
+
+### Safe Retries And Abort Behavior
+
+- [ ] Retry queue jobs through normal queue redelivery only; repeated delivery is expected to be idempotent.
+- [ ] For an uncertain Outscraper submission, reconcile the provider request ID before retrying so the run does not spend twice.
+- [ ] For provider transport failures, let bounded queue retries finish before manual intervention.
+- [ ] To abort, stop creating new work for the run and leave persisted snapshots/assessments intact for review; mark a run failed only with an operator note that explains the provider or configuration cause.
+- [ ] Never run cleanup against a run that is still `created`, `submitted`, `polling`, `persisted`, `processing`, or `review_ready`.
+
+### Review, Export, And Gates
+
+- [ ] Open `/prospects` and verify the run is `review_ready`.
+- [ ] Review Route A, Route B, and healthy/rejected validation samples.
+- [ ] Confirm metrics show usable yield, route yield, verified email match by route, failure rate, precision, provider usage, and any cost reconciliation gap.
+- [ ] Export the run from `/api/prospects/export?runId=<discovery_run_id>` after review evidence is complete.
+- [ ] Treat incomplete cost reconciliation, insufficient sample, unresolved provider failures, or missing compliance approval as a no-go.
+- [ ] Live outreach requires a separate compliance review and an explicit activation design. This runbook does not authorize promotion, preview generation, outreach scheduling, or Instantly sending from shadow prospects.
+
+### Run Retention Cleanup
+
+Retention cleanup is tenant-scoped and must be enqueued from server
+configuration, not from an arbitrary browser tenant parameter:
+
+```bash
+cd /root/printeriq/services/pipeline
+TENANT_ID=<configured_tenant_uuid> python -m src.workers.purge_prospect_data --enqueue
+```
+
+The cleanup worker clears expired raw Outscraper/Apollo payload JSON after the
+configured raw-payload window, then deletes eligible child contacts and
+assessments before deleting non-promoted prospect snapshots after the configured
+snapshot window. It deletes a completed discovery run only after no retained
+snapshots remain. It does not cascade into existing leads.
+
 ## Pre-launch website preview campaign QA
 
 Complete this checklist before turning on the website preview campaign in Instantly.

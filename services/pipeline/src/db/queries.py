@@ -243,6 +243,22 @@ class ProspectStore:
             discovery_run_id=discovery_run_id,
         )
 
+    async def purge_expired_prospect_data(
+        self,
+        *,
+        tenant_id: UUID,
+        now: datetime,
+        raw_payload_retention_days: int,
+        snapshot_retention_days: int,
+    ) -> dict[str, object]:
+        return await purge_expired_prospect_data(
+            self._connection,
+            tenant_id=tenant_id,
+            now=now,
+            raw_payload_retention_days=raw_payload_retention_days,
+            snapshot_retention_days=snapshot_retention_days,
+        )
+
 
 @dataclass(frozen=True)
 class LeadInsert:
@@ -1269,6 +1285,113 @@ async def refresh_discovery_run_aggregates(
         raise LookupError(
             f"Discovery run {discovery_run_id} not found for tenant {tenant_id}"
         )
+    return dict(cast(Mapping[str, object], result))
+
+
+async def purge_expired_prospect_data(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    now: datetime,
+    raw_payload_retention_days: int,
+    snapshot_retention_days: int,
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        WITH expired_source_payloads AS (
+          UPDATE business_prospects
+          SET source_payload = NULL,
+              source_payload_expires_at = NULL,
+              updated_at = NOW()
+          WHERE tenant_id = $1
+            AND source_payload IS NOT NULL
+            AND source_payload_expires_at IS NOT NULL
+            AND source_payload_expires_at <= $2
+          RETURNING id
+        ),
+        expired_provider_payloads AS (
+          UPDATE prospect_contacts
+          SET provider_payload = NULL,
+              provider_payload_expires_at = NULL,
+              updated_at = NOW()
+          WHERE tenant_id = $1
+            AND provider_payload IS NOT NULL
+            AND provider_payload_expires_at IS NOT NULL
+            AND provider_payload_expires_at <= $2
+          RETURNING id
+        ),
+        deletable_prospects AS (
+          SELECT business_prospects.id, business_prospects.discovery_run_id
+          FROM business_prospects
+          INNER JOIN discovery_runs
+            ON discovery_runs.tenant_id = business_prospects.tenant_id
+           AND discovery_runs.id = business_prospects.discovery_run_id
+          WHERE business_prospects.tenant_id = $1
+            AND discovery_runs.status = 'completed'
+            AND business_prospects.lead_id IS NULL
+            AND business_prospects.created_at <= $2 - ($4::text || ' days')::interval
+            AND business_prospects.status IN (
+              'normalized', 'assessed', 'contact_enriched', 'review_ready',
+              'held', 'rejected', 'failed'
+            )
+        ),
+        deleted_contacts AS (
+          DELETE FROM prospect_contacts
+          USING deletable_prospects
+          WHERE prospect_contacts.tenant_id = $1
+            AND prospect_contacts.prospect_id = deletable_prospects.id
+          RETURNING prospect_contacts.id
+        ),
+        deleted_assessments AS (
+          DELETE FROM prospect_assessments
+          USING deletable_prospects
+          WHERE prospect_assessments.tenant_id = $1
+            AND prospect_assessments.discovery_run_id =
+                deletable_prospects.discovery_run_id
+            AND prospect_assessments.prospect_id = deletable_prospects.id
+          RETURNING prospect_assessments.id
+        ),
+        deleted_prospects AS (
+          DELETE FROM business_prospects
+          USING deletable_prospects
+          WHERE business_prospects.tenant_id = $1
+            AND business_prospects.discovery_run_id =
+                deletable_prospects.discovery_run_id
+            AND business_prospects.id = deletable_prospects.id
+          RETURNING business_prospects.id
+        ),
+        deleted_runs AS (
+          DELETE FROM discovery_runs
+          WHERE discovery_runs.tenant_id = $1
+            AND discovery_runs.status = 'completed'
+            AND discovery_runs.created_at <= $2 - ($4::text || ' days')::interval
+            AND NOT EXISTS (
+              SELECT 1
+              FROM business_prospects
+              WHERE business_prospects.tenant_id = discovery_runs.tenant_id
+                AND business_prospects.discovery_run_id = discovery_runs.id
+            )
+          RETURNING discovery_runs.id
+        )
+        SELECT
+          (SELECT COUNT(*)::integer FROM expired_source_payloads)
+            AS source_payloads_cleared,
+          (SELECT COUNT(*)::integer FROM expired_provider_payloads)
+            AS provider_payloads_cleared,
+          (SELECT COUNT(*)::integer FROM deleted_contacts) AS contacts_deleted,
+          (SELECT COUNT(*)::integer FROM deleted_assessments) AS assessments_deleted,
+          (SELECT COUNT(*)::integer FROM deleted_prospects) AS prospects_deleted,
+          (SELECT COUNT(*)::integer FROM deleted_runs) AS runs_deleted,
+          $3::integer AS raw_payload_retention_days,
+          $4::integer AS snapshot_retention_days
+        """,
+        tenant_id,
+        now,
+        raw_payload_retention_days,
+        snapshot_retention_days,
+    )
+    if result is None:
+        raise LookupError("Prospect retention cleanup did not return counts")
     return dict(cast(Mapping[str, object], result))
 
 

@@ -207,6 +207,9 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
         async def prepare_review_worker(payload: dict[str, object], **deps: object) -> None:
             calls.append(("review", payload, deps))
 
+        async def purge_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("purge", payload, deps))
+
         prospect_store = object()
         queue = object()
         outscraper_client = object()
@@ -231,6 +234,7 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
             assess_prospects_worker=assess_worker,
             enrich_prospect_contacts_worker=enrich_contacts_worker,
             prepare_shadow_review_worker=prepare_review_worker,
+            purge_prospect_data_worker=purge_worker,
             rate_limits={},
         )
         payload = {
@@ -244,6 +248,7 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
         await handlers[JobType.ASSESS_PROSPECTS](payload)
         await handlers[JobType.ENRICH_PROSPECT_CONTACTS](payload)
         await handlers[JobType.PREPARE_SHADOW_REVIEW](payload)
+        await handlers[JobType.PURGE_PROSPECT_DATA](payload)
 
         assert calls == [
             (
@@ -293,6 +298,13 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
             ),
             (
                 "review",
+                payload,
+                {
+                    "store": prospect_store,
+                },
+            ),
+            (
+                "purge",
                 payload,
                 {
                     "store": prospect_store,
@@ -707,6 +719,9 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
         async def prepare_review_worker(payload: dict[str, object], **deps: object) -> None:
             calls.append(("review", deps["store"], None, None))
 
+        async def purge_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("purge", deps["store"], None, None))
+
         queue = object()
         client = object()
         apollo_client = object()
@@ -725,6 +740,7 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
             assess_prospects_worker=assess_worker,
             enrich_prospect_contacts_worker=enrich_contacts_worker,
             prepare_shadow_review_worker=prepare_review_worker,
+            purge_prospect_data_worker=purge_worker,
             rate_limits={},
         )
         payload = {
@@ -737,13 +753,22 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
         await handlers[JobType.ASSESS_PROSPECTS](payload)
         await handlers[JobType.ENRICH_PROSPECT_CONTACTS](payload)
         await handlers[JobType.PREPARE_SHADOW_REVIEW](payload)
+        await handlers[JobType.PURGE_PROSPECT_DATA](payload)
 
-        assert [call[0] for call in calls] == ["start", "poll", "assess", "contacts", "review"]
+        assert [call[0] for call in calls] == [
+            "start",
+            "poll",
+            "assess",
+            "contacts",
+            "review",
+            "purge",
+        ]
         assert calls[0][1].__class__.__name__ == "ProspectStore"
         assert calls[0][1] is not calls[1][1]
         assert calls[1][1] is not calls[2][1]
         assert calls[2][1] is not calls[3][1]
         assert calls[3][1] is not calls[4][1]
+        assert calls[4][1] is not calls[5][1]
         assert all(call[2] is queue for call in calls[:4])
         assert calls[0][3] is client
         assert calls[1][3] is client

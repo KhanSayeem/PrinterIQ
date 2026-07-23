@@ -51,6 +51,7 @@ from workers.generate_preview import generate_preview
 from workers.ingest import ingest_csv_file
 from workers.normalize_prospects import normalize_prospects
 from workers.prepare_shadow_review import prepare_shadow_review
+from workers.purge_prospect_data import purge_prospect_data
 from workers.qualify import qualify_lead
 from workers.schedule_outreach import SendWindowNotReachedError, schedule_outreach
 
@@ -197,6 +198,7 @@ def build_production_pipeline_handlers(
     assess_prospects_worker: FlexibleWorker | None = None,
     enrich_prospect_contacts_worker: FlexibleWorker | None = None,
     prepare_shadow_review_worker: FlexibleWorker | None = None,
+    purge_prospect_data_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
@@ -221,6 +223,9 @@ def build_production_pipeline_handlers(
     )
     prepare_review: FlexibleWorker = prepare_shadow_review_worker or cast(
         FlexibleWorker, prepare_shadow_review
+    )
+    purge_prospect_snapshots: FlexibleWorker = purge_prospect_data_worker or cast(
+        FlexibleWorker, purge_prospect_data
     )
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
     qualify_claude_client = (
@@ -342,6 +347,14 @@ def build_production_pipeline_handlers(
             store=prospect_store,
         )
 
+    async def handle_purge_prospect_data(payload: dict[str, object]) -> object:
+        if prospect_store is None:
+            return await _unconfigured_prospect_handler(payload)
+        return await purge_prospect_snapshots(
+            payload,
+            store=prospect_store,
+        )
+
     handlers: dict[JobType, PipelineHandler] = {
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
@@ -354,7 +367,7 @@ def build_production_pipeline_handlers(
         JobType.ASSESS_PROSPECTS: handle_assess_prospects,
         JobType.ENRICH_PROSPECT_CONTACTS: handle_enrich_prospect_contacts,
         JobType.PREPARE_SHADOW_REVIEW: handle_prepare_shadow_review,
-        JobType.PURGE_PROSPECT_DATA: _unconfigured_prospect_handler,
+        JobType.PURGE_PROSPECT_DATA: handle_purge_prospect_data,
     }
     schedule_limiter = (
         {JobType.SCHEDULE_OUTREACH: limiters[JobType.SCHEDULE_OUTREACH]}
@@ -391,6 +404,7 @@ def build_pooled_production_pipeline_handlers(
     assess_prospects_worker: FlexibleWorker | None = None,
     enrich_prospect_contacts_worker: FlexibleWorker | None = None,
     prepare_shadow_review_worker: FlexibleWorker | None = None,
+    purge_prospect_data_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
@@ -415,6 +429,9 @@ def build_pooled_production_pipeline_handlers(
     )
     prepare_review: FlexibleWorker = prepare_shadow_review_worker or cast(
         FlexibleWorker, prepare_shadow_review
+    )
+    purge_prospect_snapshots: FlexibleWorker = purge_prospect_data_worker or cast(
+        FlexibleWorker, purge_prospect_data
     )
     connection_pool = cast(Any, pool)
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
@@ -545,6 +562,13 @@ def build_pooled_production_pipeline_handlers(
                 store=ProspectStore(connection),
             )
 
+    async def handle_purge_prospect_data(payload: dict[str, object]) -> object:
+        async with connection_pool.acquire() as connection:
+            return await purge_prospect_snapshots(
+                payload,
+                store=ProspectStore(connection),
+            )
+
     handlers: dict[JobType, PipelineHandler] = {
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
@@ -557,7 +581,7 @@ def build_pooled_production_pipeline_handlers(
         JobType.ASSESS_PROSPECTS: handle_assess_prospects,
         JobType.ENRICH_PROSPECT_CONTACTS: handle_enrich_prospect_contacts,
         JobType.PREPARE_SHADOW_REVIEW: handle_prepare_shadow_review,
-        JobType.PURGE_PROSPECT_DATA: _unconfigured_prospect_handler,
+        JobType.PURGE_PROSPECT_DATA: handle_purge_prospect_data,
     }
     schedule_limiter = (
         {JobType.SCHEDULE_OUTREACH: limiters[JobType.SCHEDULE_OUTREACH]}

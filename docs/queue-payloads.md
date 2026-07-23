@@ -161,12 +161,22 @@ These jobs operate only on tenant-scoped prospect staging. They cannot create le
 
 ### `purge_prospect_data`
 
+Tenant-scoped retention cleanup. Enqueue from server configuration only with
+`python -m src.workers.purge_prospect_data --enqueue`; do not accept a browser
+tenant override.
+
 ```json
 {
   "job_type": "purge_prospect_data",
   "tenant_id": "uuid"
 }
 ```
+
+The worker clears expired raw Outscraper and Apollo payload JSON before deleting
+eligible prospect snapshots. It only deletes child contacts/assessments and
+non-promoted prospect snapshots for `completed` discovery runs, and only deletes
+a run after no prospect snapshots remain. It cannot create leads, previews,
+outreach sends, or Instantly requests.
 
 ---
 
