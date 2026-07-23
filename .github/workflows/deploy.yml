@@ -18,9 +18,20 @@ jobs:
           script: |
             set -e
             cd /root/printeriq
-            git pull origin main
-            python3 -m pip install -e services/pipeline
-            python3 -m playwright install --with-deps chromium
+            git fetch origin main
+            git reset --hard origin/main
+            set -a
+            [ -f .env ] && . ./.env
+            set +a
+            python3 -m venv .venv || (apt-get update && apt-get install -y python3-venv && python3 -m venv .venv)
+            . .venv/bin/activate
+            python -m pip install --upgrade pip
+            python -m pip install -e services/pipeline
+            npm --prefix services/reply-agent ci --include=dev
+            npm --prefix services/reply-agent run build
+            npm --prefix services/dashboard ci --include=dev
+            npm --prefix services/dashboard run build
+            python -m playwright install --with-deps chromium
             # Apply any new migrations against Supabase
             # (psql must be available or use supabase CLI)
             npm --prefix database run migrate 2>/dev/null || true
