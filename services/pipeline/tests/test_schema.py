@@ -56,8 +56,12 @@ def test_canonical_schema_includes_website_previews_contract() -> None:
 def test_canonical_schema_includes_prospect_staging_contract() -> None:
     schema = (REPO_ROOT / "database" / "schema.sql").read_text()
     migration = REPO_ROOT / "database" / "migrations" / "0008_create_prospect_staging.sql"
+    active_guard_migration = (
+        REPO_ROOT / "database" / "migrations" / "0009_block_incomplete_discovery_runs.sql"
+    )
 
     assert migration.exists()
+    assert active_guard_migration.exists()
     for table in (
         "discovery_runs",
         "business_prospects",
@@ -69,8 +73,7 @@ def test_canonical_schema_includes_prospect_staging_contract() -> None:
     active_index = schema.split(
         "CREATE UNIQUE INDEX discovery_runs_one_active_per_tenant_idx", maxsplit=1
     )[1].split(";", maxsplit=1)[0]
-    assert "'created','submitted','polling','processing'" in active_index
-    assert "persisted" not in active_index
+    assert "'created','submitted','polling','persisted','processing','review_ready'" in active_index
     assert "business_prospects_source_identity_key" in schema
     assert "business_prospects_tenant_run_id_key" in schema
     assert "FOREIGN KEY (tenant_id, discovery_run_id)" in schema
@@ -78,11 +81,19 @@ def test_canonical_schema_includes_prospect_staging_contract() -> None:
     assert "prospect_manual_assessment_idempotency_idx" in schema
 
 
-def test_prospect_staging_migration_matches_canonical_schema() -> None:
+def test_prospect_active_run_guard_migration_matches_canonical_schema() -> None:
     schema = (REPO_ROOT / "database" / "schema.sql").read_text()
     migration = (
-        REPO_ROOT / "database" / "migrations" / "0008_create_prospect_staging.sql"
+        REPO_ROOT / "database" / "migrations" / "0009_block_incomplete_discovery_runs.sql"
     ).read_text()
-    migration_body = migration.split("\n\n", 1)[1].strip()
+    active_index = schema.split(
+        "CREATE UNIQUE INDEX discovery_runs_one_active_per_tenant_idx", maxsplit=1
+    )[1].split(";", maxsplit=1)[0]
 
-    assert schema.rstrip().endswith(migration_body)
+    assert "DROP INDEX IF EXISTS discovery_runs_one_active_per_tenant_idx" in migration
+    assert (
+        "WHERE status IN ('created','submitted','polling','persisted','processing','review_ready')"
+        in migration
+    )
+    assert "persisted" in active_index
+    assert "review_ready" in active_index
