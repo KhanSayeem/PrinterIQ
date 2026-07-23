@@ -23,12 +23,15 @@ jobs:
             set -a
             [ -f .env ] && . ./.env
             set +a
-            python3 -m pip install -e services/pipeline
+            python3 -m venv .venv || (apt-get update && apt-get install -y python3-venv && python3 -m venv .venv)
+            . .venv/bin/activate
+            python -m pip install --upgrade pip
+            python -m pip install -e services/pipeline
             npm --prefix services/reply-agent ci
             npm --prefix services/reply-agent run build
             npm --prefix services/dashboard ci
             npm --prefix services/dashboard run build
-            python3 -m playwright install --with-deps chromium
+            python -m playwright install --with-deps chromium
             # Apply any new migrations against Supabase
             # (psql must be available or use supabase CLI)
             npm --prefix database run migrate 2>/dev/null || true

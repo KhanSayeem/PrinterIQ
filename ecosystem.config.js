@@ -40,7 +40,7 @@ module.exports = {
   apps: [
     {
       name: 'pipeline',
-      interpreter: 'python3',
+      interpreter: '/root/printeriq/.venv/bin/python',
       script: '-m src.workers.orchestrator',
       cwd: '/root/printeriq/services/pipeline',
       watch: false,
