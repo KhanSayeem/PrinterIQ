@@ -81,7 +81,14 @@ export type ProspectEvidenceView = {
 
 const INITIAL_ACTION_STATE: ProspectRunActionState = { ok: false, message: "" };
 const INITIAL_REVIEW_STATE: ProspectReviewActionState = { ok: false, message: "" };
-const ACTIVE_STATUSES = new Set(["created", "submitted", "polling", "processing"]);
+const BLOCKING_RUN_STATUSES = new Set([
+  "created",
+  "submitted",
+  "polling",
+  "persisted",
+  "processing",
+  "review_ready",
+]);
 
 export function ProspectsWorkbench({
   initialRun,
@@ -99,7 +106,7 @@ export function ProspectsWorkbench({
   const router = useRouter();
   const [feedback, setFeedback] = useState<ProspectRunActionState>(INITIAL_ACTION_STATE);
   const [isPending, startTransition] = useTransition();
-  const isActive = initialRun ? ACTIVE_STATUSES.has(initialRun.status) : false;
+  const isActive = initialRun ? BLOCKING_RUN_STATUSES.has(initialRun.status) : false;
 
   function refreshStatus() {
     setFeedback(INITIAL_ACTION_STATE);
