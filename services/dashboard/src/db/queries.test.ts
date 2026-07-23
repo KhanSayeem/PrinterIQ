@@ -416,6 +416,10 @@ describe("dashboard discovery run queries", () => {
     expect(query.sql).toContain('"prospect_assessments"."prospect_id" =');
     expect(query.sql).toContain('"prospect_assessments"."assessment_type" =');
     expect(query.sql).toContain('"prospect_assessments"."assessment_version" =');
+    expect(query.sql.toLowerCase()).toContain("case");
+    expect(query.sql).toContain('"prospect_assessments"."total_score"');
+    expect(query.sql).toContain('"prospect_assessments"."category_scores"');
+    expect(query.sql).toContain('"prospect_assessments"."forced_route_reason"');
     expect(query.sql).toContain('"business_prospects"."matched_location_count"');
     expect(query.sql).toContain('"business_prospects"."duplicate_evidence"');
     expect(query.sql).not.toContain('join "leads"');
@@ -424,6 +428,7 @@ describe("dashboard discovery run queries", () => {
     expect(query.params).toContain("20000000-0000-0000-0000-000000000001");
     expect(query.params).toContain("automated");
     expect(query.params).toContain("route-a-normalization-v1");
+    expect(query.params).toContain("website-health-v1");
   });
 
   it("marks only the tenant's created run failed after queue rejection", () => {

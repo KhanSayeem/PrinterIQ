@@ -50,6 +50,8 @@ To deploy manually:
 ```bash
 cd /root/printeriq
 git pull origin main
+python3 -m pip install -e services/pipeline
+python3 -m playwright install --with-deps chromium
 pm2 restart all
 pm2 save
 ```
