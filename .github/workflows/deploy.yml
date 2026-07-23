@@ -35,5 +35,5 @@ jobs:
             # Apply any new migrations against Supabase
             # (psql must be available or use supabase CLI)
             npm --prefix database run migrate 2>/dev/null || true
-            pm2 restart all
+            pm2 startOrReload ecosystem.config.js --update-env
             pm2 save
