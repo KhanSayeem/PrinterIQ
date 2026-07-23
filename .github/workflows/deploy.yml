@@ -19,6 +19,8 @@ jobs:
             set -e
             cd /root/printeriq
             git pull origin main
+            python3 -m pip install -e services/pipeline
+            python3 -m playwright install --with-deps chromium
             # Apply any new migrations against Supabase
             # (psql must be available or use supabase CLI)
             npm --prefix database run migrate 2>/dev/null || true
