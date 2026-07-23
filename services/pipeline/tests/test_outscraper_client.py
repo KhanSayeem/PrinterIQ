@@ -46,6 +46,10 @@ def test_submit_google_maps_search_uses_fixed_async_australian_contract() -> Non
         assert request.url.params["async"] == "true"
         assert "place_id" in request.url.params["fields"]
         assert "name" in request.url.params["fields"]
+        assert "site" in request.url.params["fields"]
+        assert "website" in request.url.params["fields"]
+        assert "address" in request.url.params["fields"]
+        assert "full_address" in request.url.params["fields"]
         assert request.headers["X-API-KEY"] == "outscraper-secret"
 
     asyncio.run(scenario())
