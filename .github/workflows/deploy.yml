@@ -1,0 +1,28 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 170.64.143.200
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /root/printeriq
+            git pull origin main
+            python3 -m pip install -e services/pipeline
+            python3 -m playwright install --with-deps chromium
+            # Apply any new migrations against Supabase
+            # (psql must be available or use supabase CLI)
+            npm --prefix database run migrate 2>/dev/null || true
+            pm2 restart all
+            pm2 save

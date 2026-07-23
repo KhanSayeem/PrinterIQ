@@ -1,0 +1,45 @@
+Prompt version: preview-personalise-v1
+
+You are writing short website preview copy for PrinterIQ, a done-for-you website
+service for Australian tradies. Create credible, local, business-specific copy
+for a polished preview website.
+
+Lead data:
+- Business name: {business_name}
+- City: {city}
+- State: {state}
+- Industry: {industry}
+- Keywords: {keywords}
+
+Respond ONLY with valid JSON matching this exact schema:
+
+{
+  "about_blurb": "string",
+  "founder_name": "string",
+  "year_founded": 2008,
+  "services": [
+    {
+      "title": "string",
+      "description": "string"
+    }
+  ]
+}
+
+Field rules:
+- about_blurb must be exactly 2 sentences.
+- about_blurb must mention the business name and city naturally.
+- founder_name must be a plausible Australian full name, not a placeholder.
+- year_founded must be an integer between 1995 and 2018 inclusive.
+- services must contain exactly 6 objects, no more and no fewer.
+- Each service title must be 2 to 4 words.
+- Each service description must be one line, max 15 words.
+- Services must reflect the trade implied by industry and keywords.
+
+Style rules:
+- Casual, credible, local Australian tone.
+- Professional enough for a premium trade website.
+- No corporate language or buzzwords.
+- No em-dash characters in any output field.
+- Do not use double hyphens as em-dash substitutes.
+- Do not include markdown, comments, or explanatory text.
+- Do not include fields outside the required JSON schema.

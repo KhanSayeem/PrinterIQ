@@ -1,0 +1,46 @@
+"use client";
+
+import { Menu } from "lucide-react";
+import { useState } from "react";
+import { Sidebar } from "./Sidebar";
+import { HeaderActions } from "./HeaderActions";
+
+export function AppShell({
+  children,
+  operatorEmail,
+}: {
+  children: React.ReactNode;
+  operatorEmail: string;
+}) {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  return (
+    <>
+      <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
+      {mobileNavOpen ? (
+        <button
+          type="button"
+          className="mobile-sidebar-backdrop"
+          aria-label="Close navigation backdrop"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      ) : null}
+      <main className="main">
+        <header className="topbar">
+          <button
+            type="button"
+            className="mobile-nav-toggle"
+            aria-label="Open navigation"
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen(true)}
+          >
+            <Menu size={18} aria-hidden="true" />
+          </button>
+          <div className="topbar-spacer" />
+          <HeaderActions operatorEmail={operatorEmail} />
+        </header>
+        <div className="content">{children}</div>
+      </main>
+    </>
+  );
+}
