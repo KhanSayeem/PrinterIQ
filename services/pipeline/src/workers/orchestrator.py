@@ -19,6 +19,7 @@ from uuid import UUID
 if __package__ == "src.workers":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from clients.apollo_client import ApolloClient, MissingApolloAPIKeyError
 from clients.claude_client import RealClaudeClient
 from clients.instantly_client import InstantlyClient
 from clients.outscraper_client import OutscraperClient, OutscraperRetryableError
@@ -45,6 +46,7 @@ from pipeline_queue.worker_base import (
 from workers.assess_prospects import assess_prospects
 from workers.discover_prospects import poll_outscraper, start_discovery
 from workers.enrich import enrich_lead
+from workers.enrich_prospect_contacts import enrich_prospect_contacts
 from workers.generate_preview import generate_preview
 from workers.ingest import ingest_csv_file
 from workers.normalize_prospects import normalize_prospects
@@ -180,6 +182,7 @@ def build_production_pipeline_handlers(
     claude_client: object,
     instantly_client: object,
     outscraper_client: object | None = None,
+    apollo_client: object | None = None,
     prospect_website_resolver: object | None = None,
     prospect_website_auditor: object | None = None,
     ingest_worker: FlexibleWorker | None = None,
@@ -191,6 +194,7 @@ def build_production_pipeline_handlers(
     poll_outscraper_worker: FlexibleWorker | None = None,
     normalize_prospects_worker: FlexibleWorker | None = None,
     assess_prospects_worker: FlexibleWorker | None = None,
+    enrich_prospect_contacts_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
@@ -209,6 +213,9 @@ def build_production_pipeline_handlers(
     )
     assess_prospect_batch: FlexibleWorker = assess_prospects_worker or cast(
         FlexibleWorker, assess_prospects
+    )
+    enrich_prospect_contact_batch: FlexibleWorker = enrich_prospect_contacts_worker or cast(
+        FlexibleWorker, enrich_prospect_contacts
     )
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
     qualify_claude_client = (
@@ -312,6 +319,15 @@ def build_production_pipeline_handlers(
             website_auditor=prospect_website_auditor or ProspectWebsiteAuditor(),
         )
 
+    async def handle_enrich_prospect_contacts(payload: dict[str, object]) -> object:
+        if prospect_store is None:
+            return await _unconfigured_prospect_handler(payload)
+        return await enrich_prospect_contact_batch(
+            payload,
+            store=prospect_store,
+            apollo_client=apollo_client,
+        )
+
     handlers: dict[JobType, PipelineHandler] = {
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
@@ -322,7 +338,7 @@ def build_production_pipeline_handlers(
         JobType.POLL_OUTSCRAPER: handle_poll_outscraper,
         JobType.NORMALIZE_PROSPECTS: handle_normalize_prospects,
         JobType.ASSESS_PROSPECTS: handle_assess_prospects,
-        JobType.ENRICH_PROSPECT_CONTACTS: _unconfigured_prospect_handler,
+        JobType.ENRICH_PROSPECT_CONTACTS: handle_enrich_prospect_contacts,
         JobType.PREPARE_SHADOW_REVIEW: _unconfigured_prospect_handler,
         JobType.PURGE_PROSPECT_DATA: _unconfigured_prospect_handler,
     }
@@ -347,6 +363,7 @@ def build_pooled_production_pipeline_handlers(
     claude_client: object,
     instantly_client: object,
     outscraper_client: object | None = None,
+    apollo_client: object | None = None,
     prospect_website_resolver: object | None = None,
     prospect_website_auditor: object | None = None,
     ingest_worker: FlexibleWorker | None = None,
@@ -358,6 +375,7 @@ def build_pooled_production_pipeline_handlers(
     poll_outscraper_worker: FlexibleWorker | None = None,
     normalize_prospects_worker: FlexibleWorker | None = None,
     assess_prospects_worker: FlexibleWorker | None = None,
+    enrich_prospect_contacts_worker: FlexibleWorker | None = None,
     rate_limits: dict[JobType, RateLimiter] | None = None,
 ) -> dict[JobType, PipelineHandler]:
     ingest: FlexibleWorker = ingest_worker or cast(FlexibleWorker, ingest_csv_file)
@@ -376,6 +394,9 @@ def build_pooled_production_pipeline_handlers(
     )
     assess_prospect_batch: FlexibleWorker = assess_prospects_worker or cast(
         FlexibleWorker, assess_prospects
+    )
+    enrich_prospect_contact_batch: FlexibleWorker = enrich_prospect_contacts_worker or cast(
+        FlexibleWorker, enrich_prospect_contacts
     )
     connection_pool = cast(Any, pool)
     limiters = rate_limits if rate_limits is not None else pipeline_rate_limiters()
@@ -490,6 +511,14 @@ def build_pooled_production_pipeline_handlers(
                 website_auditor=prospect_website_auditor or ProspectWebsiteAuditor(),
             )
 
+    async def handle_enrich_prospect_contacts(payload: dict[str, object]) -> object:
+        async with connection_pool.acquire() as connection:
+            return await enrich_prospect_contact_batch(
+                payload,
+                store=ProspectStore(connection),
+                apollo_client=apollo_client,
+            )
+
     handlers: dict[JobType, PipelineHandler] = {
         JobType.INGEST_CSV: handle_ingest,
         JobType.ENRICH_LEAD: handle_enrich,
@@ -500,7 +529,7 @@ def build_pooled_production_pipeline_handlers(
         JobType.POLL_OUTSCRAPER: handle_poll_outscraper,
         JobType.NORMALIZE_PROSPECTS: handle_normalize_prospects,
         JobType.ASSESS_PROSPECTS: handle_assess_prospects,
-        JobType.ENRICH_PROSPECT_CONTACTS: _unconfigured_prospect_handler,
+        JobType.ENRICH_PROSPECT_CONTACTS: handle_enrich_prospect_contacts,
         JobType.PREPARE_SHADOW_REVIEW: _unconfigured_prospect_handler,
         JobType.PURGE_PROSPECT_DATA: _unconfigured_prospect_handler,
     }
@@ -924,6 +953,7 @@ async def build_production_manager() -> PipelineQueueManager:
         claude_client=RealClaudeClient(api_key=anthropic_key, prompts_dir=prompts_dir),
         instantly_client=InstantlyClient.from_env(),
         outscraper_client=OutscraperClient.from_env(),
+        apollo_client=_apollo_client_from_env_or_none(),
         prospect_website_auditor=ProspectWebsiteAuditor(),
     )
     return PipelineQueueManager(
@@ -931,6 +961,13 @@ async def build_production_manager() -> PipelineQueueManager:
         store=cast(QueueJobRepository, PooledQueueJobStore(pool)),
         handlers=handlers,
     )
+
+
+def _apollo_client_from_env_or_none() -> ApolloClient | None:
+    try:
+        return ApolloClient.from_env()
+    except MissingApolloAPIKeyError:
+        return None
 
 
 def main() -> None:

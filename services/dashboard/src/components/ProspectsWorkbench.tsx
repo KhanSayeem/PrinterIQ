@@ -31,6 +31,12 @@ export type ProspectEvidenceView = {
   totalScore?: number | null;
   categoryScores?: unknown;
   forcedRouteReason?: string | null;
+  contactStatus?: string | null;
+  contactPersonName?: string | null;
+  contactPersonTitle?: string | null;
+  contactEmail?: string | null;
+  contactEmailStatus?: string | null;
+  contactEvidence?: unknown;
 };
 
 const INITIAL_ACTION_STATE: ProspectRunActionState = { ok: false, message: "" };
@@ -180,6 +186,14 @@ function ProspectEvidenceList({ prospects }: { prospects: ProspectEvidenceView[]
               <dd>{prospect.forcedRouteReason ?? forcedReason(prospect.ruleEvidence) ?? "None"}</dd>
             </div>
             <div>
+              <dt>Contact</dt>
+              <dd>{contactSummary(prospect)}</dd>
+            </div>
+            <div>
+              <dt>Contact evidence</dt>
+              <dd>{contactEvidenceSummary(prospect.contactEvidence)}</dd>
+            </div>
+            <div>
               <dt>Matched locations</dt>
               <dd>{matchedLocationCount(prospect)}</dd>
             </div>
@@ -263,6 +277,40 @@ function categoryScoreSummary(value: unknown) {
 function forcedReason(value: unknown) {
   const reason = scoringEvidence(value).forced_route_reason;
   return typeof reason === "string" && reason ? reason : null;
+}
+
+function contactSummary(prospect: ProspectEvidenceView) {
+  if (!prospect.contactStatus) return "Not resolved";
+  const status = prospect.contactStatus.replace(/_/g, " ");
+  if (prospect.contactStatus === "verified") {
+    return [
+      "Verified",
+      prospect.contactPersonName,
+      prospect.contactPersonTitle,
+      prospect.contactEmail,
+    ].filter(Boolean).join(" - ");
+  }
+  if (prospect.contactStatus === "suppressed") {
+    return `Suppressed${prospect.contactEmail ? ` - ${prospect.contactEmail}` : ""}`;
+  }
+  if (prospect.contactStatus === "failed") {
+    const evidence = isRecord(prospect.contactEvidence) ? prospect.contactEvidence : {};
+    const code = typeof evidence.failure_code === "string" ? evidence.failure_code : null;
+    return code ? `Failed - ${code}` : "Failed";
+  }
+  return status;
+}
+
+function contactEvidenceSummary(value: unknown) {
+  if (!isRecord(value)) return "No contact evidence";
+  const parts = [
+    typeof value.strategy === "string" ? value.strategy : null,
+    typeof value.organization_match === "string" ? `Org: ${value.organization_match}` : null,
+    typeof value.person_seniority === "string" ? `Seniority: ${value.person_seniority}` : null,
+    typeof value.failure_code === "string" ? `Failure: ${value.failure_code}` : null,
+    typeof value.suppression === "string" ? `Suppression: ${value.suppression}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : "No contact evidence";
 }
 
 function ruleResultSummary(value: unknown) {

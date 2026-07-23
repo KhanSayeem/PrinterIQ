@@ -410,6 +410,7 @@ describe("dashboard discovery run queries", () => {
 
     expect(query.sql).toContain('from "business_prospects"');
     expect(query.sql).toContain('left join "prospect_assessments"');
+    expect(query.sql).toContain('left join "prospect_contacts"');
     expect(query.sql).toContain('"business_prospects"."tenant_id" =');
     expect(query.sql).toContain('"business_prospects"."discovery_run_id" =');
     expect(query.sql).toContain('"prospect_assessments"."tenant_id" =');
@@ -422,6 +423,13 @@ describe("dashboard discovery run queries", () => {
     expect(query.sql).toContain('"prospect_assessments"."forced_route_reason"');
     expect(query.sql).toContain('"business_prospects"."matched_location_count"');
     expect(query.sql).toContain('"business_prospects"."duplicate_evidence"');
+    expect(query.sql).toContain('"prospect_contacts"."tenant_id" =');
+    expect(query.sql).toContain('"prospect_contacts"."prospect_id" =');
+    expect(query.sql).toContain('"prospect_contacts"."provider" =');
+    expect(query.sql).toContain("MAX(latest_prospect_contacts.created_at)");
+    expect(query.sql).toContain('"prospect_contacts"."status"');
+    expect(query.sql).toContain('"prospect_contacts"."match_evidence"');
+    expect(query.sql).not.toContain('"prospect_contacts"."provider_payload"');
     expect(query.sql).not.toContain('join "leads"');
     expect(query.sql).not.toContain('join "outreach_sends"');
     expect(query.params).toContain(tenantId);
@@ -429,6 +437,7 @@ describe("dashboard discovery run queries", () => {
     expect(query.params).toContain("automated");
     expect(query.params).toContain("route-a-normalization-v1");
     expect(query.params).toContain("website-health-v1");
+    expect(query.params).toContain("apollo");
   });
 
   it("marks only the tenant's created run failed after queue rejection", () => {

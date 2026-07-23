@@ -8,6 +8,7 @@ export type ProspectRunView = {
   routeACount: number;
   routeBCount: number;
   verifiedContactCount: number;
+  providerUsage?: unknown;
   failureCode: string | null;
   failureDetail: string | null;
   createdAt: Date | string;
@@ -41,12 +42,15 @@ function formatTimestamp(value: Date | string) {
 }
 
 export function ProspectRunSummary({ run }: { run: ProspectRunView }) {
+  const apolloMatch = apolloContactMatch(run.providerUsage);
   const counts = [
     ["Discovered", run.discoveredCount],
     ["Usable", run.usableCount],
     ["Route A", run.routeACount],
     ["Route B", run.routeBCount],
     ["Verified contacts", run.verifiedContactCount],
+    ["Route A verified", apolloMatch.routeAVerified],
+    ["Route B verified", apolloMatch.routeBVerified],
   ] as const;
 
   return (
@@ -98,6 +102,49 @@ export function ProspectRunSummary({ run }: { run: ProspectRunView }) {
           </div>
         ))}
       </div>
+
+      <dl className="prospect-run-meta">
+        <div>
+          <dt>Route A match rate</dt>
+          <dd>{formatRate(apolloMatch.routeARate)}</dd>
+        </div>
+        <div>
+          <dt>Route B match rate</dt>
+          <dd>{formatRate(apolloMatch.routeBRate)}</dd>
+        </div>
+        <div>
+          <dt>Cost status</dt>
+          <dd>{apolloMatch.costReconciliationRequired ? "Cost reconciliation required" : "Reconciled"}</dd>
+        </div>
+      </dl>
     </section>
   );
+}
+
+function apolloContactMatch(providerUsage: unknown) {
+  const usage = isRecord(providerUsage) ? providerUsage : {};
+  const match = isRecord(usage.apollo_contact_match) ? usage.apollo_contact_match : {};
+  return {
+    routeAVerified: numberOrZero(match.route_a_verified_contact_count),
+    routeBVerified: numberOrZero(match.route_b_verified_contact_count),
+    routeARate: numberOrNull(match.route_a_match_rate),
+    routeBRate: numberOrNull(match.route_b_match_rate),
+    costReconciliationRequired: match.cost_reconciliation_required !== false,
+  };
+}
+
+function formatRate(value: number | null) {
+  return value === null ? "No routed contacts yet" : `${Math.round(value * 100)}%`;
+}
+
+function numberOrZero(value: unknown) {
+  return typeof value === "number" ? value : 0;
+}
+
+function numberOrNull(value: unknown) {
+  return typeof value === "number" ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

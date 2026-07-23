@@ -31,7 +31,9 @@ class RecordingConnection:
         return self.row
 
     async def fetchval(self, query: str, *args: object) -> object:
-        raise AssertionError("ProspectStore should return rows, not scalar values")
+        self.queries.append(query)
+        self.args.append(args)
+        return self.row
 
     async def execute(self, query: str, *args: object) -> object:
         raise AssertionError("ProspectStore writes should return the affected row")
@@ -500,9 +502,116 @@ def test_refresh_discovery_run_aggregates_is_tenant_scoped() -> None:
         assert "UPDATE discovery_runs" in query
         assert "FROM business_prospects" in query
         assert "prospect_contacts" in query
+        assert "verified_by_route" in query
+        assert "apollo_contact_match" in query
+        assert "route_a_verified_contact_count" in query
+        assert "route_b_verified_contact_count" in query
+        assert "cost_reconciliation_required" in query
         assert "tenant_id = $1" in query
         assert "discovery_run_id = $2" in query
         assert "status IN ('normalized', 'assessed', 'contact_enriched', 'review_ready')" in query
         assert connection.args[0] == (TENANT_ID, RUN_ID)
+
+    asyncio.run(scenario())
+
+
+def test_get_existing_prospect_contact_is_tenant_scoped_by_fingerprint() -> None:
+    async def scenario() -> None:
+        row = {
+            "id": UUID("40000000-0000-0000-0000-000000000001"),
+            "tenant_id": TENANT_ID,
+            "prospect_id": PROSPECT_ID,
+            "provider": "apollo",
+            "input_fingerprint": "abc123",
+            "status": "verified",
+        }
+        connection = RecordingConnection(row=row)
+
+        result = await ProspectStore(connection).get_existing_prospect_contact(
+            tenant_id=TENANT_ID,
+            prospect_id=PROSPECT_ID,
+            provider="apollo",
+            input_fingerprint="abc123",
+        )
+
+        query = connection.queries[0]
+        assert result == row
+        assert "FROM prospect_contacts" in query
+        assert "WHERE tenant_id = $1" in query
+        assert "AND prospect_id = $2" in query
+        assert "AND provider = $3" in query
+        assert "AND input_fingerprint = $4" in query
+        assert connection.args[0] == (TENANT_ID, PROSPECT_ID, "apollo", "abc123")
+
+    asyncio.run(scenario())
+
+
+def test_is_email_suppressed_checks_existing_archived_bounced_and_unsubscribed_contacts() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection(row=True)
+
+        result = await ProspectStore(connection).is_email_suppressed(
+            tenant_id=TENANT_ID,
+            email="alex@northside.example",
+        )
+
+        query = connection.queries[0]
+        assert result is True
+        assert "FROM leads" in query
+        assert "FROM outreach_sends" in query
+        assert "leads.tenant_id = $1" in query
+        assert "outreach_sends.tenant_id = $1" in query
+        assert "LOWER(leads.email) = LOWER($2)" in query
+        assert "leads.status = 'archived'" in query
+        assert "outreach_sends.bounced = TRUE" in query
+        assert "outreach_sends.unsubscribed = TRUE" in query
+        assert connection.args[0] == (TENANT_ID, "alex@northside.example")
+
+    asyncio.run(scenario())
+
+
+def test_apply_prospect_contact_result_is_tenant_run_scoped_and_updates_contact_status() -> None:
+    async def scenario() -> None:
+        row = {
+            "id": UUID("40000000-0000-0000-0000-000000000001"),
+            "tenant_id": TENANT_ID,
+            "prospect_id": PROSPECT_ID,
+            "provider": "apollo",
+            "input_fingerprint": "abc123",
+            "status": "verified",
+        }
+        connection = RecordingConnection(row=row)
+
+        result = await ProspectStore(connection).apply_prospect_contact_result(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+            prospect_id=PROSPECT_ID,
+            provider="apollo",
+            input_fingerprint="abc123",
+            provider_request_id=None,
+            provider_organization_id="org-1",
+            provider_person_id="person-1",
+            person_name="Alex Owner",
+            person_title="Owner",
+            email="alex@northside.example",
+            provider_email_status="verified",
+            credits_consumed=None,
+            status="verified",
+            match_evidence={"strategy": "apollo-owner-verified-v1"},
+            provider_payload=None,
+        )
+
+        query = connection.queries[0]
+        assert result == row
+        assert "FROM business_prospects" in query
+        assert "WHERE tenant_id = $1" in query
+        assert "AND discovery_run_id = $2" in query
+        assert "AND id = $3" in query
+        assert "route IN ('A', 'B')" in query
+        assert "status = 'assessed'" in query
+        assert "INSERT INTO prospect_contacts" in query
+        assert "ON CONFLICT (tenant_id, prospect_id, provider, input_fingerprint)" in query
+        assert "SET status = 'contact_enriched'" in query
+        assert connection.args[0][:5] == (TENANT_ID, RUN_ID, PROSPECT_ID, "apollo", "abc123")
 
     asyncio.run(scenario())
