@@ -27,9 +27,9 @@ jobs:
             . .venv/bin/activate
             python -m pip install --upgrade pip
             python -m pip install -e services/pipeline
-            npm --prefix services/reply-agent ci
+            npm --prefix services/reply-agent ci --include=dev
             npm --prefix services/reply-agent run build
-            npm --prefix services/dashboard ci
+            npm --prefix services/dashboard ci --include=dev
             npm --prefix services/dashboard run build
             python -m playwright install --with-deps chromium
             # Apply any new migrations against Supabase
