@@ -16,14 +16,30 @@ type StartProspectRunAction = (
   formData: FormData,
 ) => Promise<ProspectRunActionState>;
 
+export type ProspectEvidenceView = {
+  id: string;
+  businessName: string;
+  route: string | null;
+  status: string;
+  websiteOwnership: string | null;
+  outcomeReason: string | null;
+  sourceWebsiteUrl: string | null;
+  normalizedDomain: string | null;
+  matchedLocationCount: number;
+  duplicateEvidence: unknown;
+  ruleEvidence: unknown;
+};
+
 const INITIAL_ACTION_STATE: ProspectRunActionState = { ok: false, message: "" };
 const ACTIVE_STATUSES = new Set(["created", "submitted", "polling", "processing"]);
 
 export function ProspectsWorkbench({
   initialRun,
+  initialProspects = [],
   startAction,
 }: {
   initialRun: ProspectRunView | null;
+  initialProspects?: ProspectEvidenceView[];
   startAction: StartProspectRunAction;
 }) {
   const router = useRouter();
@@ -89,7 +105,10 @@ export function ProspectsWorkbench({
       ) : null}
 
       {initialRun ? (
-        <ProspectRunSummary run={initialRun} />
+        <>
+          <ProspectRunSummary run={initialRun} />
+          <ProspectEvidenceList prospects={initialProspects} />
+        </>
       ) : (
         <div className="prospect-empty-state">
           <strong>No discovery runs yet</strong>
@@ -98,4 +117,133 @@ export function ProspectsWorkbench({
       )}
     </div>
   );
+}
+
+function ProspectEvidenceList({ prospects }: { prospects: ProspectEvidenceView[] }) {
+  if (prospects.length === 0) {
+    return (
+      <section className="prospect-evidence-list" aria-label="Prospect evidence">
+        <div className="prospect-empty-state">
+          <strong>No prospect evidence yet</strong>
+          <span>Route evidence appears after persisted records are normalized.</span>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="prospect-evidence-list" aria-label="Prospect evidence">
+      {prospects.map((prospect) => (
+        <article className="prospect-evidence-row" key={prospect.id}>
+          <div>
+            <h3>{prospect.businessName}</h3>
+            <div className="prospect-evidence-meta">
+              <span>{prospect.route ? `Route ${prospect.route}` : statusLabel(prospect.status)}</span>
+              <span>{ownershipLabel(prospect.websiteOwnership)}</span>
+              {prospect.outcomeReason ? <code>{prospect.outcomeReason}</code> : null}
+            </div>
+          </div>
+          <dl>
+            <div>
+              <dt>Website</dt>
+              <dd>{prospect.sourceWebsiteUrl ?? "No URL"}</dd>
+            </div>
+            <div>
+              <dt>Final URL</dt>
+              <dd>{finalUrl(prospect.ruleEvidence) ?? prospect.sourceWebsiteUrl ?? "No URL"}</dd>
+            </div>
+            <div>
+              <dt>Domain</dt>
+              <dd>{prospect.normalizedDomain ?? "None"}</dd>
+            </div>
+            <div>
+              <dt>Ownership reason</dt>
+              <dd>{websiteReason(prospect.ruleEvidence) ?? prospect.outcomeReason ?? "No reason"}</dd>
+            </div>
+            <div>
+              <dt>Matched locations</dt>
+              <dd>{matchedLocationCount(prospect)}</dd>
+            </div>
+            <div>
+              <dt>Duplicate evidence</dt>
+              <dd>{duplicateEvidenceSummary(prospect)}</dd>
+            </div>
+            <div>
+              <dt>Evidence</dt>
+              <dd>{evidenceSummary(prospect.ruleEvidence)}</dd>
+            </div>
+          </dl>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function ownershipLabel(value: string | null) {
+  const labels: Record<string, string> = {
+    none: "No website",
+    social: "Social profile",
+    directory: "Directory listing",
+    marketplace: "Marketplace listing",
+    placeholder: "Placeholder site",
+    inaccessible: "Inaccessible site",
+    owned: "Owned website",
+  };
+  return value ? labels[value] ?? value : "Unclassified";
+}
+
+function statusLabel(value: string) {
+  return value.replace(/_/g, " ");
+}
+
+function evidenceSummary(value: unknown) {
+  if (!isRecord(value)) return "No assessment evidence";
+  const website = isRecord(value.website) ? value.website : {};
+  const finalUrl = typeof website.final_url === "string" ? website.final_url : null;
+  const ownership = typeof website.ownership === "string" ? website.ownership : null;
+  return [ownership ? ownershipLabel(ownership) : null, finalUrl].filter(Boolean).join(" - ");
+}
+
+function finalUrl(value: unknown) {
+  if (!isRecord(value)) return null;
+  const website = isRecord(value.website) ? value.website : {};
+  return typeof website.final_url === "string" ? website.final_url : null;
+}
+
+function websiteReason(value: unknown) {
+  if (!isRecord(value)) return null;
+  const website = isRecord(value.website) ? value.website : {};
+  return typeof website.reason === "string" ? website.reason : null;
+}
+
+function matchedLocationCount(prospect: ProspectEvidenceView) {
+  const eligibility = eligibilityEvidence(prospect.ruleEvidence);
+  const count = typeof eligibility.matched_location_count === "number"
+    ? eligibility.matched_location_count
+    : prospect.matchedLocationCount;
+  return String(count);
+}
+
+function duplicateEvidenceSummary(prospect: ProspectEvidenceView) {
+  const eligibility = eligibilityEvidence(prospect.ruleEvidence);
+  const evidence = isRecord(eligibility.duplicate_evidence)
+    ? eligibility.duplicate_evidence
+    : prospect.duplicateEvidence;
+  if (!isRecord(evidence)) return "None";
+  const parts = Object.entries(evidence)
+    .map(([key, value]) => {
+      const values = Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+      return values.length > 0 ? `${key}: ${values.join(", ")}` : null;
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : "None";
+}
+
+function eligibilityEvidence(value: unknown) {
+  if (!isRecord(value)) return {};
+  return isRecord(value.eligibility) ? value.eligibility : {};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

@@ -10,6 +10,8 @@ import {
   leads,
   outreachSends,
   payments,
+  businessProspects,
+  prospectAssessments,
   qualifications,
   websitePreviews,
 } from "./schema";
@@ -27,6 +29,7 @@ export const PIPELINE_STATUSES = [
 ] as const;
 
 const ACTIVE_PIPELINE_STATUSES = PIPELINE_STATUSES.filter((status) => status !== "archived");
+const ROUTE_A_ASSESSMENT_VERSION = "route-a-normalization-v1";
 
 export const REVENUE_PERIODS = ["today", "week", "month"] as const;
 
@@ -72,6 +75,20 @@ export type MarkDiscoveryRunFailedInput = {
 export type FailStaleActiveDiscoveryRunsInput = {
   tenantId: string;
   staleBefore: Date;
+};
+
+export type ProspectEvidenceView = {
+  id: string;
+  businessName: string;
+  route: string | null;
+  status: string;
+  websiteOwnership: string | null;
+  outcomeReason: string | null;
+  sourceWebsiteUrl: string | null;
+  normalizedDomain: string | null;
+  matchedLocationCount: number;
+  duplicateEvidence: unknown;
+  ruleEvidence: unknown;
 };
 
 export type OperatorConversationInput = LeadIdentity & {
@@ -731,6 +748,46 @@ export function buildLatestDiscoveryRunQuery(
     .limit(1);
 }
 
+export function buildListProspectEvidenceForRunQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; discoveryRunId: string },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      id: businessProspects.id,
+      businessName: businessProspects.businessName,
+      route: businessProspects.route,
+      status: businessProspects.status,
+      websiteOwnership: businessProspects.websiteOwnership,
+      outcomeReason: businessProspects.outcomeReason,
+      sourceWebsiteUrl: businessProspects.sourceWebsiteUrl,
+      normalizedDomain: businessProspects.normalizedDomain,
+      matchedLocationCount: businessProspects.matchedLocationCount,
+      duplicateEvidence: businessProspects.duplicateEvidence,
+      ruleEvidence: prospectAssessments.ruleEvidence,
+    })
+    .from(businessProspects)
+    .leftJoin(
+      prospectAssessments,
+      and(
+        eq(prospectAssessments.tenantId, identity.tenantId),
+        eq(prospectAssessments.discoveryRunId, businessProspects.discoveryRunId),
+        eq(prospectAssessments.prospectId, businessProspects.id),
+        eq(prospectAssessments.assessmentType, "automated"),
+        eq(prospectAssessments.assessmentVersion, ROUTE_A_ASSESSMENT_VERSION),
+      ),
+    )
+    .where(
+      and(
+        eq(businessProspects.tenantId, identity.tenantId),
+        eq(businessProspects.discoveryRunId, identity.discoveryRunId),
+      ),
+    )
+    .orderBy(asc(businessProspects.businessName), asc(businessProspects.id));
+}
+
 export function buildFailStaleActiveDiscoveryRunsQuery(
   db: DashboardDb,
   input: FailStaleActiveDiscoveryRunsInput,
@@ -855,6 +912,14 @@ export async function getLatestDiscoveryRun(identity: string | { tenantId: strin
   const db = getDb();
   const [run] = await buildLatestDiscoveryRunQuery(db, { tenantId });
   return run ?? null;
+}
+
+export async function listProspectEvidenceForRun(identity: {
+  tenantId: string;
+  discoveryRunId: string;
+}) {
+  const db = getDb();
+  return buildListProspectEvidenceForRunQuery(db, identity);
 }
 
 export async function markDiscoveryRunFailed(input: MarkDiscoveryRunFailedInput) {

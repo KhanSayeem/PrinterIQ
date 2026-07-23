@@ -5,11 +5,13 @@ const {
   failStaleActiveDiscoveryRunsForTenantMock,
   getDashboardTenantIdMock,
   getLatestDiscoveryRunMock,
+  listProspectEvidenceForRunMock,
   workbenchMock,
 } = vi.hoisted(() => ({
   failStaleActiveDiscoveryRunsForTenantMock: vi.fn(),
   getDashboardTenantIdMock: vi.fn(),
   getLatestDiscoveryRunMock: vi.fn(),
+  listProspectEvidenceForRunMock: vi.fn(),
   workbenchMock: vi.fn(() => null),
 }));
 
@@ -17,6 +19,7 @@ vi.mock("@/auth/tenant", () => ({ getDashboardTenantId: getDashboardTenantIdMock
 vi.mock("@/db/queries", () => ({
   failStaleActiveDiscoveryRunsForTenant: failStaleActiveDiscoveryRunsForTenantMock,
   getLatestDiscoveryRun: getLatestDiscoveryRunMock,
+  listProspectEvidenceForRun: listProspectEvidenceForRunMock,
 }));
 vi.mock("@/components/ProspectsWorkbench", () => ({ ProspectsWorkbench: workbenchMock }));
 vi.mock("@/components/ShadowModeBanner", () => ({ ShadowModeBanner: () => null }));
@@ -30,6 +33,7 @@ describe("ProspectsPage", () => {
     getDashboardTenantIdMock.mockReset();
     failStaleActiveDiscoveryRunsForTenantMock.mockReset().mockResolvedValue([]);
     getLatestDiscoveryRunMock.mockReset();
+    listProspectEvidenceForRunMock.mockReset().mockResolvedValue([]);
     workbenchMock.mockClear();
     getDashboardTenantIdMock.mockReturnValue("10000000-0000-0000-0000-000000000001");
     getLatestDiscoveryRunMock.mockResolvedValue(null);
@@ -48,6 +52,25 @@ describe("ProspectsPage", () => {
       getLatestDiscoveryRunMock.mock.invocationCallOrder[0],
     );
     expect(workbenchMock).toHaveBeenCalledWith(expect.objectContaining({ initialRun: null }), undefined);
+  });
+
+  it("loads prospect evidence for the latest run by tenant", async () => {
+    getLatestDiscoveryRunMock.mockResolvedValue({ id: "run-1", status: "processing" });
+    listProspectEvidenceForRunMock.mockResolvedValue([{ id: "prospect-1" }]);
+
+    render(await ProspectsPage());
+
+    expect(listProspectEvidenceForRunMock).toHaveBeenCalledWith({
+      tenantId: "10000000-0000-0000-0000-000000000001",
+      discoveryRunId: "run-1",
+    });
+    expect(workbenchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialRun: { id: "run-1", status: "processing" },
+        initialProspects: [{ id: "prospect-1" }],
+      }),
+      undefined,
+    );
   });
 
   it("throws when no dashboard tenant is configured", async () => {

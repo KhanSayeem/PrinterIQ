@@ -1,0 +1,16 @@
+{
+  "place_id": "ChIJ-route-a-social",
+  "name": "Northside Plumbing",
+  "site": "https://facebook.com/northsideplumbing",
+  "phone": "+61 7 3000 0000",
+  "full_address": "100 Creek Street, Brisbane QLD 4000",
+  "city": "Brisbane",
+  "state": "Queensland",
+  "postal_code": "4000",
+  "category": "Plumber",
+  "subtypes": "Plumber, Drainage service",
+  "rating": 4.6,
+  "reviews": 42,
+  "business_status": "OPERATIONAL",
+  "location_link": "https://google.example/place"
+}

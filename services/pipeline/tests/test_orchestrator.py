@@ -195,9 +195,13 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
         async def poll_worker(payload: dict[str, object], **deps: object) -> None:
             calls.append(("poll", payload, deps))
 
+        async def normalize_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("normalize", payload, deps))
+
         prospect_store = object()
         queue = object()
         outscraper_client = object()
+        website_resolver = object()
         handlers = build_production_pipeline_handlers(
             lead_repository=object(),
             pipeline_store=object(),
@@ -207,8 +211,10 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
             claude_client=object(),
             instantly_client=object(),
             outscraper_client=outscraper_client,
+            prospect_website_resolver=website_resolver,
             start_discovery_worker=start_worker,
             poll_outscraper_worker=poll_worker,
+            normalize_prospects_worker=normalize_worker,
             rate_limits={},
         )
         payload = {
@@ -218,6 +224,7 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
 
         await handlers[JobType.START_DISCOVERY](payload)
         await handlers[JobType.POLL_OUTSCRAPER](payload)
+        await handlers[JobType.NORMALIZE_PROSPECTS](payload)
 
         assert calls == [
             (
@@ -236,6 +243,15 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
                     "store": prospect_store,
                     "queue": queue,
                     "outscraper_client": outscraper_client,
+                },
+            ),
+            (
+                "normalize",
+                payload,
+                {
+                    "store": prospect_store,
+                    "queue": queue,
+                    "website_resolver": website_resolver,
                 },
             ),
         ]

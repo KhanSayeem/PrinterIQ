@@ -354,6 +354,7 @@ describe("dashboard Drizzle schema", () => {
     );
     expect(assessmentReplayIndexes.prospect_automated_assessment_version_idx).toEqual([
       "tenant_id",
+      "discovery_run_id",
       "prospect_id",
       "assessment_version",
     ]);

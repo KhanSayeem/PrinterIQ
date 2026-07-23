@@ -20,6 +20,11 @@ class RecordingConnection:
         self.queries: list[str] = []
         self.args: list[tuple[object, ...]] = []
 
+    async def fetch(self, query: str, *args: object) -> list[object]:
+        self.queries.append(query)
+        self.args.append(args)
+        return self.row if isinstance(self.row, list) else []
+
     async def fetchrow(self, query: str, *args: object) -> object:
         self.queries.append(query)
         self.args.append(args)
@@ -100,6 +105,161 @@ def test_get_discovery_run_returns_none_when_tenant_run_pair_is_missing() -> Non
         result = await ProspectStore(RecordingConnection()).get_discovery_run(TENANT_ID, RUN_ID)
 
         assert result is None
+
+    asyncio.run(scenario())
+
+
+def test_list_discovered_prospects_is_tenant_and_run_scoped() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection(row=[])
+
+        await ProspectStore(connection).list_discovered_prospects(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+        )
+
+        query = connection.queries[0]
+        assert "FROM business_prospects" in query
+        assert "WHERE tenant_id = $1" in query
+        assert "AND discovery_run_id = $2" in query
+        assert "AND status IN ('discovered', 'normalized', 'assessed', 'held', 'rejected')" in query
+        assert connection.args[0] == (TENANT_ID, RUN_ID)
+
+    asyncio.run(scenario())
+
+
+def test_list_discovered_prospects_includes_processed_siblings_for_replay_context() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection(row=[])
+
+        await ProspectStore(connection).list_discovered_prospects(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+        )
+
+        query = connection.queries[0]
+        assert "FROM business_prospects" in query
+        assert "WHERE tenant_id = $1" in query
+        assert "AND discovery_run_id = $2" in query
+        assert "status IN ('discovered', 'normalized', 'assessed', 'held', 'rejected')" in query
+
+    asyncio.run(scenario())
+
+
+def test_apply_prospect_normalization_is_tenant_run_and_prospect_scoped() -> None:
+    async def scenario() -> None:
+        row = {"id": PROSPECT_ID, "tenant_id": TENANT_ID}
+        connection = RecordingConnection(row=row)
+
+        result = await ProspectStore(connection).apply_prospect_normalization(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+            prospect_id=PROSPECT_ID,
+            normalized_name="northside plumbing",
+            normalized_phone="61730000000",
+            normalized_domain=None,
+            website_ownership="social",
+            duplicate_evidence={"phone": ["place-2"]},
+            is_franchise=False,
+            matched_location_count=1,
+            route="A",
+            status="assessed",
+            outcome_reason="no_owned_website",
+        )
+
+        query = connection.queries[0]
+        assert result == row
+        assert "UPDATE business_prospects" in query
+        assert "WHERE tenant_id = $1" in query
+        assert "AND discovery_run_id = $2" in query
+        assert "AND id = $3" in query
+        assert "AND status = 'discovered'" in query
+        assert "lead_id IS NULL" in query
+        assert connection.args[0][:3] == (TENANT_ID, RUN_ID, PROSPECT_ID)
+        assert json.loads(str(connection.args[0][7])) == {"phone": ["place-2"]}
+
+    asyncio.run(scenario())
+
+
+def test_upsert_prospect_assessment_is_tenant_scoped_and_idempotent() -> None:
+    async def scenario() -> None:
+        row = {"id": UUID("40000000-0000-0000-0000-000000000001")}
+        connection = RecordingConnection(row=row)
+
+        result = await ProspectStore(connection).upsert_prospect_assessment(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+            prospect_id=PROSPECT_ID,
+            assessment_version="route-a-normalization-v1",
+            eligible=True,
+            computed_route="A",
+            rule_evidence={"website": {"ownership": "social"}},
+            forced_route_reason="no_owned_website",
+        )
+
+        query = connection.queries[0]
+        assert result == row
+        assert "INSERT INTO prospect_assessments" in query
+        assert "tenant_id, discovery_run_id, prospect_id" in query
+        assert "ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)" in query
+        assert "WHERE assessment_type = 'automated'" in query
+        assert connection.args[0][:3] == (TENANT_ID, RUN_ID, PROSPECT_ID)
+        assert json.loads(str(connection.args[0][6])) == {
+            "website": {"ownership": "social"}
+        }
+
+    asyncio.run(scenario())
+
+
+def test_apply_prospect_normalization_with_assessment_is_atomic_and_run_scoped() -> None:
+    async def scenario() -> None:
+        row = {
+            "id": PROSPECT_ID,
+            "tenant_id": TENANT_ID,
+            "assessment_id": UUID("40000000-0000-0000-0000-000000000001"),
+        }
+        connection = RecordingConnection(row=row)
+
+        result = await ProspectStore(connection).apply_prospect_normalization_with_assessment(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+            prospect_id=PROSPECT_ID,
+            normalized_name="northside plumbing",
+            normalized_phone="61730000000",
+            normalized_domain=None,
+            website_ownership="social",
+            duplicate_evidence={"phone": ["place-2"]},
+            is_franchise=False,
+            matched_location_count=1,
+            route="A",
+            status="assessed",
+            outcome_reason="no_owned_website",
+            source_payload={"resolved_website_url": "https://facebook.com/northside"},
+            assessment_version="route-a-normalization-v1",
+            eligible=True,
+            computed_route="A",
+            rule_evidence={"website": {"ownership": "social"}},
+            forced_route_reason="no_owned_website",
+        )
+
+        query = connection.queries[0]
+        assert result == row
+        assert "WITH normalized AS" in query
+        assert "UPDATE business_prospects" in query
+        assert "AND status = 'discovered'" in query
+        assert "AND lead_id IS NULL" in query
+        assert "source_payload = $14::jsonb" in query
+        assert "INSERT INTO prospect_assessments" in query
+        assert "ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)" in query
+        assert "SELECT normalized.*, assessment.assessment_id" in query
+        assert connection.args[0][:3] == (TENANT_ID, RUN_ID, PROSPECT_ID)
+        assert json.loads(str(connection.args[0][7])) == {"phone": ["place-2"]}
+        assert json.loads(str(connection.args[0][13])) == {
+            "resolved_website_url": "https://facebook.com/northside"
+        }
+        assert json.loads(str(connection.args[0][17])) == {
+            "website": {"ownership": "social"}
+        }
 
     asyncio.run(scenario())
 
@@ -286,6 +446,7 @@ def test_refresh_discovery_run_aggregates_is_tenant_scoped() -> None:
         assert "prospect_contacts" in query
         assert "tenant_id = $1" in query
         assert "discovery_run_id = $2" in query
+        assert "status IN ('normalized', 'assessed', 'contact_enriched', 'review_ready')" in query
         assert connection.args[0] == (TENANT_ID, RUN_ID)
 
     asyncio.run(scenario())

@@ -342,7 +342,7 @@ CREATE TABLE prospect_assessments (
 );
 
 CREATE UNIQUE INDEX prospect_automated_assessment_version_idx
-ON prospect_assessments (tenant_id, prospect_id, assessment_version)
+ON prospect_assessments (tenant_id, discovery_run_id, prospect_id, assessment_version)
 WHERE assessment_type = 'automated';
 
 CREATE UNIQUE INDEX prospect_manual_assessment_idempotency_idx

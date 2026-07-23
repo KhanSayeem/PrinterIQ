@@ -327,7 +327,7 @@ def test_permanent_poll_error_fails_run_without_queue_retry() -> None:
     asyncio.run(scenario())
 
 
-def test_poll_retry_after_persistence_is_noop_without_provider_call() -> None:
+def test_poll_retry_after_persistence_enqueues_normalization_without_provider_call() -> None:
     async def scenario() -> None:
         store = _Store({"status": "persisted", "source_request_id": "request-123"})
         client = _Client(OutscraperRequest("unused", "Pending", []))
@@ -341,7 +341,19 @@ def test_poll_retry_after_persistence_is_noop_without_provider_call() -> None:
         )
 
         assert client.poll_calls == []
-        assert store.events == []
+        assert store.events == [
+            (
+                "enqueue",
+                (
+                    {
+                        "job_type": "normalize_prospects",
+                        "tenant_id": str(TENANT_ID),
+                        "discovery_run_id": str(RUN_ID),
+                    },
+                    None,
+                ),
+            )
+        ]
 
     asyncio.run(scenario())
 
@@ -402,7 +414,7 @@ def test_poll_response_request_id_mismatch_fails_run_without_persisting_records(
     asyncio.run(scenario())
 
 
-def test_success_persists_every_record_and_stops_at_raw_persisted_status() -> None:
+def test_success_persists_every_record_then_enqueues_normalization() -> None:
     async def scenario() -> None:
         records: list[dict[str, object]] = [
             {"place_id": "place-1", "name": "Northside Plumbing"},
@@ -424,6 +436,7 @@ def test_success_persists_every_record_and_stops_at_raw_persisted_status() -> No
             "persist",
             "persist",
             "transition",
+            "enqueue",
         ]
         first, malformed = store.snapshots
         assert first.source_business_id == "place-1"
@@ -432,8 +445,63 @@ def test_success_persists_every_record_and_stops_at_raw_persisted_status() -> No
         assert malformed.status == "failed"
         assert malformed.outcome_reason == "missing_place_id"
         transition = store.events[-1][1]
+        if not isinstance(transition, dict):
+            transition = store.events[-2][1]
         assert isinstance(transition, dict)
         assert transition["to_status"] == "persisted"
+        queued, delay_until = store.events[-1][1]
+        assert queued == {
+            "job_type": "normalize_prospects",
+            "tenant_id": str(TENANT_ID),
+            "discovery_run_id": str(RUN_ID),
+        }
+        assert delay_until is None
+
+    asyncio.run(scenario())
+
+
+def test_success_maps_realistic_outscraper_fields_into_classification_columns() -> None:
+    async def scenario() -> None:
+        record = {
+            "place_id": "ChIJ-test",
+            "name": "Northside Plumbing",
+            "site": "https://facebook.com/northsideplumbing",
+            "phone": "+61 7 3000 0000",
+            "full_address": "100 Creek Street, Fortitude Valley QLD 4006",
+            "city": "Fortitude Valley",
+            "state": "Queensland",
+            "postal_code": "4006",
+            "category": "Plumber",
+            "subtypes": "Plumber, Drainage service",
+            "rating": 4.6,
+            "reviews": 42,
+            "business_status": "OPERATIONAL",
+            "location_link": "https://google.example/place",
+        }
+        store = _Store({"status": "polling", "source_request_id": "request-123"})
+        client = _Client(OutscraperRequest("request-123", "Success", [record]))
+
+        await poll_outscraper(
+            _payload(poll_count=2),
+            store=store,
+            queue=_Queue(store.events),
+            outscraper_client=client,
+            now=lambda: NOW,
+        )
+
+        snapshot = store.snapshots[0]
+        assert snapshot.primary_category == "Plumber"
+        assert snapshot.additional_categories == ("Plumber", "Drainage service")
+        assert snapshot.phone == "+61 7 3000 0000"
+        assert snapshot.full_address == "100 Creek Street, Fortitude Valley QLD 4006"
+        assert snapshot.locality == "Fortitude Valley"
+        assert snapshot.state == "Queensland"
+        assert snapshot.postcode == "4006"
+        assert snapshot.business_status == "OPERATIONAL"
+        assert str(snapshot.rating) == "4.6"
+        assert snapshot.review_count == 42
+        assert snapshot.google_profile_url == "https://google.example/place"
+        assert snapshot.source_website_url == "https://facebook.com/northsideplumbing"
 
     asyncio.run(scenario())
 
