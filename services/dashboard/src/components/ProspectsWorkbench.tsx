@@ -1,7 +1,7 @@
 "use client";
 
-import { Play, RefreshCw } from "lucide-react";
-import { useState, useTransition } from "react";
+import { Download, Play, RefreshCw } from "lucide-react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ProspectRunSummary, type ProspectRunView } from "./ProspectRunSummary";
 
@@ -16,11 +16,47 @@ type StartProspectRunAction = (
   formData: FormData,
 ) => Promise<ProspectRunActionState>;
 
+type ProspectReviewActionState = {
+  ok: boolean;
+  message: string;
+  prospectId?: string;
+};
+
+type RecordProspectReviewAction = (
+  previousState: ProspectReviewActionState,
+  formData: FormData,
+) => Promise<ProspectReviewActionState>;
+
+export type ProspectReviewMetrics = {
+  sampleCount: number;
+  routeASampleCount: number;
+  routeBSampleCount: number;
+  healthyRejectedSampleCount: number;
+  reviewedCount: number;
+  decisiveReviewCount: number;
+  missingReviewCount: number;
+  needsInvestigationCount: number;
+  eligibilityPrecision: number | null;
+  routePrecision: number | null;
+  usableYield: number | null;
+  routeableYield: number | null;
+  routeAYield: number | null;
+  routeBYield: number | null;
+  unexpectedFailureRate: number | null;
+  verifiedContactCount: number;
+  routeAVerifiedEmailMatchRate: number | null;
+  routeBVerifiedEmailMatchRate: number | null;
+  providerUsagePresent: boolean;
+  costReconciliationRequired: boolean;
+};
+
 export type ProspectEvidenceView = {
   id: string;
   businessName: string;
   route: string | null;
   status: string;
+  validationSample?: boolean;
+  validationCohort?: string | null;
   websiteOwnership: string | null;
   outcomeReason: string | null;
   sourceWebsiteUrl: string | null;
@@ -37,19 +73,28 @@ export type ProspectEvidenceView = {
   contactEmail?: string | null;
   contactEmailStatus?: string | null;
   contactEvidence?: unknown;
+  reviewDecision?: string | null;
+  correctedRoute?: string | null;
+  reviewNote?: string | null;
+  reviewedAt?: Date | string | null;
 };
 
 const INITIAL_ACTION_STATE: ProspectRunActionState = { ok: false, message: "" };
+const INITIAL_REVIEW_STATE: ProspectReviewActionState = { ok: false, message: "" };
 const ACTIVE_STATUSES = new Set(["created", "submitted", "polling", "processing"]);
 
 export function ProspectsWorkbench({
   initialRun,
   initialProspects = [],
+  reviewMetrics,
   startAction,
+  reviewAction,
 }: {
   initialRun: ProspectRunView | null;
   initialProspects?: ProspectEvidenceView[];
+  reviewMetrics?: ProspectReviewMetrics | null;
   startAction: StartProspectRunAction;
+  reviewAction?: RecordProspectReviewAction;
 }) {
   const router = useRouter();
   const [feedback, setFeedback] = useState<ProspectRunActionState>(INITIAL_ACTION_STATE);
@@ -115,8 +160,13 @@ export function ProspectsWorkbench({
 
       {initialRun ? (
         <>
-          <ProspectRunSummary run={initialRun} />
-          <ProspectEvidenceList prospects={initialProspects} />
+          <ProspectRunSummary run={initialRun} reviewMetrics={reviewMetrics ?? null} />
+          <ReviewGateSummary run={initialRun} metrics={reviewMetrics ?? null} />
+          <ProspectEvidenceList
+            run={initialRun}
+            prospects={initialProspects}
+            reviewAction={reviewAction}
+          />
         </>
       ) : (
         <div className="prospect-empty-state">
@@ -128,7 +178,98 @@ export function ProspectsWorkbench({
   );
 }
 
-function ProspectEvidenceList({ prospects }: { prospects: ProspectEvidenceView[] }) {
+function ReviewGateSummary({
+  run,
+  metrics,
+}: {
+  run: ProspectRunView;
+  metrics: ProspectReviewMetrics | null;
+}) {
+  if (!metrics) {
+    return (
+      <section className="prospect-run-summary" aria-label="Review gates">
+        <div className="prospect-section-heading">
+          <div>
+            <h2>Review gates</h2>
+            <p>Shadow review only. Manual validation metrics are pending.</p>
+          </div>
+        </div>
+        <div className="prospect-run-notice">Review metrics are not available yet.</div>
+      </section>
+    );
+  }
+  const gates = [
+    ["Eligibility precision", metrics.eligibilityPrecision, 0.9, "minimum"],
+    ["Route precision", metrics.routePrecision, 0.85, "minimum"],
+    ["Usable yield", metrics.usableYield, 0.7, "minimum"],
+    ["Routeable yield", metrics.routeableYield, 0.2, "minimum"],
+    ["Verified contacts", metrics.verifiedContactCount, 30, "count"],
+    ["Unexpected failures", metrics.unexpectedFailureRate, 0.05, "maximum"],
+  ] as const;
+  const blockers = [
+    metrics.missingReviewCount > 0 ? `${metrics.missingReviewCount} sample records still need review` : null,
+    metrics.needsInvestigationCount > 0 ? `${metrics.needsInvestigationCount} records need investigation` : null,
+    !metrics.providerUsagePresent ? "Apollo provider usage is missing" : null,
+    metrics.costReconciliationRequired ? "Cost reconciliation required" : null,
+    run.failureCode === "insufficient_sample" ? "Sample is insufficient for a passing result" : null,
+  ].filter(Boolean);
+
+  return (
+    <section className="prospect-run-summary" aria-label="Review gates">
+      <div className="prospect-section-heading">
+        <div>
+          <h2>Review gates</h2>
+          <p>Shadow review only. Export reviewed evidence for offline validation.</p>
+        </div>
+        <a className="btn btn-ghost" href={`/api/prospects/export?runId=${run.id}`}>
+          <Download size={14} aria-hidden="true" />
+          Export CSV
+        </a>
+      </div>
+      <div className="prospect-count-grid">
+        <div className="prospect-count">
+          <span>Sample</span>
+          <strong>{metrics.sampleCount}</strong>
+        </div>
+        <div className="prospect-count">
+          <span>Route A sample</span>
+          <strong>{metrics.routeASampleCount}</strong>
+        </div>
+        <div className="prospect-count">
+          <span>Route B sample</span>
+          <strong>{metrics.routeBSampleCount}</strong>
+        </div>
+        <div className="prospect-count">
+          <span>Healthy/rejected sample</span>
+          <strong>{metrics.healthyRejectedSampleCount}</strong>
+        </div>
+      </div>
+      <dl className="prospect-run-meta">
+        {gates.map(([label, value, threshold, mode]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{gateLabel(value, threshold, mode)}</dd>
+          </div>
+        ))}
+      </dl>
+      {blockers.length > 0 ? (
+        <div className="prospect-run-notice">{blockers.join("; ")}</div>
+      ) : (
+        <div className="prospect-action-feedback success">All review gates currently pass.</div>
+      )}
+    </section>
+  );
+}
+
+function ProspectEvidenceList({
+  run,
+  prospects,
+  reviewAction,
+}: {
+  run: ProspectRunView;
+  prospects: ProspectEvidenceView[];
+  reviewAction?: RecordProspectReviewAction;
+}) {
   if (prospects.length === 0) {
     return (
       <section className="prospect-evidence-list" aria-label="Prospect evidence">
@@ -194,6 +335,14 @@ function ProspectEvidenceList({ prospects }: { prospects: ProspectEvidenceView[]
               <dd>{contactEvidenceSummary(prospect.contactEvidence)}</dd>
             </div>
             <div>
+              <dt>Validation sample</dt>
+              <dd>{prospect.validationSample ? `Selected - ${cohortLabel(prospect.validationCohort)}` : "Not selected"}</dd>
+            </div>
+            <div>
+              <dt>Manual review</dt>
+              <dd>{manualReviewSummary(prospect)}</dd>
+            </div>
+            <div>
               <dt>Matched locations</dt>
               <dd>{matchedLocationCount(prospect)}</dd>
             </div>
@@ -206,9 +355,84 @@ function ProspectEvidenceList({ prospects }: { prospects: ProspectEvidenceView[]
               <dd>{evidenceSummary(prospect.ruleEvidence)}</dd>
             </div>
           </dl>
+          {prospect.validationSample && reviewAction ? (
+            <ManualReviewForm
+              runId={run.id}
+              prospect={prospect}
+              reviewAction={reviewAction}
+            />
+          ) : null}
         </article>
       ))}
     </section>
+  );
+}
+
+function ManualReviewForm({
+  runId,
+  prospect,
+  reviewAction,
+}: {
+  runId: string;
+  prospect: ProspectEvidenceView;
+  reviewAction: RecordProspectReviewAction;
+}) {
+  const [feedback, setFeedback] = useState<ProspectReviewActionState>(INITIAL_REVIEW_STATE);
+  const [isPending, startTransition] = useTransition();
+  const idempotencyKey = useMemo(() => browserUuid(), []);
+
+  function submit(formData: FormData) {
+    startTransition(async () => {
+      try {
+        const result = await reviewAction(INITIAL_REVIEW_STATE, formData);
+        setFeedback(result);
+      } catch (error) {
+        setFeedback({
+          ok: false,
+          message: error instanceof Error ? error.message : "Review could not be recorded.",
+        });
+      }
+    });
+  }
+
+  return (
+    <form className="prospect-review-form" action={submit}>
+      <input type="hidden" name="discoveryRunId" value={runId} />
+      <input type="hidden" name="prospectId" value={prospect.id} />
+      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+      <label>
+        Decision
+        <select name="decision" defaultValue="">
+          <option value="" disabled>Select decision</option>
+          <option value="correct">Correct</option>
+          <option value="wrong_route">Wrong route</option>
+          <option value="ineligible">Ineligible</option>
+          <option value="needs_investigation">Needs investigation</option>
+        </select>
+      </label>
+      <label>
+        Corrected route
+        <select name="correctedRoute" defaultValue="">
+          <option value="">Only for wrong route</option>
+          <option value="A">A</option>
+          <option value="B">B</option>
+          <option value="manual_review">Manual review</option>
+          <option value="healthy">Healthy</option>
+        </select>
+      </label>
+      <label>
+        Note
+        <textarea name="note" maxLength={1000} />
+      </label>
+      <button className="btn btn-primary" type="submit" disabled={isPending}>
+        {isPending ? "Recording..." : "Record review"}
+      </button>
+      {feedback.message ? (
+        <span className={feedback.ok ? "prospect-action-feedback success" : "prospect-action-feedback error"} role={feedback.ok ? "status" : "alert"}>
+          {feedback.message}
+        </span>
+      ) : null}
+    </form>
   );
 }
 
@@ -311,6 +535,54 @@ function contactEvidenceSummary(value: unknown) {
     typeof value.suppression === "string" ? `Suppression: ${value.suppression}` : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join("; ") : "No contact evidence";
+}
+
+function manualReviewSummary(prospect: ProspectEvidenceView) {
+  if (!prospect.reviewDecision) return "Not reviewed";
+  const parts = [
+    prospect.reviewDecision.replace(/_/g, " "),
+    prospect.correctedRoute ? `corrected to ${prospect.correctedRoute}` : null,
+    prospect.reviewedAt ? `reviewed ${formatDate(prospect.reviewedAt)}` : null,
+  ].filter(Boolean);
+  return parts.join(" - ");
+}
+
+function cohortLabel(value: string | null | undefined) {
+  if (value === "healthy_rejected") return "healthy/rejected";
+  return value ?? "unknown cohort";
+}
+
+function gateLabel(
+  value: number | null,
+  threshold: number,
+  mode: "minimum" | "maximum" | "count",
+) {
+  if (value === null) return "Incomplete";
+  const passes = mode === "maximum" ? value < threshold : value >= threshold;
+  const formatted = mode === "count" ? String(value) : formatPercent(value);
+  return `${formatted} ${passes ? "passes" : "fails"} ${mode === "maximum" ? "<" : ">="} ${
+    mode === "count" ? threshold : formatPercent(threshold)
+  }`;
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatDate(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? "unknown time" : date.toLocaleString("en-AU");
+}
+
+function browserUuid() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
+    const value = Math.floor(Math.random() * 16);
+    const nibble = token === "x" ? value : (value & 0x3) | 0x8;
+    return nibble.toString(16);
+  });
 }
 
 function ruleResultSummary(value: unknown) {

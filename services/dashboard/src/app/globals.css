@@ -401,6 +401,12 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .prospect-evidence-row dl div { min-width: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; }
 .prospect-evidence-row dt { color: var(--text-tertiary); font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0; }
 .prospect-evidence-row dd { margin: 0; overflow-wrap: anywhere; color: var(--text-primary); font-size: 11px; }
+.prospect-review-form { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(120px, 0.8fr) minmax(140px, 0.8fr) minmax(180px, 1.2fr) auto; gap: 8px; align-items: end; padding-top: 12px; border-top: 1px solid var(--border); }
+.prospect-review-form label { min-width: 0; display: grid; gap: 4px; color: var(--text-tertiary); font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0; }
+.prospect-review-form select, .prospect-review-form textarea { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-primary); font: inherit; font-size: 11px; }
+.prospect-review-form select { height: 32px; padding: 0 8px; }
+.prospect-review-form textarea { min-height: 32px; max-height: 92px; padding: 7px 8px; resize: vertical; }
+.prospect-review-form .prospect-action-feedback { grid-column: 1 / -1; }
 .prospect-empty-state, .prospect-route-error, .prospects-loading { min-height: 180px; padding: 32px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 7px; border: 1px dashed var(--border-strong); border-radius: var(--radius-md); color: var(--text-secondary); background: var(--bg-card); text-align: center; }
 .prospect-empty-state strong, .prospect-route-error strong { color: var(--text-primary); font-size: 13px; font-weight: 500; }
 .prospect-empty-state span, .prospect-route-error span, .prospects-loading { font-size: 11px; }
@@ -474,4 +480,5 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
   .prospect-count-grid, .prospect-loading-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .prospect-run-failure { grid-template-columns: 1fr; }
   .prospect-evidence-row { grid-template-columns: 1fr; }
+  .prospect-review-form { grid-template-columns: 1fr; }
 }

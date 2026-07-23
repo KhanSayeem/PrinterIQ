@@ -8,6 +8,8 @@ from decimal import Decimal
 from typing import Literal, Protocol, SupportsInt, cast
 from uuid import UUID
 
+from prospects.sampling import ValidationSampleMember
+
 QueueJobStatus = Literal["active", "completed", "failed", "dead"]
 DiscoveryRunStatus = Literal[
     "created",
@@ -169,6 +171,29 @@ class ProspectStore:
             self._connection,
             tenant_id=tenant_id,
             discovery_run_id=discovery_run_id,
+        )
+
+    async def list_prospects_for_shadow_review(
+        self, *, tenant_id: UUID, discovery_run_id: UUID
+    ) -> list[dict[str, object]]:
+        return await list_prospects_for_shadow_review(
+            self._connection,
+            tenant_id=tenant_id,
+            discovery_run_id=discovery_run_id,
+        )
+
+    async def apply_validation_sample(
+        self,
+        *,
+        tenant_id: UUID,
+        discovery_run_id: UUID,
+        members: tuple[ValidationSampleMember, ...],
+    ) -> dict[str, object]:
+        return await apply_validation_sample(
+            self._connection,
+            tenant_id=tenant_id,
+            discovery_run_id=discovery_run_id,
+            members=members,
         )
 
     async def apply_prospect_normalization(self, **values: object) -> dict[str, object]:
@@ -655,6 +680,87 @@ async def list_discovered_prospects(
         discovery_run_id,
     )
     return [dict(cast(Mapping[str, object], row)) for row in rows]
+
+
+async def list_prospects_for_shadow_review(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    discovery_run_id: UUID,
+) -> list[dict[str, object]]:
+    rows = await connection.fetch(
+        """
+        SELECT id, tenant_id, discovery_run_id, source, source_business_id,
+               business_name, normalized_name, primary_category,
+               additional_categories, phone, normalized_phone, full_address,
+               locality, state, postcode, latitude, longitude,
+               business_status, rating, review_count, google_profile_url,
+               source_website_url, normalized_domain, website_ownership,
+               duplicate_evidence, is_franchise, matched_location_count,
+               route, outcome_reason, status, validation_sample,
+               validation_cohort, created_at, updated_at
+        FROM business_prospects
+        WHERE tenant_id = $1
+          AND discovery_run_id = $2
+          AND lead_id IS NULL
+          AND status IN (
+            'normalized', 'assessed', 'contact_enriched', 'review_ready',
+            'held', 'rejected', 'failed'
+          )
+        ORDER BY created_at, id
+        """,
+        tenant_id,
+        discovery_run_id,
+    )
+    return [dict(cast(Mapping[str, object], row)) for row in rows]
+
+
+async def apply_validation_sample(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    discovery_run_id: UUID,
+    members: tuple[ValidationSampleMember, ...],
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        WITH selected(prospect_id, cohort) AS (
+          SELECT *
+          FROM UNNEST($3::uuid[], $4::text[])
+        ),
+        reset AS (
+          UPDATE business_prospects
+          SET validation_sample = FALSE,
+              validation_cohort = NULL,
+              updated_at = NOW()
+          WHERE tenant_id = $1
+            AND discovery_run_id = $2
+            AND validation_sample = TRUE
+          RETURNING id
+        ),
+        updated AS (
+          UPDATE business_prospects
+          SET validation_sample = TRUE,
+              validation_cohort = selected.cohort,
+              updated_at = NOW()
+          FROM selected
+          WHERE business_prospects.tenant_id = $1
+            AND business_prospects.discovery_run_id = $2
+            AND business_prospects.id = selected.prospect_id
+            AND business_prospects.lead_id IS NULL
+          RETURNING business_prospects.id
+        )
+        SELECT COUNT(*)::integer AS selected_count
+        FROM updated
+        """,
+        tenant_id,
+        discovery_run_id,
+        [member.prospect_id for member in members],
+        [member.cohort for member in members],
+    )
+    if result is None:
+        raise LookupError("Validation sample could not be applied")
+    return dict(cast(Mapping[str, object], result))
 
 
 async def apply_prospect_normalization(

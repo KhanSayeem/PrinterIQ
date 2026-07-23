@@ -4,12 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   failStaleActiveDiscoveryRunsForTenantMock,
   getDashboardTenantIdMock,
+  getProspectReviewMetricsMock,
   getLatestDiscoveryRunMock,
   listProspectEvidenceForRunMock,
   workbenchMock,
 } = vi.hoisted(() => ({
   failStaleActiveDiscoveryRunsForTenantMock: vi.fn(),
   getDashboardTenantIdMock: vi.fn(),
+  getProspectReviewMetricsMock: vi.fn(),
   getLatestDiscoveryRunMock: vi.fn(),
   listProspectEvidenceForRunMock: vi.fn(),
   workbenchMock: vi.fn(() => null),
@@ -18,6 +20,7 @@ const {
 vi.mock("@/auth/tenant", () => ({ getDashboardTenantId: getDashboardTenantIdMock }));
 vi.mock("@/db/queries", () => ({
   failStaleActiveDiscoveryRunsForTenant: failStaleActiveDiscoveryRunsForTenantMock,
+  getProspectReviewMetrics: getProspectReviewMetricsMock,
   getLatestDiscoveryRun: getLatestDiscoveryRunMock,
   listProspectEvidenceForRun: listProspectEvidenceForRunMock,
 }));
@@ -33,6 +36,7 @@ describe("ProspectsPage", () => {
     getDashboardTenantIdMock.mockReset();
     failStaleActiveDiscoveryRunsForTenantMock.mockReset().mockResolvedValue([]);
     getLatestDiscoveryRunMock.mockReset();
+    getProspectReviewMetricsMock.mockReset().mockResolvedValue(null);
     listProspectEvidenceForRunMock.mockReset().mockResolvedValue([]);
     workbenchMock.mockClear();
     getDashboardTenantIdMock.mockReturnValue("10000000-0000-0000-0000-000000000001");
@@ -57,6 +61,7 @@ describe("ProspectsPage", () => {
   it("loads prospect evidence for the latest run by tenant", async () => {
     getLatestDiscoveryRunMock.mockResolvedValue({ id: "run-1", status: "processing" });
     listProspectEvidenceForRunMock.mockResolvedValue([{ id: "prospect-1" }]);
+    getProspectReviewMetricsMock.mockResolvedValue({ sampleCount: 0 });
 
     render(await ProspectsPage());
 
@@ -64,10 +69,15 @@ describe("ProspectsPage", () => {
       tenantId: "10000000-0000-0000-0000-000000000001",
       discoveryRunId: "run-1",
     });
+    expect(getProspectReviewMetricsMock).toHaveBeenCalledWith({
+      tenantId: "10000000-0000-0000-0000-000000000001",
+      discoveryRunId: "run-1",
+    });
     expect(workbenchMock).toHaveBeenCalledWith(
       expect.objectContaining({
         initialRun: { id: "run-1", status: "processing" },
         initialProspects: [{ id: "prospect-1" }],
+        reviewMetrics: { sampleCount: 0 },
       }),
       undefined,
     );

@@ -1,5 +1,6 @@
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import {
   buildAiCostByModelQuery,
@@ -23,9 +24,12 @@ import {
   buildDeleteOperatorNoteQuery,
   buildCreateDiscoveryRunQuery,
   buildFailStaleActiveDiscoveryRunsQuery,
+  buildInsertManualProspectReviewQuery,
   buildLatestDiscoveryRunQuery,
   buildListProspectEvidenceForRunQuery,
   buildMarkDiscoveryRunFailedQuery,
+  buildProspectReviewExportRowsQuery,
+  buildProspectReviewMetricsQuery,
   normalizeWebsitePreview,
   normalizeLeadFilterCounts,
   normalizeLeadListPageMeta,
@@ -45,6 +49,11 @@ const discoveryQuerySpec = {
   region: "AU",
   totalLimit: 500,
 };
+const dialect = new PgDialect();
+
+function toRawSQL(query: { getSQL(): Parameters<typeof dialect.sqlToQuery>[0] }) {
+  return dialect.sqlToQuery(query.getSQL());
+}
 
 describe("dashboard lead queries", () => {
   it("scopes lead list queries by tenant_id and filters", () => {
@@ -429,6 +438,10 @@ describe("dashboard discovery run queries", () => {
     expect(query.sql).toContain("MAX(latest_prospect_contacts.created_at)");
     expect(query.sql).toContain('"prospect_contacts"."status"');
     expect(query.sql).toContain('"prospect_contacts"."match_evidence"');
+    expect(query.sql).toContain('"business_prospects"."validation_sample"');
+    expect(query.sql).toContain('"business_prospects"."validation_cohort"');
+    expect(query.sql).toContain("latest_prospect_assessments.review_decision");
+    expect(query.sql).toContain("latest_prospect_assessments.assessment_type = 'manual_review'");
     expect(query.sql).not.toContain('"prospect_contacts"."provider_payload"');
     expect(query.sql).not.toContain('join "leads"');
     expect(query.sql).not.toContain('join "outreach_sends"');
@@ -438,6 +451,73 @@ describe("dashboard discovery run queries", () => {
     expect(query.params).toContain("route-a-normalization-v1");
     expect(query.params).toContain("website-health-v1");
     expect(query.params).toContain("apollo");
+  });
+
+  it("inserts manual prospect review from a tenant-run sample target with idempotency", () => {
+    const statement = buildInsertManualProspectReviewQuery(db, {
+      tenantId,
+      discoveryRunId: "20000000-0000-0000-0000-000000000001",
+      prospectId: "30000000-0000-0000-0000-000000000001",
+      reviewerId: "40000000-0000-0000-0000-000000000001",
+      idempotencyKey: "50000000-0000-0000-0000-000000000001",
+      decision: "wrong_route",
+      correctedRoute: "A",
+      note: "Reviewed manually",
+    });
+    const query = toRawSQL(statement);
+
+    expect(query.sql).toContain("WITH target AS");
+    expect(query.sql).toContain('INSERT INTO "prospect_assessments"');
+    expect(query.sql).toContain('"business_prospects"."tenant_id" =');
+    expect(query.sql).toContain('"business_prospects"."discovery_run_id" =');
+    expect(query.sql).toContain('"business_prospects"."validation_sample" = TRUE');
+    expect(query.sql).toContain("ON CONFLICT (tenant_id, prospect_id, idempotency_key)");
+    expect(query.sql).toContain("WHERE assessment_type = 'manual_review'");
+    expect(query.sql).toContain("INNER JOIN target");
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain("40000000-0000-0000-0000-000000000001");
+    expect(query.params).toContain("50000000-0000-0000-0000-000000000001");
+    expect(query.params).not.toContain("browser-reviewer");
+  });
+
+  it("calculates review precision and yield gates from stored run and sample data", () => {
+    const statement = buildProspectReviewMetricsQuery(db, {
+      tenantId,
+      discoveryRunId: "20000000-0000-0000-0000-000000000001",
+    });
+    const query = toRawSQL(statement);
+
+    expect(query.sql).toContain("eligibilityPrecision");
+    expect(query.sql).toContain("routePrecision");
+    expect(query.sql).toContain("usableYield");
+    expect(query.sql).toContain("routeableYield");
+    expect(query.sql).toContain("unexpectedFailureRate");
+    expect(query.sql).toContain("verifiedContactCount");
+    expect(query.sql).toContain("providerUsagePresent");
+    expect(query.sql).toContain("costReconciliationRequired");
+    expect(query.sql).toContain("review_decision IN ('correct', 'wrong_route', 'ineligible')");
+    expect(query.sql).toContain("review_decision = 'needs_investigation'");
+    expect(query.sql).toContain("run.provider_usage ? 'apollo_contact_match'");
+    expect(query.params).toContain(tenantId);
+  });
+
+  it("exports only normalized review cohort fields without raw provider payloads", () => {
+    const statement = buildProspectReviewExportRowsQuery(db, {
+      tenantId,
+      discoveryRunId: "20000000-0000-0000-0000-000000000001",
+    });
+    const query = toRawSQL(statement);
+
+    expect(query.sql).toContain('"business_prospects"."validation_sample" = TRUE');
+    expect(query.sql).toContain('"business_prospects"."google_profile_url"');
+    expect(query.sql).toContain('"prospect_contacts"."email"');
+    expect(query.sql).toContain("manual.review_decision");
+    expect(query.sql).toContain("automated.total_score");
+    expect(query.sql).not.toContain("source_payload");
+    expect(query.sql).not.toContain("provider_payload");
+    expect(query.sql).not.toContain("raw_audit");
+    expect(query.sql).not.toContain("outreach_sends");
+    expect(query.params).toContain(tenantId);
   });
 
   it("marks only the tenant's created run failed after queue rejection", () => {

@@ -8,6 +8,7 @@ from uuid import UUID
 import pytest
 
 from db.queries import ProspectStore, SourceProspectStatus, SourceProspectUpsert
+from prospects.sampling import ValidationSampleMember
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 RUN_ID = UUID("20000000-0000-0000-0000-000000000001")
@@ -144,6 +145,68 @@ def test_list_discovered_prospects_includes_processed_siblings_for_replay_contex
         assert "WHERE tenant_id = $1" in query
         assert "AND discovery_run_id = $2" in query
         assert "status IN ('discovered', 'normalized', 'assessed', 'held', 'rejected')" in query
+
+    asyncio.run(scenario())
+
+
+def test_list_prospects_for_shadow_review_includes_terminal_review_states_without_leads() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection(row=[])
+
+        await ProspectStore(connection).list_prospects_for_shadow_review(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+        )
+
+        query = connection.queries[0]
+        assert "FROM business_prospects" in query
+        assert "WHERE tenant_id = $1" in query
+        assert "AND discovery_run_id = $2" in query
+        assert "AND lead_id IS NULL" in query
+        assert "'contact_enriched'" in query
+        assert "'review_ready'" in query
+        assert "'rejected'" in query
+        assert "'failed'" in query
+        assert "validation_sample" in query
+        assert "validation_cohort" in query
+        assert connection.args[0] == (TENANT_ID, RUN_ID)
+
+    asyncio.run(scenario())
+
+
+def test_apply_validation_sample_resets_and_persists_tenant_run_sample_membership() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection(row={"selected_count": 2})
+
+        result = await ProspectStore(connection).apply_validation_sample(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+            members=(
+                ValidationSampleMember(PROSPECT_ID, "A", "key-a"),
+                ValidationSampleMember(
+                    UUID("30000000-0000-0000-0000-000000000002"),
+                    "healthy_rejected",
+                    "key-h",
+                ),
+            ),
+        )
+
+        query = connection.queries[0]
+        assert result == {"selected_count": 2}
+        assert "WITH selected(prospect_id, cohort)" in query
+        assert "UPDATE business_prospects" in query
+        assert "validation_sample = FALSE" in query
+        assert "validation_sample = TRUE" in query
+        assert "validation_cohort = selected.cohort" in query
+        assert "business_prospects.tenant_id = $1" in query
+        assert "business_prospects.discovery_run_id = $2" in query
+        assert "business_prospects.lead_id IS NULL" in query
+        assert connection.args[0] == (
+            TENANT_ID,
+            RUN_ID,
+            [PROSPECT_ID, UUID("30000000-0000-0000-0000-000000000002")],
+            ["A", "healthy_rejected"],
+        )
 
     asyncio.run(scenario())
 

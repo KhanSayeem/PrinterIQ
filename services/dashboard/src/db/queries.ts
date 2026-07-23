@@ -84,6 +84,8 @@ export type ProspectEvidenceView = {
   businessName: string;
   route: string | null;
   status: string;
+  validationSample: boolean;
+  validationCohort: string | null;
   websiteOwnership: string | null;
   outcomeReason: string | null;
   sourceWebsiteUrl: string | null;
@@ -100,6 +102,72 @@ export type ProspectEvidenceView = {
   contactEmail: string | null;
   contactEmailStatus: string | null;
   contactEvidence: unknown;
+  reviewDecision: string | null;
+  correctedRoute: string | null;
+  reviewNote: string | null;
+  reviewedAt: Date | string | null;
+};
+
+export type ManualProspectReviewInput = {
+  tenantId: string;
+  discoveryRunId: string;
+  prospectId: string;
+  reviewerId: string;
+  idempotencyKey: string;
+  decision: "correct" | "wrong_route" | "ineligible" | "needs_investigation";
+  correctedRoute?: "A" | "B" | "manual_review" | "healthy";
+  note?: string;
+};
+
+export type ProspectReviewMetrics = {
+  sampleCount: number;
+  routeASampleCount: number;
+  routeBSampleCount: number;
+  healthyRejectedSampleCount: number;
+  reviewedCount: number;
+  decisiveReviewCount: number;
+  missingReviewCount: number;
+  needsInvestigationCount: number;
+  eligibilityPrecision: number | null;
+  routePrecision: number | null;
+  usableYield: number | null;
+  routeableYield: number | null;
+  routeAYield: number | null;
+  routeBYield: number | null;
+  unexpectedFailureRate: number | null;
+  verifiedContactCount: number;
+  routeAVerifiedEmailMatchRate: number | null;
+  routeBVerifiedEmailMatchRate: number | null;
+  providerUsagePresent: boolean;
+  costReconciliationRequired: boolean;
+};
+
+export type ProspectReviewExportRow = {
+  businessName: string;
+  normalizedName: string;
+  primaryCategory: string | null;
+  locality: string | null;
+  state: string | null;
+  postcode: string | null;
+  googleProfileUrl: string | null;
+  sourceWebsiteUrl: string | null;
+  normalizedDomain: string | null;
+  route: string | null;
+  status: string;
+  validationCohort: string | null;
+  outcomeReason: string | null;
+  totalScore: number | null;
+  contactStatus: string | null;
+  contactPersonName: string | null;
+  contactPersonTitle: string | null;
+  contactEmail: string | null;
+  contactEmailStatus: string | null;
+  reviewDecision: string | null;
+  correctedRoute: string | null;
+  reviewNote: string | null;
+  reviewedAt: Date | string | null;
+  prospectCreatedAt: Date | string;
+  prospectUpdatedAt: Date | string;
 };
 
 export type OperatorConversationInput = LeadIdentity & {
@@ -771,6 +839,8 @@ export function buildListProspectEvidenceForRunQuery(
       businessName: businessProspects.businessName,
       route: businessProspects.route,
       status: businessProspects.status,
+      validationSample: businessProspects.validationSample,
+      validationCohort: businessProspects.validationCohort,
       websiteOwnership: businessProspects.websiteOwnership,
       outcomeReason: businessProspects.outcomeReason,
       sourceWebsiteUrl: businessProspects.sourceWebsiteUrl,
@@ -787,6 +857,50 @@ export function buildListProspectEvidenceForRunQuery(
       contactEmail: prospectContacts.email,
       contactEmailStatus: prospectContacts.providerEmailStatus,
       contactEvidence: prospectContacts.matchEvidence,
+      reviewDecision: sql<string | null>`(
+        SELECT latest_prospect_assessments.review_decision
+        FROM prospect_assessments latest_prospect_assessments
+        WHERE latest_prospect_assessments.tenant_id = ${identity.tenantId}
+          AND latest_prospect_assessments.discovery_run_id = ${businessProspects.discoveryRunId}
+          AND latest_prospect_assessments.prospect_id = ${businessProspects.id}
+          AND latest_prospect_assessments.assessment_type = 'manual_review'
+        ORDER BY latest_prospect_assessments.created_at DESC,
+                 latest_prospect_assessments.id DESC
+        LIMIT 1
+      )`,
+      correctedRoute: sql<string | null>`(
+        SELECT latest_prospect_assessments.corrected_route
+        FROM prospect_assessments latest_prospect_assessments
+        WHERE latest_prospect_assessments.tenant_id = ${identity.tenantId}
+          AND latest_prospect_assessments.discovery_run_id = ${businessProspects.discoveryRunId}
+          AND latest_prospect_assessments.prospect_id = ${businessProspects.id}
+          AND latest_prospect_assessments.assessment_type = 'manual_review'
+        ORDER BY latest_prospect_assessments.created_at DESC,
+                 latest_prospect_assessments.id DESC
+        LIMIT 1
+      )`,
+      reviewNote: sql<string | null>`(
+        SELECT latest_prospect_assessments.review_note
+        FROM prospect_assessments latest_prospect_assessments
+        WHERE latest_prospect_assessments.tenant_id = ${identity.tenantId}
+          AND latest_prospect_assessments.discovery_run_id = ${businessProspects.discoveryRunId}
+          AND latest_prospect_assessments.prospect_id = ${businessProspects.id}
+          AND latest_prospect_assessments.assessment_type = 'manual_review'
+        ORDER BY latest_prospect_assessments.created_at DESC,
+                 latest_prospect_assessments.id DESC
+        LIMIT 1
+      )`,
+      reviewedAt: sql<Date | string | null>`(
+        SELECT latest_prospect_assessments.created_at
+        FROM prospect_assessments latest_prospect_assessments
+        WHERE latest_prospect_assessments.tenant_id = ${identity.tenantId}
+          AND latest_prospect_assessments.discovery_run_id = ${businessProspects.discoveryRunId}
+          AND latest_prospect_assessments.prospect_id = ${businessProspects.id}
+          AND latest_prospect_assessments.assessment_type = 'manual_review'
+        ORDER BY latest_prospect_assessments.created_at DESC,
+                 latest_prospect_assessments.id DESC
+        LIMIT 1
+      )`,
     })
     .from(businessProspects)
     .leftJoin(
@@ -825,6 +939,319 @@ export function buildListProspectEvidenceForRunQuery(
       ),
     )
     .orderBy(asc(businessProspects.businessName), asc(businessProspects.id));
+}
+
+export function buildInsertManualProspectReviewQuery(
+  db: DashboardDb,
+  input: ManualProspectReviewInput,
+) {
+  requireTenantId(input.tenantId);
+
+  return db.execute<{
+    id: string;
+    prospectId: string;
+    reviewDecision: string;
+    correctedRoute: string | null;
+    reviewNote: string | null;
+    createdAt: Date | string;
+  }>(sql`
+    WITH target AS (
+      SELECT
+        ${businessProspects.tenantId} AS tenant_id,
+        ${businessProspects.discoveryRunId} AS discovery_run_id,
+        ${businessProspects.id} AS prospect_id,
+        ${businessProspects.route} AS route
+      FROM ${businessProspects}
+      INNER JOIN ${discoveryRuns}
+        ON ${discoveryRuns.tenantId} = ${businessProspects.tenantId}
+       AND ${discoveryRuns.id} = ${businessProspects.discoveryRunId}
+       AND ${discoveryRuns.status} = 'review_ready'
+      WHERE ${businessProspects.tenantId} = ${input.tenantId}
+        AND ${businessProspects.discoveryRunId} = ${input.discoveryRunId}
+        AND ${businessProspects.id} = ${input.prospectId}
+        AND ${businessProspects.validationSample} = TRUE
+    ),
+    automated AS (
+      SELECT
+        ${prospectAssessments.totalScore} AS total_score,
+        ${prospectAssessments.categoryScores} AS category_scores,
+        ${prospectAssessments.ruleEvidence} AS rule_evidence
+      FROM ${prospectAssessments}
+      INNER JOIN target
+        ON target.tenant_id = ${prospectAssessments.tenantId}
+       AND target.discovery_run_id = ${prospectAssessments.discoveryRunId}
+       AND target.prospect_id = ${prospectAssessments.prospectId}
+      WHERE ${prospectAssessments.assessmentType} = 'automated'
+      ORDER BY ${prospectAssessments.createdAt} DESC,
+               ${prospectAssessments.id} DESC
+      LIMIT 1
+    ),
+    inserted AS (
+      INSERT INTO ${prospectAssessments} (
+        ${prospectAssessments.tenantId},
+        ${prospectAssessments.discoveryRunId},
+        ${prospectAssessments.prospectId},
+        ${prospectAssessments.assessmentType},
+        ${prospectAssessments.assessmentVersion},
+        ${prospectAssessments.eligible},
+        ${prospectAssessments.computedRoute},
+        ${prospectAssessments.totalScore},
+        ${prospectAssessments.categoryScores},
+        ${prospectAssessments.ruleEvidence},
+        ${prospectAssessments.reviewerId},
+        ${prospectAssessments.idempotencyKey},
+        ${prospectAssessments.reviewDecision},
+        ${prospectAssessments.correctedRoute},
+        ${prospectAssessments.reviewNote}
+      )
+      SELECT
+        target.tenant_id,
+        target.discovery_run_id,
+        target.prospect_id,
+        'manual_review',
+        'manual-review-v1',
+        CASE
+          WHEN ${input.decision} = 'ineligible' THEN FALSE
+          WHEN ${input.decision} = 'needs_investigation' THEN NULL
+          ELSE TRUE
+        END,
+        target.route,
+        automated.total_score,
+        COALESCE(automated.category_scores, '{}'::jsonb),
+        COALESCE(automated.rule_evidence, '{}'::jsonb),
+        ${input.reviewerId},
+        ${input.idempotencyKey},
+        ${input.decision},
+        ${input.correctedRoute ?? null},
+        ${input.note ?? null}
+      FROM target
+      LEFT JOIN automated ON TRUE
+      ON CONFLICT (tenant_id, prospect_id, idempotency_key)
+      WHERE assessment_type = 'manual_review'
+      DO NOTHING
+      RETURNING
+        ${prospectAssessments.id} AS "id",
+        ${prospectAssessments.prospectId} AS "prospectId",
+        ${prospectAssessments.reviewDecision} AS "reviewDecision",
+        ${prospectAssessments.correctedRoute} AS "correctedRoute",
+        ${prospectAssessments.reviewNote} AS "reviewNote",
+        ${prospectAssessments.createdAt} AS "createdAt"
+    )
+    SELECT * FROM inserted
+    UNION ALL
+    SELECT
+      existing.id AS "id",
+      existing.prospect_id AS "prospectId",
+      existing.review_decision AS "reviewDecision",
+      existing.corrected_route AS "correctedRoute",
+      existing.review_note AS "reviewNote",
+      existing.created_at AS "createdAt"
+    FROM prospect_assessments existing
+    INNER JOIN target
+      ON target.tenant_id = existing.tenant_id
+     AND target.discovery_run_id = existing.discovery_run_id
+     AND target.prospect_id = existing.prospect_id
+    WHERE existing.tenant_id = ${input.tenantId}
+      AND existing.prospect_id = ${input.prospectId}
+      AND existing.idempotency_key = ${input.idempotencyKey}
+      AND existing.assessment_type = 'manual_review'
+    LIMIT 1
+  `);
+}
+
+export function buildProspectReviewMetricsQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; discoveryRunId: string },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db.execute<ProspectReviewMetrics>(sql`
+    WITH run AS (
+      SELECT *
+      FROM ${discoveryRuns}
+      WHERE ${discoveryRuns.tenantId} = ${identity.tenantId}
+        AND ${discoveryRuns.id} = ${identity.discoveryRunId}
+    ),
+    sample AS (
+      SELECT
+        ${businessProspects.id},
+        ${businessProspects.validationCohort},
+        latest_manual_assessment.review_decision
+      FROM ${businessProspects}
+      LEFT JOIN LATERAL (
+        SELECT review_decision
+        FROM prospect_assessments
+        WHERE tenant_id = ${identity.tenantId}
+          AND discovery_run_id = ${businessProspects.discoveryRunId}
+          AND prospect_id = ${businessProspects.id}
+          AND assessment_type = 'manual_review'
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      ) latest_manual_assessment ON TRUE
+      WHERE ${businessProspects.tenantId} = ${identity.tenantId}
+        AND ${businessProspects.discoveryRunId} = ${identity.discoveryRunId}
+        AND ${businessProspects.validationSample} = TRUE
+    ),
+    prospect_counts AS (
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'failed')::integer AS failed_count
+      FROM ${businessProspects}
+      WHERE ${businessProspects.tenantId} = ${identity.tenantId}
+        AND ${businessProspects.discoveryRunId} = ${identity.discoveryRunId}
+    ),
+    verified_by_route AS (
+      SELECT
+        COUNT(DISTINCT ${prospectContacts.prospectId}) FILTER (
+          WHERE ${businessProspects.route} = 'A'
+        )::integer AS route_a_verified_contact_count,
+        COUNT(DISTINCT ${prospectContacts.prospectId}) FILTER (
+          WHERE ${businessProspects.route} = 'B'
+        )::integer AS route_b_verified_contact_count
+      FROM ${prospectContacts}
+      INNER JOIN ${businessProspects}
+        ON ${businessProspects.tenantId} = ${prospectContacts.tenantId}
+       AND ${businessProspects.id} = ${prospectContacts.prospectId}
+      WHERE ${prospectContacts.tenantId} = ${identity.tenantId}
+        AND ${businessProspects.discoveryRunId} = ${identity.discoveryRunId}
+        AND ${prospectContacts.status} = 'verified'
+    )
+    SELECT
+      COUNT(sample.id)::integer AS "sampleCount",
+      COUNT(sample.id) FILTER (WHERE sample.validation_cohort = 'A')::integer AS "routeASampleCount",
+      COUNT(sample.id) FILTER (WHERE sample.validation_cohort = 'B')::integer AS "routeBSampleCount",
+      COUNT(sample.id) FILTER (WHERE sample.validation_cohort = 'healthy_rejected')::integer AS "healthyRejectedSampleCount",
+      COUNT(sample.id) FILTER (WHERE sample.review_decision IS NOT NULL)::integer AS "reviewedCount",
+      COUNT(sample.id) FILTER (
+        WHERE sample.review_decision IN ('correct', 'wrong_route', 'ineligible')
+      )::integer AS "decisiveReviewCount",
+      COUNT(sample.id) FILTER (WHERE sample.review_decision IS NULL)::integer AS "missingReviewCount",
+      COUNT(sample.id) FILTER (WHERE sample.review_decision = 'needs_investigation')::integer AS "needsInvestigationCount",
+      CASE
+        WHEN COUNT(sample.id) FILTER (
+          WHERE sample.review_decision IN ('correct', 'wrong_route', 'ineligible')
+        ) = 0 THEN NULL
+        ELSE (
+          COUNT(sample.id) FILTER (WHERE sample.review_decision IN ('correct', 'wrong_route'))::numeric
+          / COUNT(sample.id) FILTER (
+            WHERE sample.review_decision IN ('correct', 'wrong_route', 'ineligible')
+          )
+        )
+      END AS "eligibilityPrecision",
+      CASE
+        WHEN COUNT(sample.id) FILTER (
+          WHERE sample.review_decision IN ('correct', 'wrong_route')
+        ) = 0 THEN NULL
+        ELSE (
+          COUNT(sample.id) FILTER (WHERE sample.review_decision = 'correct')::numeric
+          / COUNT(sample.id) FILTER (WHERE sample.review_decision IN ('correct', 'wrong_route'))
+        )
+      END AS "routePrecision",
+      CASE WHEN run.discovered_count = 0 THEN NULL ELSE run.usable_count::numeric / run.discovered_count END AS "usableYield",
+      CASE WHEN run.discovered_count = 0 THEN NULL ELSE (run.route_a_count + run.route_b_count)::numeric / run.discovered_count END AS "routeableYield",
+      CASE WHEN run.discovered_count = 0 THEN NULL ELSE run.route_a_count::numeric / run.discovered_count END AS "routeAYield",
+      CASE WHEN run.discovered_count = 0 THEN NULL ELSE run.route_b_count::numeric / run.discovered_count END AS "routeBYield",
+      CASE WHEN run.discovered_count = 0 THEN NULL ELSE prospect_counts.failed_count::numeric / run.discovered_count END AS "unexpectedFailureRate",
+      run.verified_contact_count::integer AS "verifiedContactCount",
+      CASE
+        WHEN run.route_a_count = 0 THEN NULL
+        ELSE verified_by_route.route_a_verified_contact_count::numeric / run.route_a_count
+      END AS "routeAVerifiedEmailMatchRate",
+      CASE
+        WHEN run.route_b_count = 0 THEN NULL
+        ELSE verified_by_route.route_b_verified_contact_count::numeric / run.route_b_count
+      END AS "routeBVerifiedEmailMatchRate",
+      (run.provider_usage ? 'apollo_contact_match') AS "providerUsagePresent",
+      COALESCE(
+        (run.provider_usage->'apollo_contact_match'->>'cost_reconciliation_required')::boolean,
+        TRUE
+      ) AS "costReconciliationRequired"
+    FROM run
+    CROSS JOIN prospect_counts
+    CROSS JOIN verified_by_route
+    LEFT JOIN sample ON TRUE
+    GROUP BY
+      run.discovered_count,
+      run.usable_count,
+      run.route_a_count,
+      run.route_b_count,
+      run.verified_contact_count,
+      run.provider_usage,
+      prospect_counts.failed_count,
+      verified_by_route.route_a_verified_contact_count,
+      verified_by_route.route_b_verified_contact_count
+  `);
+}
+
+export function buildProspectReviewExportRowsQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; discoveryRunId: string },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db.execute<ProspectReviewExportRow>(sql`
+    SELECT
+      ${businessProspects.businessName} AS "businessName",
+      ${businessProspects.normalizedName} AS "normalizedName",
+      ${businessProspects.primaryCategory} AS "primaryCategory",
+      ${businessProspects.locality} AS "locality",
+      ${businessProspects.state} AS "state",
+      ${businessProspects.postcode} AS "postcode",
+      ${businessProspects.googleProfileUrl} AS "googleProfileUrl",
+      ${businessProspects.sourceWebsiteUrl} AS "sourceWebsiteUrl",
+      ${businessProspects.normalizedDomain} AS "normalizedDomain",
+      ${businessProspects.route} AS "route",
+      ${businessProspects.status} AS "status",
+      ${businessProspects.validationCohort} AS "validationCohort",
+      ${businessProspects.outcomeReason} AS "outcomeReason",
+      automated.total_score AS "totalScore",
+      ${prospectContacts.status} AS "contactStatus",
+      ${prospectContacts.personName} AS "contactPersonName",
+      ${prospectContacts.personTitle} AS "contactPersonTitle",
+      ${prospectContacts.email} AS "contactEmail",
+      ${prospectContacts.providerEmailStatus} AS "contactEmailStatus",
+      manual.review_decision AS "reviewDecision",
+      manual.corrected_route AS "correctedRoute",
+      manual.review_note AS "reviewNote",
+      manual.created_at AS "reviewedAt",
+      ${businessProspects.createdAt} AS "prospectCreatedAt",
+      ${businessProspects.updatedAt} AS "prospectUpdatedAt"
+    FROM ${businessProspects}
+    LEFT JOIN LATERAL (
+      SELECT total_score
+      FROM prospect_assessments
+      WHERE tenant_id = ${identity.tenantId}
+        AND discovery_run_id = ${businessProspects.discoveryRunId}
+        AND prospect_id = ${businessProspects.id}
+        AND assessment_type = 'automated'
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    ) automated ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT review_decision, corrected_route, review_note, created_at
+      FROM prospect_assessments
+      WHERE tenant_id = ${identity.tenantId}
+        AND discovery_run_id = ${businessProspects.discoveryRunId}
+        AND prospect_id = ${businessProspects.id}
+        AND assessment_type = 'manual_review'
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    ) manual ON TRUE
+    LEFT JOIN ${prospectContacts}
+      ON ${prospectContacts.tenantId} = ${identity.tenantId}
+     AND ${prospectContacts.prospectId} = ${businessProspects.id}
+     AND ${prospectContacts.provider} = 'apollo'
+     AND ${prospectContacts.createdAt} = (
+       SELECT MAX(latest_prospect_contacts.created_at)
+       FROM prospect_contacts latest_prospect_contacts
+       WHERE latest_prospect_contacts.tenant_id = ${identity.tenantId}
+         AND latest_prospect_contacts.prospect_id = ${businessProspects.id}
+         AND latest_prospect_contacts.provider = 'apollo'
+     )
+    WHERE ${businessProspects.tenantId} = ${identity.tenantId}
+      AND ${businessProspects.discoveryRunId} = ${identity.discoveryRunId}
+      AND ${businessProspects.validationSample} = TRUE
+    ORDER BY ${businessProspects.validationCohort}, ${businessProspects.businessName}, ${businessProspects.id}
+  `);
 }
 
 export function buildFailStaleActiveDiscoveryRunsQuery(
@@ -959,6 +1386,34 @@ export async function listProspectEvidenceForRun(identity: {
 }) {
   const db = getDb();
   return buildListProspectEvidenceForRunQuery(db, identity);
+}
+
+export async function insertManualProspectReview(input: ManualProspectReviewInput) {
+  const db = getDb();
+  const rows = await buildInsertManualProspectReviewQuery(db, input);
+  const review = rows[0];
+  if (!review) {
+    throw new Error("Prospect review target not found for tenant/run sample");
+  }
+  return review;
+}
+
+export async function getProspectReviewMetrics(identity: {
+  tenantId: string;
+  discoveryRunId: string;
+}): Promise<ProspectReviewMetrics | null> {
+  const db = getDb();
+  const rows = await buildProspectReviewMetricsQuery(db, identity);
+  const row = rows[0];
+  return row ? normalizeProspectReviewMetrics(row) : null;
+}
+
+export async function listProspectReviewExportRows(identity: {
+  tenantId: string;
+  discoveryRunId: string;
+}) {
+  const db = getDb();
+  return buildProspectReviewExportRowsQuery(db, identity);
 }
 
 export async function markDiscoveryRunFailed(input: MarkDiscoveryRunFailedInput) {
@@ -1252,6 +1707,31 @@ function toNullableNumber(value: unknown) {
   if (value === null || value === undefined) return null;
   const parsed = toNumber(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeProspectReviewMetrics(row: ProspectReviewMetrics): ProspectReviewMetrics {
+  return {
+    sampleCount: toNumber(row.sampleCount),
+    routeASampleCount: toNumber(row.routeASampleCount),
+    routeBSampleCount: toNumber(row.routeBSampleCount),
+    healthyRejectedSampleCount: toNumber(row.healthyRejectedSampleCount),
+    reviewedCount: toNumber(row.reviewedCount),
+    decisiveReviewCount: toNumber(row.decisiveReviewCount),
+    missingReviewCount: toNumber(row.missingReviewCount),
+    needsInvestigationCount: toNumber(row.needsInvestigationCount),
+    eligibilityPrecision: toNullableNumber(row.eligibilityPrecision),
+    routePrecision: toNullableNumber(row.routePrecision),
+    usableYield: toNullableNumber(row.usableYield),
+    routeableYield: toNullableNumber(row.routeableYield),
+    routeAYield: toNullableNumber(row.routeAYield),
+    routeBYield: toNullableNumber(row.routeBYield),
+    unexpectedFailureRate: toNullableNumber(row.unexpectedFailureRate),
+    verifiedContactCount: toNumber(row.verifiedContactCount),
+    routeAVerifiedEmailMatchRate: toNullableNumber(row.routeAVerifiedEmailMatchRate),
+    routeBVerifiedEmailMatchRate: toNullableNumber(row.routeBVerifiedEmailMatchRate),
+    providerUsagePresent: row.providerUsagePresent === true,
+    costReconciliationRequired: row.costReconciliationRequired !== false,
+  };
 }
 
 function normalizeLeadListRow<T extends { weaknesses: unknown }>(row: T) {

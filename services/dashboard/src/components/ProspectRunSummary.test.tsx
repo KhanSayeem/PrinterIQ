@@ -71,4 +71,28 @@ describe("ProspectRunSummary", () => {
     expect(screen.getByText("Request timed out")).toBeInTheDocument();
     expect(screen.getByText("120")).toBeInTheDocument();
   });
+
+  it("keeps review precision incomplete when provider usage is missing", () => {
+    render(
+      <ProspectRunSummary
+        run={{ ...run, providerUsage: {} }}
+        reviewMetrics={{
+          eligibilityPrecision: null,
+          routePrecision: null,
+          usableYield: null,
+          routeableYield: null,
+          routeAYield: null,
+          routeBYield: null,
+          unexpectedFailureRate: null,
+          routeAVerifiedEmailMatchRate: null,
+          routeBVerifiedEmailMatchRate: null,
+          providerUsagePresent: false,
+          costReconciliationRequired: true,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Provider usage missing")).toBeInTheDocument();
+    expect(screen.getAllByText("Incomplete").length).toBeGreaterThanOrEqual(2);
+  });
 });

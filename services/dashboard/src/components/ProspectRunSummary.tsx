@@ -15,6 +15,20 @@ export type ProspectRunView = {
   updatedAt: Date | string;
 };
 
+export type ProspectReviewMetricsView = {
+  eligibilityPrecision: number | null;
+  routePrecision: number | null;
+  usableYield: number | null;
+  routeableYield: number | null;
+  routeAYield: number | null;
+  routeBYield: number | null;
+  unexpectedFailureRate: number | null;
+  routeAVerifiedEmailMatchRate: number | null;
+  routeBVerifiedEmailMatchRate: number | null;
+  providerUsagePresent: boolean;
+  costReconciliationRequired: boolean;
+};
+
 const RUN_LABELS: Record<string, string> = {
   created: "Created",
   submitted: "Submitted",
@@ -41,7 +55,13 @@ function formatTimestamp(value: Date | string) {
   return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString("en-AU");
 }
 
-export function ProspectRunSummary({ run }: { run: ProspectRunView }) {
+export function ProspectRunSummary({
+  run,
+  reviewMetrics,
+}: {
+  run: ProspectRunView;
+  reviewMetrics?: ProspectReviewMetricsView | null;
+}) {
   const apolloMatch = apolloContactMatch(run.providerUsage);
   const counts = [
     ["Discovered", run.discoveredCount],
@@ -114,7 +134,19 @@ export function ProspectRunSummary({ run }: { run: ProspectRunView }) {
         </div>
         <div>
           <dt>Cost status</dt>
-          <dd>{apolloMatch.costReconciliationRequired ? "Cost reconciliation required" : "Reconciled"}</dd>
+          <dd>{costStatus(apolloMatch.costReconciliationRequired, reviewMetrics)}</dd>
+        </div>
+        <div>
+          <dt>Eligibility precision</dt>
+          <dd>{formatRateValue(reviewMetrics?.eligibilityPrecision ?? null)}</dd>
+        </div>
+        <div>
+          <dt>Route precision</dt>
+          <dd>{formatRateValue(reviewMetrics?.routePrecision ?? null)}</dd>
+        </div>
+        <div>
+          <dt>Routeable yield</dt>
+          <dd>{formatRateValue(reviewMetrics?.routeableYield ?? null)}</dd>
         </div>
       </dl>
     </section>
@@ -135,6 +167,23 @@ function apolloContactMatch(providerUsage: unknown) {
 
 function formatRate(value: number | null) {
   return value === null ? "No routed contacts yet" : `${Math.round(value * 100)}%`;
+}
+
+function formatRateValue(value: number | null) {
+  return value === null ? "Incomplete" : `${Math.round(value * 100)}%`;
+}
+
+function costStatus(
+  runCostReconciliationRequired: boolean,
+  metrics: ProspectReviewMetricsView | null | undefined,
+) {
+  if (metrics && !metrics.providerUsagePresent) {
+    return "Provider usage missing";
+  }
+  if (metrics) {
+    return metrics.costReconciliationRequired ? "Cost reconciliation required" : "Reconciled";
+  }
+  return runCostReconciliationRequired ? "Cost reconciliation required" : "Reconciled";
 }
 
 function numberOrZero(value: unknown) {
