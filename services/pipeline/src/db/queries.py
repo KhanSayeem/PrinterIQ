@@ -184,6 +184,9 @@ class ProspectStore:
     async def upsert_prospect_assessment(self, **values: object) -> dict[str, object]:
         return await upsert_prospect_assessment(self._connection, **values)
 
+    async def apply_prospect_assessment_result(self, **values: object) -> dict[str, object]:
+        return await apply_prospect_assessment_result(self._connection, **values)
+
     async def refresh_discovery_run_aggregates(
         self, tenant_id: UUID, discovery_run_id: UUID
     ) -> dict[str, object]:
@@ -688,21 +691,23 @@ async def upsert_prospect_assessment(
         """
         INSERT INTO prospect_assessments (
           tenant_id, discovery_run_id, prospect_id, assessment_type,
-          assessment_version, eligible, computed_route, rule_evidence,
-          forced_route_reason
+          assessment_version, eligible, computed_route, total_score,
+          category_scores, rule_evidence, forced_route_reason
         )
-        VALUES ($1, $2, $3, 'automated', $4, $5, $6, $7::jsonb, $8)
+        VALUES ($1, $2, $3, 'automated', $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
         ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)
         WHERE assessment_type = 'automated'
         DO UPDATE SET
           eligible = EXCLUDED.eligible,
           computed_route = EXCLUDED.computed_route,
+          total_score = EXCLUDED.total_score,
+          category_scores = EXCLUDED.category_scores,
           rule_evidence = EXCLUDED.rule_evidence,
           forced_route_reason = EXCLUDED.forced_route_reason
         RETURNING id, tenant_id, discovery_run_id, prospect_id,
                   assessment_type, assessment_version, eligible,
-                  computed_route, rule_evidence, forced_route_reason,
-                  created_at
+                  computed_route, total_score, category_scores, rule_evidence,
+                  forced_route_reason, created_at
         """,
         values["tenant_id"],
         values["discovery_run_id"],
@@ -710,11 +715,87 @@ async def upsert_prospect_assessment(
         values["assessment_version"],
         values["eligible"],
         values.get("computed_route"),
+        values.get("total_score"),
+        json.dumps(dict(cast(Mapping[str, object], values.get("category_scores", {})))),
         json.dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
         values.get("forced_route_reason"),
     )
     if result is None:
         raise LookupError("Prospect assessment could not be upserted")
+    return dict(cast(Mapping[str, object], result))
+
+
+async def apply_prospect_assessment_result(
+    connection: DatabaseConnection,
+    **values: object,
+) -> dict[str, object]:
+    result = await connection.fetchrow(
+        """
+        WITH assessed AS (
+          UPDATE business_prospects
+          SET route = $4,
+              status = $5,
+              outcome_reason = $6,
+              website_ownership = $7,
+              normalized_domain = $8,
+              source_payload = $9::jsonb,
+              updated_at = NOW()
+          WHERE tenant_id = $1
+            AND discovery_run_id = $2
+            AND id = $3
+            AND status = 'normalized'
+            AND website_ownership = 'owned'
+            AND route IS NULL
+            AND lead_id IS NULL
+          RETURNING id, tenant_id, discovery_run_id, source, source_business_id,
+                    business_name, normalized_name, normalized_phone,
+                    normalized_domain, website_ownership, duplicate_evidence,
+                    is_franchise, matched_location_count, route, status,
+                    outcome_reason, updated_at
+        ),
+        assessment AS (
+          INSERT INTO prospect_assessments (
+            tenant_id, discovery_run_id, prospect_id, assessment_type,
+            assessment_version, eligible, computed_route, total_score,
+            category_scores, rule_evidence, forced_route_reason
+          )
+          SELECT tenant_id, discovery_run_id, id, 'automated',
+                 $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16
+          FROM assessed
+          ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)
+          WHERE assessment_type = 'automated'
+          DO UPDATE SET
+            eligible = EXCLUDED.eligible,
+            computed_route = EXCLUDED.computed_route,
+            total_score = EXCLUDED.total_score,
+            category_scores = EXCLUDED.category_scores,
+            rule_evidence = EXCLUDED.rule_evidence,
+            forced_route_reason = EXCLUDED.forced_route_reason
+          RETURNING id AS assessment_id
+        )
+        SELECT assessed.*, assessment.assessment_id
+        FROM assessed
+        CROSS JOIN assessment
+        """,
+        values["tenant_id"],
+        values["discovery_run_id"],
+        values["prospect_id"],
+        values["route"],
+        values["status"],
+        values["outcome_reason"],
+        values["website_ownership"],
+        values.get("normalized_domain"),
+        json.dumps(dict(cast(Mapping[str, object], values["source_payload"]))),
+        values["assessment_version"],
+        values["eligible"],
+        values.get("computed_route"),
+        values.get("total_score"),
+        json.dumps(dict(cast(Mapping[str, object], values.get("category_scores", {})))),
+        json.dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
+        values.get("forced_route_reason"),
+    )
+    if result is None:
+        raise LookupError("Prospect assessment target not found for tenant/run")
     return dict(cast(Mapping[str, object], result))
 
 

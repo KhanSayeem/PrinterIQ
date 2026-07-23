@@ -193,6 +193,8 @@ def test_upsert_prospect_assessment_is_tenant_scoped_and_idempotent() -> None:
             assessment_version="route-a-normalization-v1",
             eligible=True,
             computed_route="A",
+            total_score=None,
+            category_scores={},
             rule_evidence={"website": {"ownership": "social"}},
             forced_route_reason="no_owned_website",
         )
@@ -201,12 +203,66 @@ def test_upsert_prospect_assessment_is_tenant_scoped_and_idempotent() -> None:
         assert result == row
         assert "INSERT INTO prospect_assessments" in query
         assert "tenant_id, discovery_run_id, prospect_id" in query
+        assert "total_score" in query
+        assert "category_scores" in query
         assert "ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)" in query
         assert "WHERE assessment_type = 'automated'" in query
         assert connection.args[0][:3] == (TENANT_ID, RUN_ID, PROSPECT_ID)
-        assert json.loads(str(connection.args[0][6])) == {
+        assert json.loads(str(connection.args[0][7])) == {}
+        assert json.loads(str(connection.args[0][8])) == {
             "website": {"ownership": "social"}
         }
+
+    asyncio.run(scenario())
+
+
+def test_apply_prospect_assessment_result_is_atomic_and_tenant_scoped() -> None:
+    async def scenario() -> None:
+        row = {
+            "id": PROSPECT_ID,
+            "tenant_id": TENANT_ID,
+            "assessment_id": UUID("40000000-0000-0000-0000-000000000001"),
+        }
+        connection = RecordingConnection(row=row)
+
+        result = await ProspectStore(connection).apply_prospect_assessment_result(
+            tenant_id=TENANT_ID,
+            discovery_run_id=RUN_ID,
+            prospect_id=PROSPECT_ID,
+            route="B",
+            status="assessed",
+            outcome_reason="website_health_low",
+            website_ownership="owned",
+            normalized_domain="northside.example",
+            source_payload={"website_audit": {"final_url": "https://northside.example"}},
+            assessment_version="website-health-v1",
+            eligible=True,
+            computed_route="B",
+            total_score=59,
+            category_scores={"technical_mobile": 25},
+            rule_evidence={"scoring": {"total_score": 59}},
+            forced_route_reason=None,
+        )
+
+        query = connection.queries[0]
+        assert result == row
+        assert "WITH assessed AS" in query
+        assert "UPDATE business_prospects" in query
+        assert "AND status = 'normalized'" in query
+        assert "AND website_ownership = 'owned'" in query
+        assert "AND route IS NULL" in query
+        assert "AND lead_id IS NULL" in query
+        assert "INSERT INTO prospect_assessments" in query
+        assert "total_score" in query
+        assert "category_scores" in query
+        assert "ON CONFLICT (tenant_id, discovery_run_id, prospect_id, assessment_version)" in query
+        assert "SELECT assessed.*, assessment.assessment_id" in query
+        assert connection.args[0][:3] == (TENANT_ID, RUN_ID, PROSPECT_ID)
+        assert json.loads(str(connection.args[0][8])) == {
+            "website_audit": {"final_url": "https://northside.example"}
+        }
+        assert json.loads(str(connection.args[0][13])) == {"technical_mobile": 25}
+        assert json.loads(str(connection.args[0][14])) == {"scoring": {"total_score": 59}}
 
     asyncio.run(scenario())
 

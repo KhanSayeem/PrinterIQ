@@ -198,10 +198,14 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
         async def normalize_worker(payload: dict[str, object], **deps: object) -> None:
             calls.append(("normalize", payload, deps))
 
+        async def assess_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("assess", payload, deps))
+
         prospect_store = object()
         queue = object()
         outscraper_client = object()
         website_resolver = object()
+        website_auditor = object()
         handlers = build_production_pipeline_handlers(
             lead_repository=object(),
             pipeline_store=object(),
@@ -212,9 +216,11 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
             instantly_client=object(),
             outscraper_client=outscraper_client,
             prospect_website_resolver=website_resolver,
+            prospect_website_auditor=website_auditor,
             start_discovery_worker=start_worker,
             poll_outscraper_worker=poll_worker,
             normalize_prospects_worker=normalize_worker,
+            assess_prospects_worker=assess_worker,
             rate_limits={},
         )
         payload = {
@@ -225,6 +231,7 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
         await handlers[JobType.START_DISCOVERY](payload)
         await handlers[JobType.POLL_OUTSCRAPER](payload)
         await handlers[JobType.NORMALIZE_PROSPECTS](payload)
+        await handlers[JobType.ASSESS_PROSPECTS](payload)
 
         assert calls == [
             (
@@ -252,6 +259,15 @@ def test_production_handlers_inject_discovery_dependencies() -> None:
                     "store": prospect_store,
                     "queue": queue,
                     "website_resolver": website_resolver,
+                },
+            ),
+            (
+                "assess",
+                payload,
+                {
+                    "store": prospect_store,
+                    "queue": queue,
+                    "website_auditor": website_auditor,
                 },
             ),
         ]
@@ -654,8 +670,12 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
         async def poll_worker(payload: dict[str, object], **deps: object) -> None:
             calls.append(("poll", deps["store"], deps["queue"], deps["outscraper_client"]))
 
+        async def assess_worker(payload: dict[str, object], **deps: object) -> None:
+            calls.append(("assess", deps["store"], deps["queue"], deps["website_auditor"]))
+
         queue = object()
         client = object()
+        website_auditor = object()
         handlers = build_pooled_production_pipeline_handlers(
             pool=FakePool(),
             queue=queue,
@@ -663,8 +683,10 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
             claude_client=object(),
             instantly_client=object(),
             outscraper_client=client,
+            prospect_website_auditor=website_auditor,
             start_discovery_worker=start_worker,
             poll_outscraper_worker=poll_worker,
+            assess_prospects_worker=assess_worker,
             rate_limits={},
         )
         payload = {
@@ -674,11 +696,16 @@ def test_pooled_production_handlers_register_discovery_with_connection_scoped_st
 
         await handlers[JobType.START_DISCOVERY](payload)
         await handlers[JobType.POLL_OUTSCRAPER](payload)
+        await handlers[JobType.ASSESS_PROSPECTS](payload)
 
-        assert [call[0] for call in calls] == ["start", "poll"]
+        assert [call[0] for call in calls] == ["start", "poll", "assess"]
         assert calls[0][1].__class__.__name__ == "ProspectStore"
         assert calls[0][1] is not calls[1][1]
-        assert all(call[2] is queue and call[3] is client for call in calls)
+        assert calls[1][1] is not calls[2][1]
+        assert all(call[2] is queue for call in calls)
+        assert calls[0][3] is client
+        assert calls[1][3] is client
+        assert calls[2][3] is website_auditor
 
     asyncio.run(scenario())
 

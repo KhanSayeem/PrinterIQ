@@ -28,6 +28,9 @@ export type ProspectEvidenceView = {
   matchedLocationCount: number;
   duplicateEvidence: unknown;
   ruleEvidence: unknown;
+  totalScore?: number | null;
+  categoryScores?: unknown;
+  forcedRouteReason?: string | null;
 };
 
 const INITIAL_ACTION_STATE: ProspectRunActionState = { ok: false, message: "" };
@@ -161,6 +164,22 @@ function ProspectEvidenceList({ prospects }: { prospects: ProspectEvidenceView[]
               <dd>{websiteReason(prospect.ruleEvidence) ?? prospect.outcomeReason ?? "No reason"}</dd>
             </div>
             <div>
+              <dt>Website score</dt>
+              <dd>{scoreSummary(prospect)}</dd>
+            </div>
+            <div>
+              <dt>Score categories</dt>
+              <dd>{categoryScoreSummary(prospect.categoryScores ?? scoringEvidence(prospect.ruleEvidence).category_scores)}</dd>
+            </div>
+            <div>
+              <dt>Rule results</dt>
+              <dd>{ruleResultSummary(prospect.ruleEvidence)}</dd>
+            </div>
+            <div>
+              <dt>Forced route</dt>
+              <dd>{prospect.forcedRouteReason ?? forcedReason(prospect.ruleEvidence) ?? "None"}</dd>
+            </div>
+            <div>
               <dt>Matched locations</dt>
               <dd>{matchedLocationCount(prospect)}</dd>
             </div>
@@ -214,6 +233,56 @@ function websiteReason(value: unknown) {
   if (!isRecord(value)) return null;
   const website = isRecord(value.website) ? value.website : {};
   return typeof website.reason === "string" ? website.reason : null;
+}
+
+function scoreSummary(prospect: ProspectEvidenceView) {
+  const score = typeof prospect.totalScore === "number"
+    ? prospect.totalScore
+    : scoringEvidence(prospect.ruleEvidence).total_score;
+  return typeof score === "number" ? `${score}/100` : "Not scored";
+}
+
+function categoryScoreSummary(value: unknown) {
+  if (!isRecord(value)) return "None";
+  const labels: Record<string, string> = {
+    technical_mobile: "Technical/mobile",
+    conversion_path: "Conversion",
+    local_relevance: "Local",
+    trust_credibility: "Trust",
+    service_completeness: "Services",
+  };
+  const parts = Object.entries(labels)
+    .map(([key, label]) => {
+      const score = value[key];
+      return typeof score === "number" ? `${label}: ${score}` : null;
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : "None";
+}
+
+function forcedReason(value: unknown) {
+  const reason = scoringEvidence(value).forced_route_reason;
+  return typeof reason === "string" && reason ? reason : null;
+}
+
+function ruleResultSummary(value: unknown) {
+  const rules = scoringEvidence(value).rules;
+  if (!isRecord(rules)) return "None";
+  const parts = Object.values(rules).flatMap((category) => {
+    if (!isRecord(category)) return [];
+    return Object.entries(category).flatMap(([key, rule]) => {
+      if (!isRecord(rule)) return [];
+      const points = typeof rule.points === "number" ? rule.points : 0;
+      const available = typeof rule.available === "number" ? rule.available : 0;
+      return `${key}: ${points}/${available}`;
+    });
+  });
+  return parts.length > 0 ? parts.join("; ") : "None";
+}
+
+function scoringEvidence(value: unknown) {
+  if (!isRecord(value)) return {};
+  return isRecord(value.scoring) ? value.scoring : {};
 }
 
 function matchedLocationCount(prospect: ProspectEvidenceView) {

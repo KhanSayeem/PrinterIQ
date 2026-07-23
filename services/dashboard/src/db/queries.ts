@@ -30,6 +30,7 @@ export const PIPELINE_STATUSES = [
 
 const ACTIVE_PIPELINE_STATUSES = PIPELINE_STATUSES.filter((status) => status !== "archived");
 const ROUTE_A_ASSESSMENT_VERSION = "route-a-normalization-v1";
+const WEBSITE_HEALTH_ASSESSMENT_VERSION = "website-health-v1";
 
 export const REVENUE_PERIODS = ["today", "week", "month"] as const;
 
@@ -89,6 +90,9 @@ export type ProspectEvidenceView = {
   matchedLocationCount: number;
   duplicateEvidence: unknown;
   ruleEvidence: unknown;
+  totalScore: number | null;
+  categoryScores: unknown;
+  forcedRouteReason: string | null;
 };
 
 export type OperatorConversationInput = LeadIdentity & {
@@ -767,6 +771,9 @@ export function buildListProspectEvidenceForRunQuery(
       matchedLocationCount: businessProspects.matchedLocationCount,
       duplicateEvidence: businessProspects.duplicateEvidence,
       ruleEvidence: prospectAssessments.ruleEvidence,
+      totalScore: prospectAssessments.totalScore,
+      categoryScores: prospectAssessments.categoryScores,
+      forcedRouteReason: prospectAssessments.forcedRouteReason,
     })
     .from(businessProspects)
     .leftJoin(
@@ -776,7 +783,11 @@ export function buildListProspectEvidenceForRunQuery(
         eq(prospectAssessments.discoveryRunId, businessProspects.discoveryRunId),
         eq(prospectAssessments.prospectId, businessProspects.id),
         eq(prospectAssessments.assessmentType, "automated"),
-        eq(prospectAssessments.assessmentVersion, ROUTE_A_ASSESSMENT_VERSION),
+        sql`${prospectAssessments.assessmentVersion} = CASE
+          WHEN ${businessProspects.route} IN ('B', 'manual_review', 'healthy')
+          THEN ${WEBSITE_HEALTH_ASSESSMENT_VERSION}
+          ELSE ${ROUTE_A_ASSESSMENT_VERSION}
+        END`,
       ),
     )
     .where(

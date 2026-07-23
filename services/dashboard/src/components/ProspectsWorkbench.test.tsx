@@ -175,7 +175,7 @@ describe("ProspectsWorkbench", () => {
     expect(screen.getAllByText(socialProviderRecord.site).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Matched locations")).toBeInTheDocument();
     expect(screen.getByText("Duplicate evidence")).toBeInTheDocument();
-    expect(screen.getByText("None")).toBeInTheDocument();
+    expect(screen.getAllByText("None").length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows exact hold eligibility and duplicate evidence", () => {
@@ -219,5 +219,67 @@ describe("ProspectsWorkbench", () => {
     expect(screen.getByText("Duplicate evidence")).toBeInTheDocument();
     expect(screen.getByText(/domain: place-2/i)).toBeInTheDocument();
     expect(screen.getByText(/name_address: place-3/i)).toBeInTheDocument();
+  });
+
+  it("shows Route B score, category subtotals, and forced-route evidence", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={{ ...activeRun, status: "processing", routeBCount: 1, usableCount: 1 }}
+        initialProspects={[
+          {
+            id: "prospect-1",
+            businessName: "Northside Plumbing",
+            route: "B",
+            status: "assessed",
+            websiteOwnership: "owned",
+            outcomeReason: "no_usable_contact_path",
+            sourceWebsiteUrl: "https://northside.example",
+            normalizedDomain: "northside.example",
+            matchedLocationCount: 1,
+            duplicateEvidence: {},
+            totalScore: 85,
+            categoryScores: {
+              technical_mobile: 25,
+              conversion_path: 10,
+              local_relevance: 20,
+              trust_credibility: 15,
+              service_completeness: 15,
+            },
+            forcedRouteReason: "no_usable_contact_path",
+            ruleEvidence: {
+              website: {
+                ownership: "owned",
+                reason: "owned_website",
+                final_url: "https://northside.example",
+              },
+              scoring: {
+                version: "website-health-v1",
+                total_score: 85,
+                forced_route_reason: "no_usable_contact_path",
+                rules: {
+                  technical_mobile: {
+                    reachable_final_page: { points: 5, available: 5 },
+                  },
+                  conversion_path: {
+                    prominent_tap_to_call: { points: 0, available: 8 },
+                  },
+                },
+              },
+            },
+          },
+        ]}
+        startAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Route B").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Website score")).toBeInTheDocument();
+    expect(screen.getByText("85/100")).toBeInTheDocument();
+    expect(screen.getByText(/Technical\/mobile: 25/i)).toBeInTheDocument();
+    expect(screen.getByText("Rule results")).toBeInTheDocument();
+    expect(screen.getByText(/reachable_final_page: 5\/5/i)).toBeInTheDocument();
+    expect(screen.getByText(/prominent_tap_to_call: 0\/8/i)).toBeInTheDocument();
+    expect(screen.getAllByText("no_usable_contact_path").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/Instantly/i)).not.toBeInTheDocument();
   });
 });
