@@ -109,6 +109,15 @@ class Apollo:
         return self.result
 
 
+@dataclass
+class Queue:
+    payloads: list[dict[str, object]] = field(default_factory=list)
+
+    async def enqueue(self, payload: dict[str, object], *, delay_until: object = None) -> None:
+        del delay_until
+        self.payloads.append(payload)
+
+
 def verified_contact(**overrides: object) -> ApolloVerifiedContact:
     values = {
         "organization_id": "org-1",
@@ -158,6 +167,33 @@ def test_verified_route_b_contact_is_stored_and_aggregates_refresh() -> None:
         assert write["match_evidence"]["strategy"] == APOLLO_STRATEGY_VERSION
         assert len(str(write["input_fingerprint"])) == 64
         assert store.refreshed == [(TENANT_ID, RUN_ID)]
+
+    asyncio.run(scenario())
+
+
+def test_contact_enrichment_enqueues_shadow_review_without_lead_activation() -> None:
+    async def scenario() -> None:
+        store = Store(prospects=[prospect()])
+        queue = Queue()
+
+        await enrich_prospect_contacts(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            apollo_client=Apollo(result=None),
+            queue=queue,
+            lead_repository=object(),
+            preview_queue=object(),
+            outreach_queue=object(),
+            instantly_client=object(),
+        )
+
+        assert queue.payloads == [
+            {
+                "job_type": "prepare_shadow_review",
+                "tenant_id": str(TENANT_ID),
+                "discovery_run_id": str(RUN_ID),
+            }
+        ]
 
     asyncio.run(scenario())
 

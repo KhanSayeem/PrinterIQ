@@ -177,6 +177,96 @@ describe("ProspectsWorkbench", () => {
     expect(screen.queryByText(/must not render/i)).not.toBeInTheDocument();
   });
 
+  it("shows review gates, sample counts, and export without promotion controls", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={{ ...activeRun, status: "review_ready", failureCode: "insufficient_sample" }}
+        reviewMetrics={{
+          sampleCount: 44,
+          routeASampleCount: 4,
+          routeBSampleCount: 20,
+          healthyRejectedSampleCount: 20,
+          reviewedCount: 40,
+          decisiveReviewCount: 39,
+          missingReviewCount: 4,
+          needsInvestigationCount: 1,
+          eligibilityPrecision: 0.92,
+          routePrecision: 0.87,
+          usableYield: 0.71,
+          routeableYield: 0.21,
+          routeAYield: 0.1,
+          routeBYield: 0.11,
+          unexpectedFailureRate: 0.02,
+          verifiedContactCount: 31,
+          routeAVerifiedEmailMatchRate: 0.3,
+          routeBVerifiedEmailMatchRate: 0.36,
+          providerUsagePresent: true,
+          costReconciliationRequired: true,
+        }}
+        startAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: /export csv/i })).toHaveAttribute(
+      "href",
+      "/api/prospects/export?runId=run-1",
+    );
+    expect(screen.getByText("44")).toBeInTheDocument();
+    expect(screen.getByText("Route A sample")).toBeInTheDocument();
+    expect(screen.getByText(/92% passes >= 90%/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sample is insufficient for a passing result/i)).toBeInTheDocument();
+    expect(screen.queryByText(/promote/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Instantly/i)).not.toBeInTheDocument();
+  });
+
+  it("shows review controls only for selected validation sample prospects", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={{ ...activeRun, status: "review_ready" }}
+        initialProspects={[
+          {
+            id: "prospect-1",
+            businessName: "Northside Plumbing",
+            route: "A",
+            status: "review_ready",
+            validationSample: true,
+            validationCohort: "A",
+            websiteOwnership: "social",
+            outcomeReason: "no_owned_website",
+            sourceWebsiteUrl: null,
+            normalizedDomain: null,
+            matchedLocationCount: 1,
+            duplicateEvidence: {},
+            ruleEvidence: {},
+          },
+          {
+            id: "prospect-2",
+            businessName: "Southside Plumbing",
+            route: "B",
+            status: "contact_enriched",
+            validationSample: false,
+            validationCohort: null,
+            websiteOwnership: "owned",
+            outcomeReason: null,
+            sourceWebsiteUrl: null,
+            normalizedDomain: null,
+            matchedLocationCount: 1,
+            duplicateEvidence: {},
+            ruleEvidence: {},
+          },
+        ]}
+        startAction={vi.fn()}
+        reviewAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Selected - A")).toBeInTheDocument();
+    expect(screen.getByText("Not selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /record review/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/decision/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/corrected route/i)).toBeInTheDocument();
+  });
+
   it("shows actionable contact configuration failures", () => {
     render(
       <ProspectsWorkbench

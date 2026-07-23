@@ -61,6 +61,15 @@ class ApolloOwnerResolver(Protocol):
     ) -> ApolloVerifiedContact | None: ...
 
 
+class ProspectQueue(Protocol):
+    async def enqueue(
+        self,
+        payload: dict[str, object],
+        *,
+        delay_until: object = None,
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class EnrichProspectContactsResult:
     enriched_count: int
@@ -71,6 +80,7 @@ async def enrich_prospect_contacts(
     *,
     store: ProspectContactStore,
     apollo_client: ApolloOwnerResolver | None,
+    queue: ProspectQueue | None = None,
     lead_repository: object | None = None,
     preview_queue: object | None = None,
     outreach_queue: object | None = None,
@@ -210,6 +220,14 @@ async def enrich_prospect_contacts(
         enriched_count += 1
 
     await store.refresh_discovery_run_aggregates(tenant_id, run_id)
+    if queue is not None:
+        await queue.enqueue(
+            {
+                "job_type": "prepare_shadow_review",
+                "tenant_id": str(tenant_id),
+                "discovery_run_id": str(run_id),
+            }
+        )
     return EnrichProspectContactsResult(enriched_count=enriched_count)
 
 
