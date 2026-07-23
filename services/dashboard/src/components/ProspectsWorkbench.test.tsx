@@ -1,4 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProspectsWorkbench } from "./ProspectsWorkbench";
 
@@ -20,6 +22,12 @@ const activeRun = {
   createdAt: "2026-07-22T08:00:00.000Z",
   updatedAt: "2026-07-22T08:00:00.000Z",
 };
+const socialProviderRecord = JSON.parse(
+  readFileSync(
+    path.resolve(process.cwd(), "../pipeline/tests/fixtures/route_a_social_provider_record.json"),
+    "utf-8",
+  ),
+) as { name: string; site: string };
 
 describe("ProspectsWorkbench", () => {
   beforeEach(() => refresh.mockReset());
@@ -124,6 +132,50 @@ describe("ProspectsWorkbench", () => {
     expect(screen.queryByText(/campaign/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/promote/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Instantly/i)).not.toBeInTheDocument();
+  });
+
+  it("renders visible Route A evidence from the persisted provider social fixture", () => {
+    render(
+      <ProspectsWorkbench
+        initialRun={{ ...activeRun, status: "processing", routeACount: 1, usableCount: 1 }}
+        initialProspects={[
+          {
+            id: "prospect-1",
+            businessName: socialProviderRecord.name,
+            route: "A",
+            status: "assessed",
+            websiteOwnership: "social",
+            outcomeReason: "no_owned_website",
+            sourceWebsiteUrl: socialProviderRecord.site,
+            normalizedDomain: "facebook.com",
+            matchedLocationCount: 1,
+            duplicateEvidence: {},
+            ruleEvidence: {
+              eligibility: {
+                status: "assessed",
+                reason: "no_owned_website",
+                matched_location_count: 1,
+                duplicate_evidence: {},
+              },
+              website: {
+                ownership: "social",
+                reason: "no_owned_website",
+                final_url: socialProviderRecord.site,
+              },
+            },
+          },
+        ]}
+        startAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(socialProviderRecord.name)).toBeInTheDocument();
+    expect(screen.getAllByText("Route A").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Social profile")).toBeInTheDocument();
+    expect(screen.getAllByText(socialProviderRecord.site).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Matched locations")).toBeInTheDocument();
+    expect(screen.getByText("Duplicate evidence")).toBeInTheDocument();
+    expect(screen.getByText("None")).toBeInTheDocument();
   });
 
   it("shows exact hold eligibility and duplicate evidence", () => {

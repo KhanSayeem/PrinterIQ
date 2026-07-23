@@ -154,6 +154,19 @@ def test_normalizers_create_stable_replay_identities() -> None:
         ),
         (
             prospect(
+                locality="Fernvale",
+                postcode="4306",
+                full_address="Fernvale QLD 4306",
+            ),
+            NormalizationDecision(
+                status="rejected",
+                route=None,
+                website_ownership=None,
+                reason="outside_region",
+            ),
+        ),
+        (
+            prospect(
                 locality="Brisbane",
                 state="California",
                 postcode="94005",

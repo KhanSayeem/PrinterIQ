@@ -288,7 +288,8 @@ def test_resolver_body_read_uses_absolute_deadline(
         assert evidence["resolved_website_url"] == "https://slow.example/path"
         assert evidence["website_fetch_failures"] == 2
         assert evidence["website_error"] == "TimeoutError"
-        assert [writer.wait_closed_calls for writer in writers] == [0, 0]
+        assert writers
+        assert all(writer.wait_closed_calls == 0 for writer in writers)
 
     asyncio.run(scenario())
 

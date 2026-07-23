@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from math import ceil
+from pathlib import Path
 from uuid import UUID
 
 from clients.prospect_website_resolver import (
     DEFAULT_RETRY_DELAY_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
 )
-from workers.discover_prospects import DISCOVERY_TOTAL_LIMIT
+from workers.discover_prospects import DISCOVERY_TOTAL_LIMIT, _source_snapshot
 from workers.normalize_prospects import (
     MAX_WEBSITE_RESOLUTION_CONCURRENCY,
     normalize_prospects,
@@ -18,6 +21,9 @@ from workers.normalize_prospects import (
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 RUN_ID = UUID("20000000-0000-0000-0000-000000000001")
+SOCIAL_PROVIDER_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "route_a_social_provider_record.json"
+)
 
 
 def prospect(**overrides: object) -> dict[str, object]:
@@ -138,6 +144,66 @@ def test_social_only_record_is_assessed_route_a_and_shadow_pipeline_stops() -> N
                 "discovery_run_id": str(RUN_ID),
             }
         ]
+
+    asyncio.run(scenario())
+
+
+def test_persisted_provider_social_fixture_normalizes_to_visible_route_a_evidence() -> None:
+    async def scenario() -> None:
+        record = json.loads(SOCIAL_PROVIDER_FIXTURE.read_text(encoding="utf-8"))
+        snapshot = _source_snapshot(
+            record,
+            tenant_id=TENANT_ID,
+            run_id=RUN_ID,
+            now=datetime(2026, 7, 23, 0, 0, tzinfo=UTC),
+            raw_retention_days=30,
+        )
+        store = Store(
+            prospects=[
+                prospect(
+                    source_business_id=snapshot.source_business_id,
+                    business_name=snapshot.business_name,
+                    primary_category=snapshot.primary_category,
+                    additional_categories=snapshot.additional_categories,
+                    phone=snapshot.phone,
+                    full_address=snapshot.full_address,
+                    locality=snapshot.locality,
+                    state=snapshot.state,
+                    postcode=snapshot.postcode,
+                    business_status=snapshot.business_status,
+                    rating=snapshot.rating,
+                    review_count=snapshot.review_count,
+                    source_website_url=snapshot.source_website_url,
+                    source_payload=snapshot.source_payload,
+                )
+            ]
+        )
+
+        await normalize_prospects(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            queue=Queue(),
+        )
+
+        dashboard_view = {
+            "businessName": store.updates[0]["normalized_name"],
+            "route": store.updates[0]["route"],
+            "status": store.updates[0]["status"],
+            "websiteOwnership": store.updates[0]["website_ownership"],
+            "outcomeReason": store.updates[0]["outcome_reason"],
+            "sourceWebsiteUrl": snapshot.source_website_url,
+            "normalizedDomain": store.updates[0]["normalized_domain"],
+            "matchedLocationCount": store.updates[0]["matched_location_count"],
+            "duplicateEvidence": store.updates[0]["duplicate_evidence"],
+            "ruleEvidence": store.assessments[0]["rule_evidence"],
+        }
+
+        assert dashboard_view["route"] == "A"
+        assert dashboard_view["status"] == "assessed"
+        assert dashboard_view["websiteOwnership"] == "social"
+        assert dashboard_view["outcomeReason"] == "no_owned_website"
+        assert dashboard_view["sourceWebsiteUrl"] == record["site"]
+        assert dashboard_view["ruleEvidence"]["website"]["final_url"] == record["site"]
 
     asyncio.run(scenario())
 
@@ -321,7 +387,7 @@ def test_name_address_only_duplicates_are_held_for_review() -> None:
     asyncio.run(scenario())
 
 
-def test_unexpected_resolver_exception_becomes_inaccessible_route_a_evidence() -> None:
+def test_unexpected_resolver_exception_becomes_held_resolver_error_evidence() -> None:
     class BrokenResolver:
         async def resolve(self, url: str) -> dict[str, object]:
             assert url == "https://northside.example"
@@ -337,11 +403,12 @@ def test_unexpected_resolver_exception_becomes_inaccessible_route_a_evidence() -
             website_resolver=BrokenResolver(),
         )
 
-        assert store.updates[0]["status"] == "assessed"
-        assert store.updates[0]["route"] == "A"
-        assert store.updates[0]["website_ownership"] == "inaccessible"
-        assert store.updates[0]["source_payload"]["website_fetch_failures"] == 2
-        assert store.assessments[0]["rule_evidence"]["website"]["ownership"] == "inaccessible"
+        assert store.updates[0]["status"] == "held"
+        assert store.updates[0]["route"] is None
+        assert store.updates[0]["outcome_reason"] == "resolver_error"
+        assert store.updates[0]["source_payload"]["website_fetch_failures"] == 1
+        assert store.updates[0]["source_payload"]["website_error"] == "resolver_exception"
+        assert store.assessments[0]["eligible"] is False
 
     asyncio.run(scenario())
 
@@ -393,7 +460,10 @@ def test_website_resolution_is_concurrent_before_duplicate_context() -> None:
 
 def test_resolution_concurrency_keeps_full_batch_under_stale_lease_budget() -> None:
     stale_lease_seconds = 10 * 60
-    worst_case_attempt_window = (DEFAULT_TIMEOUT_SECONDS * 2) + DEFAULT_RETRY_DELAY_SECONDS
+    worst_case_attempt_window = (
+        2 * (DEFAULT_TIMEOUT_SECONDS + DEFAULT_TIMEOUT_SECONDS)
+        + DEFAULT_RETRY_DELAY_SECONDS
+    )
     worst_case_full_batch_seconds = (
         ceil(DISCOVERY_TOTAL_LIMIT / MAX_WEBSITE_RESOLUTION_CONCURRENCY)
         * worst_case_attempt_window

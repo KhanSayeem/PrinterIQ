@@ -21,7 +21,7 @@ from prospects.normalization import (
 )
 
 ASSESSMENT_VERSION = "route-a-normalization-v1"
-MAX_WEBSITE_RESOLUTION_CONCURRENCY = 25
+MAX_WEBSITE_RESOLUTION_CONCURRENCY = 50
 
 
 class NormalizeProspectsError(RuntimeError):
@@ -208,8 +208,9 @@ async def _with_website_evidence(
     except Exception as error:
         evidence = {
             "resolved_website_url": prospect.source_website_url,
-            "website_fetch_failures": 2,
-            "website_error": f"resolver_exception:{error.__class__.__name__}",
+            "website_fetch_failures": 1,
+            "website_error": "resolver_exception",
+            "website_error_detail": error.__class__.__name__,
         }
     payload = merge_website_evidence(prospect.source_payload, evidence)
     return _replace_source_payload(prospect, payload)

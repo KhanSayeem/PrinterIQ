@@ -41,7 +41,7 @@ APPROVED_LOCALITIES = {
 GREATER_BRISBANE_POSTCODE_RANGES = (
     (4000, 4184),
     (4205, 4207),
-    (4300, 4306),
+    (4300, 4305),
     (4500, 4521),
 )
 QUEENSLAND_STATES = {"qld", "queensland"}
@@ -179,6 +179,8 @@ def classify_prospect(
         return _reject("outside_region")
     if _is_known_franchise(prospect):
         return _hold("franchise")
+    if _string_value(prospect.source_payload, "website_error") == "resolver_exception":
+        return _hold("resolver_error")
     if matched_location_count > 3:
         return _hold("too_many_locations")
     if ambiguous_duplicate:
