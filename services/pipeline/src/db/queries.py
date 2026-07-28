@@ -41,25 +41,6 @@ _RUN_PREDECESSORS: dict[DiscoveryRunStatus, tuple[str, ...]] = {
 }
 
 
-def _jsonb_dumps(value: object) -> str:
-    return json.dumps(_strip_postgres_nuls(value))
-
-
-def _strip_postgres_nuls(value: object) -> object:
-    if isinstance(value, str):
-        return value.replace("\x00", "")
-    if isinstance(value, Mapping):
-        return {
-            str(key).replace("\x00", ""): _strip_postgres_nuls(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, tuple):
-        return [_strip_postgres_nuls(item) for item in value]
-    if isinstance(value, list):
-        return [_strip_postgres_nuls(item) for item in value]
-    return value
-
-
 class DatabaseConnection(Protocol):
     async def fetch(self, query: str, *args: object) -> list[object]:
         """Run a query and return all rows."""
@@ -599,7 +580,7 @@ async def transition_discovery_run(
         to_status,
         predecessors,
         source_request_id,
-        None if provider_usage is None else _jsonb_dumps(dict(provider_usage)),
+        None if provider_usage is None else json.dumps(dict(provider_usage)),
         failure_code,
         failure_detail,
         discovered_count,
@@ -661,7 +642,7 @@ async def upsert_source_prospect(
         prospect.source_business_id,
         prospect.business_name,
         getattr(prospect, "primary_category", None),
-        _jsonb_dumps(list(getattr(prospect, "additional_categories", ()))),
+        json.dumps(list(getattr(prospect, "additional_categories", ()))),
         getattr(prospect, "phone", None),
         getattr(prospect, "full_address", None),
         getattr(prospect, "locality", None),
@@ -674,7 +655,7 @@ async def upsert_source_prospect(
         getattr(prospect, "review_count", None),
         getattr(prospect, "google_profile_url", None),
         getattr(prospect, "source_website_url", None),
-        _jsonb_dumps(dict(prospect.source_payload)),
+        json.dumps(dict(prospect.source_payload)),
         getattr(prospect, "source_payload_expires_at", None),
         prospect.status,
         prospect.outcome_reason,
@@ -834,7 +815,7 @@ async def apply_prospect_normalization(
         values.get("normalized_phone"),
         values.get("normalized_domain"),
         values.get("website_ownership"),
-        _jsonb_dumps(dict(cast(Mapping[str, object], values["duplicate_evidence"]))),
+        json.dumps(dict(cast(Mapping[str, object], values["duplicate_evidence"]))),
         values["is_franchise"],
         values["matched_location_count"],
         values.get("route"),
@@ -879,8 +860,8 @@ async def upsert_prospect_assessment(
         values["eligible"],
         values.get("computed_route"),
         values.get("total_score"),
-        _jsonb_dumps(dict(cast(Mapping[str, object], values.get("category_scores", {})))),
-        _jsonb_dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
+        json.dumps(dict(cast(Mapping[str, object], values.get("category_scores", {})))),
+        json.dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
         values.get("forced_route_reason"),
     )
     if result is None:
@@ -948,13 +929,13 @@ async def apply_prospect_assessment_result(
         values["outcome_reason"],
         values["website_ownership"],
         values.get("normalized_domain"),
-        _jsonb_dumps(dict(cast(Mapping[str, object], values["source_payload"]))),
+        json.dumps(dict(cast(Mapping[str, object], values["source_payload"]))),
         values["assessment_version"],
         values["eligible"],
         values.get("computed_route"),
         values.get("total_score"),
-        _jsonb_dumps(dict(cast(Mapping[str, object], values.get("category_scores", {})))),
-        _jsonb_dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
+        json.dumps(dict(cast(Mapping[str, object], values.get("category_scores", {})))),
+        json.dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
         values.get("forced_route_reason"),
     )
     if result is None:
@@ -1110,10 +1091,10 @@ async def apply_prospect_contact_result(
         values.get("provider_email_status"),
         values.get("credits_consumed"),
         values["status"],
-        _jsonb_dumps(dict(cast(Mapping[str, object], values["match_evidence"]))),
+        json.dumps(dict(cast(Mapping[str, object], values["match_evidence"]))),
         None
         if values.get("provider_payload") is None
-        else _jsonb_dumps(dict(cast(Mapping[str, object], values["provider_payload"]))),
+        else json.dumps(dict(cast(Mapping[str, object], values["provider_payload"]))),
     )
     if result is None:
         raise LookupError("Prospect contact target not found for tenant/run")
@@ -1180,17 +1161,17 @@ async def apply_prospect_normalization_with_assessment(
         values.get("normalized_phone"),
         values.get("normalized_domain"),
         values.get("website_ownership"),
-        _jsonb_dumps(dict(cast(Mapping[str, object], values["duplicate_evidence"]))),
+        json.dumps(dict(cast(Mapping[str, object], values["duplicate_evidence"]))),
         values["is_franchise"],
         values["matched_location_count"],
         values.get("route"),
         values["status"],
         values["outcome_reason"],
-        _jsonb_dumps(dict(cast(Mapping[str, object], values["source_payload"]))),
+        json.dumps(dict(cast(Mapping[str, object], values["source_payload"]))),
         values["assessment_version"],
         values["eligible"],
         values.get("computed_route"),
-        _jsonb_dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
+        json.dumps(dict(cast(Mapping[str, object], values["rule_evidence"]))),
         values.get("forced_route_reason"),
     )
     if result is None:
@@ -1590,8 +1571,8 @@ async def insert_enrichment(
         enrichment.lighthouse_mobile_score,
         enrichment.cms_detected,
         enrichment.tech_source,
-        _jsonb_dumps(enrichment.weaknesses),
-        _jsonb_dumps(enrichment.raw_audit),
+        json.dumps(enrichment.weaknesses),
+        json.dumps(enrichment.raw_audit),
     )
     if isinstance(raw_id, UUID):
         return raw_id
@@ -1794,7 +1775,7 @@ async def insert_website_preview(
         preview.template_used,
         preview.preview_slug,
         preview.preview_url,
-        _jsonb_dumps(preview.personalisation_data),
+        json.dumps(preview.personalisation_data),
         preview.prompt_version,
         preview.cost_usd,
     )
@@ -2174,7 +2155,7 @@ async def _create_queue_job_for_lead(
         insert.job_type,
         insert.attempt_count,
         insert.max_attempts,
-        _jsonb_dumps(dict(insert.payload)),
+        json.dumps(dict(insert.payload)),
         insert.recover_stale_active,
     )
 
@@ -2236,7 +2217,7 @@ async def _create_queue_job_without_lead(
         insert.job_type,
         insert.attempt_count,
         insert.max_attempts,
-        _jsonb_dumps(dict(insert.payload)),
+        json.dumps(dict(insert.payload)),
         insert.recover_stale_active,
     )
 

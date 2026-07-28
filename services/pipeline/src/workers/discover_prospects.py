@@ -391,7 +391,7 @@ def _source_snapshot(
         primary_category=_string_field(record, "category"),
         additional_categories=_string_list_field(record.get("subtypes")),
         phone=_string_field(record, "phone"),
-        full_address=_string_field(record, "full_address") or _string_field(record, "address"),
+        full_address=_string_field(record, "full_address"),
         locality=_string_field(record, "city"),
         state=_string_field(record, "state"),
         postcode=_string_field(record, "postal_code") or _string_field(record, "postcode"),
