@@ -10,12 +10,13 @@ from uuid import UUID
 from clients.apollo_client import (
     ApolloAPIError,
     ApolloMasterKeyRequiredError,
+    ApolloNoMatch,
     ApolloRetryableError,
     ApolloVerifiedContact,
     MissingApolloAPIKeyError,
 )
 
-APOLLO_STRATEGY_VERSION = "apollo-owner-verified-v1"
+APOLLO_STRATEGY_VERSION = "apollo-owner-verified-v2"
 ContactStatus = Literal["verified", "unverified", "no_match", "suppressed", "failed"]
 
 
@@ -58,7 +59,7 @@ class ApolloOwnerResolver(Protocol):
         business_name: str,
         normalized_domain: str | None,
         locality: str | None,
-    ) -> ApolloVerifiedContact | None: ...
+    ) -> ApolloVerifiedContact | ApolloNoMatch | None: ...
 
 
 class ProspectQueue(Protocol):
@@ -131,7 +132,7 @@ async def enrich_prospect_contacts(
             enriched_count += 1
             continue
         try:
-            contact = await apollo_client.resolve_verified_owner(
+            resolution = await apollo_client.resolve_verified_owner(
                 route=route,
                 business_name=str(row["business_name"]),
                 normalized_domain=_optional_str(row.get("normalized_domain")),
@@ -178,7 +179,7 @@ async def enrich_prospect_contacts(
             enriched_count += 1
             continue
 
-        if contact is None:
+        if resolution is None:
             await _write_contact(
                 store,
                 tenant_id=tenant_id,
@@ -193,6 +194,25 @@ async def enrich_prospect_contacts(
             )
             enriched_count += 1
             continue
+        if isinstance(resolution, ApolloNoMatch):
+            match_evidence = {
+                **resolution.evidence,
+                "provider_usage": resolution.provider_usage,
+            }
+            await _write_contact(
+                store,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                prospect_id=prospect_id,
+                fingerprint=fingerprint,
+                status="no_match",
+                provider_organization_id=resolution.organization_id,
+                credits_consumed=_credits_consumed(resolution.provider_usage),
+                match_evidence=match_evidence,
+            )
+            enriched_count += 1
+            continue
+        contact = resolution
         status_value: ContactStatus = "verified"
         match_evidence = {
             **contact.evidence,

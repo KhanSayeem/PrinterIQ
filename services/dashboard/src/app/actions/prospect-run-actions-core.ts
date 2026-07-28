@@ -13,6 +13,9 @@ export const GREATER_BRISBANE_PLUMBERS_V1 = {
   totalLimit: 500,
 } as const;
 
+const STALE_DISCOVERY_RUN_MINUTES = 10;
+const STALE_PROCESSING_DISCOVERY_MINUTES = 120;
+
 export type ProspectRunActionState = {
   ok: boolean;
   message: string;
@@ -59,7 +62,10 @@ export function createProspectRunActions(deps: ProspectRunActionDeps) {
 
       await deps.failStaleActiveDiscoveryRuns({
         tenantId: context.tenantId,
-        staleBefore: new Date(Date.now() - 10 * 60 * 1000),
+        staleBefore: new Date(Date.now() - STALE_DISCOVERY_RUN_MINUTES * 60 * 1000),
+        processingStaleBefore: new Date(
+          Date.now() - STALE_PROCESSING_DISCOVERY_MINUTES * 60 * 1000,
+        ),
       });
 
       let run: Awaited<ReturnType<typeof deps.createDiscoveryRun>>;
