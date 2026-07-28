@@ -379,26 +379,38 @@ describe("dashboard discovery run queries", () => {
     expect(query.params).toContain(JSON.stringify(discoveryQuerySpec));
   });
 
-  it("fails only tenant-scoped stale active discovery runs before starting another run", () => {
+  it("fails tenant-scoped stale discovery runs while preserving active processing jobs", () => {
     const staleBefore = new Date("2026-07-22T12:00:00.000Z");
+    const processingStaleBefore = new Date("2026-07-22T10:10:00.000Z");
     const query = buildFailStaleActiveDiscoveryRunsQuery(db, {
       tenantId,
       staleBefore,
+      processingStaleBefore,
     }).toSQL();
 
     expect(query.sql).toContain('update "discovery_runs"');
     expect(query.sql).toContain('"discovery_runs"."tenant_id" =');
     expect(query.sql).toContain('"discovery_runs"."status" in');
+    expect(query.sql).toContain('"discovery_runs"."status" =');
     expect(query.sql).toContain('"discovery_runs"."updated_at" <=');
+    expect(query.sql).toContain("NOT EXISTS");
+    expect(query.sql).toContain("FROM queue_jobs active_prospect_jobs");
+    expect(query.sql).toContain("active_prospect_jobs.status = 'active'");
+    expect(query.sql).toContain("active_prospect_jobs.job_type IN");
+    expect(query.sql).toContain("active_prospect_jobs.started_at >");
+    expect(query.sql).toContain("active_prospect_jobs.payload->>'discovery_run_id'");
     expect(query.params).toContain(tenantId);
     expect(query.params).toContain("created");
     expect(query.params).toContain("submitted");
     expect(query.params).toContain("polling");
     expect(query.params).toContain("processing");
     expect(query.params).not.toContain("persisted");
+    expect(query.params).toContain("assess_prospects");
+    expect(query.params).toContain("enrich_prospect_contacts");
     expect(query.params).toContain("failed");
     expect(query.params).toContain("discovery_run_stale_active");
     expect(query.params.map(String)).toContain(staleBefore.toISOString());
+    expect(query.params.map(String)).toContain(processingStaleBefore.toISOString());
   });
 
   it("fetches only the tenant's latest discovery run", () => {

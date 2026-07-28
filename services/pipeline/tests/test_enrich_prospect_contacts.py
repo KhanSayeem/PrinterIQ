@@ -9,6 +9,7 @@ import pytest
 
 from clients.apollo_client import (
     ApolloMasterKeyRequiredError,
+    ApolloNoMatch,
     ApolloRetryableError,
     ApolloVerifiedContact,
 )
@@ -98,7 +99,7 @@ class Store:
 
 @dataclass
 class Apollo:
-    result: ApolloVerifiedContact | None = None
+    result: ApolloVerifiedContact | ApolloNoMatch | None = None
     error: Exception | None = None
     calls: list[dict[str, object]] = field(default_factory=list)
 
@@ -135,6 +136,27 @@ def verified_contact(**overrides: object) -> ApolloVerifiedContact:
     }
     values.update(overrides)
     return ApolloVerifiedContact(**values)
+
+
+def apollo_no_match(**overrides: object) -> ApolloNoMatch:
+    values = {
+        "organization_id": "org-rejected",
+        "evidence": {
+            "strategy": APOLLO_STRATEGY_VERSION,
+            "outcome": "no_verified_owner",
+            "rejection_reason": "rejected_organization_identity",
+            "organization_match": "single_rejected_identity",
+            "organization_identity": {
+                "apollo_organization_name": "Breakthrough Energy",
+                "apollo_organization_domain": "breakthroughenergy.org",
+                "domain_match": False,
+                "name_match": False,
+            },
+        },
+        "provider_usage": {"request_count": 1, "credits": None},
+    }
+    values.update(overrides)
+    return ApolloNoMatch(**values)
 
 
 def test_verified_route_b_contact_is_stored_and_aggregates_refresh() -> None:
@@ -214,6 +236,29 @@ def test_route_a_uses_name_and_location_without_domain() -> None:
         assert apollo.calls[0]["locality"] == "Brisbane"
         assert store.writes[0]["status"] == "no_match"
         assert store.writes[0]["provider_person_id"] is None
+
+    asyncio.run(scenario())
+
+
+def test_structured_apollo_no_match_evidence_is_stored_for_review() -> None:
+    async def scenario() -> None:
+        store = Store(prospects=[prospect()])
+
+        await enrich_prospect_contacts(
+            {"tenant_id": str(TENANT_ID), "discovery_run_id": str(RUN_ID)},
+            store=store,
+            apollo_client=Apollo(result=apollo_no_match()),
+        )
+
+        write = store.writes[0]
+        assert write["status"] == "no_match"
+        assert write["provider_organization_id"] == "org-rejected"
+        assert write["provider_person_id"] is None
+        assert write["match_evidence"]["rejection_reason"] == "rejected_organization_identity"
+        assert write["match_evidence"]["provider_usage"] == {"request_count": 1, "credits": None}
+        assert write["match_evidence"]["organization_identity"]["apollo_organization_name"] == (
+            "Breakthrough Energy"
+        )
 
     asyncio.run(scenario())
 

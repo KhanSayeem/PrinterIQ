@@ -3,13 +3,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
+from urllib.parse import urlparse
 
 import httpx
 
 from env import load_pipeline_env
 
 _DEFAULT_BASE_URL = "https://api.apollo.io"
-_STRATEGY_VERSION = "apollo-owner-verified-v1"
+_STRATEGY_VERSION = "apollo-owner-verified-v2"
 _OWNER_SENIORITIES = ("owner", "founder", "partner", "c_suite")
 _SENIORITY_RANK = {value: index for index, value in enumerate(_OWNER_SENIORITIES)}
 _DISABLED_REVEALS = {
@@ -18,6 +19,53 @@ _DISABLED_REVEALS = {
     "run_waterfall_email": False,
     "run_waterfall_phone": False,
 }
+_ORGANIZATION_DOMAIN_FIELDS = (
+    "primary_domain",
+    "domain",
+    "website_url",
+    "organization_website_url",
+    "website",
+    "url",
+)
+_BUSINESS_NAME_STOPWORDS = frozenset(
+    {
+        "and",
+        "australia",
+        "australian",
+        "brisbane",
+        "co",
+        "company",
+        "drain",
+        "drainage",
+        "drains",
+        "electric",
+        "electrical",
+        "electrician",
+        "electricians",
+        "fitter",
+        "fitters",
+        "gas",
+        "group",
+        "hvac",
+        "inc",
+        "limited",
+        "llc",
+        "ltd",
+        "plumber",
+        "plumbers",
+        "plumbing",
+        "pty",
+        "qld",
+        "queensland",
+        "roof",
+        "roofer",
+        "roofers",
+        "roofing",
+        "service",
+        "services",
+        "the",
+    }
+)
 Route = Literal["A", "B"]
 
 
@@ -53,6 +101,13 @@ class ApolloVerifiedContact:
     provider_usage: dict[str, object]
 
 
+@dataclass(frozen=True)
+class ApolloNoMatch:
+    evidence: dict[str, object]
+    provider_usage: dict[str, object]
+    organization_id: str | None = None
+
+
 class ApolloClient:
     def __init__(
         self,
@@ -80,7 +135,7 @@ class ApolloClient:
         business_name: str,
         normalized_domain: str | None,
         locality: str | None,
-    ) -> ApolloVerifiedContact | None:
+    ) -> ApolloVerifiedContact | ApolloNoMatch:
         request_count = 0
         organization_payload = _organization_search_payload(
             route=route,
@@ -95,11 +150,35 @@ class ApolloClient:
         request_count += 1
         organization = _single_organization(organization_response)
         if organization is None:
-            return None
+            organization_count = _organization_count(organization_response)
+            return _no_match(
+                reason="organization_match_count_not_one",
+                request_count=request_count,
+                evidence={"organization_match_count": organization_count},
+            )
         organization_id = _required_str(organization.get("id"))
         if organization_id is None:
             raise ApolloAPIError(
                 "Apollo API POST /api/v1/mixed_companies/search returned a malformed response"
+            )
+        organization_identity = _organization_identity(
+            route=route,
+            business_name=business_name,
+            normalized_domain=normalized_domain,
+            organization=organization,
+        )
+        organization_evidence = _organization_match_evidence(
+            organization_identity=organization_identity,
+        )
+        if organization_evidence is None:
+            return _no_match(
+                reason="rejected_organization_identity",
+                request_count=request_count,
+                organization_id=organization_id,
+                evidence={
+                    "organization_match": "single_rejected_identity",
+                    "organization_identity": organization_identity,
+                },
             )
 
         people_response = await self._post(
@@ -116,7 +195,12 @@ class ApolloClient:
         request_count += 1
         person = _select_owner(people_response, organization_id=organization_id)
         if person is None:
-            return None
+            return _no_match(
+                reason="no_verified_owner_person",
+                request_count=request_count,
+                organization_id=organization_id,
+                evidence=organization_evidence,
+            )
         person_id = _required_str(person.get("id"))
         if person_id is None:
             raise ApolloAPIError(
@@ -136,7 +220,16 @@ class ApolloClient:
         email_status = _required_str(enriched.get("email_status"))
         email = _required_str(enriched.get("email"))
         if email_status != "verified" or email is None:
-            return None
+            return _no_match(
+                reason="person_email_not_verified",
+                request_count=request_count,
+                organization_id=organization_id,
+                evidence={
+                    **organization_evidence,
+                    "person_seniority": _seniority(enriched) or _seniority(person),
+                    "provider_email_status": email_status,
+                },
+            )
         enriched_id = _required_str(enriched.get("id")) or person_id
         return ApolloVerifiedContact(
             organization_id=_required_str(enriched.get("organization_id")) or organization_id,
@@ -146,7 +239,7 @@ class ApolloClient:
             email=email,
             email_status="verified",
             evidence={
-                "organization_match": "single",
+                **organization_evidence,
                 "person_seniority": _seniority(enriched) or _seniority(person),
                 "strategy": _STRATEGY_VERSION,
             },
@@ -300,6 +393,156 @@ def _select_owner(
         if _required_str(person.get("organization_id")) == organization_id
     ]
     return exact[0] if len(exact) == 1 else None
+
+
+def _organization_identity(
+    *,
+    route: Route,
+    business_name: str,
+    normalized_domain: str | None,
+    organization: dict[str, object],
+) -> dict[str, object]:
+    organization_name = _required_str(organization.get("name"))
+    organization_domain = _organization_domain(organization)
+    domain_match = (
+        _domains_match(normalized_domain, organization_domain)
+        if normalized_domain and organization_domain
+        else False
+    )
+    name_match = (
+        _business_names_match(business_name, organization_name)
+        if organization_name is not None
+        else False
+    )
+    return {
+        "route": route,
+        "business_name": business_name,
+        "normalized_domain": normalized_domain,
+        "apollo_organization_name": organization_name,
+        "apollo_organization_domain": organization_domain,
+        "domain_match": domain_match,
+        "name_match": name_match,
+    }
+
+
+def _organization_match_evidence(
+    *,
+    organization_identity: dict[str, object],
+) -> dict[str, object] | None:
+    if not organization_identity["domain_match"] and not organization_identity["name_match"]:
+        return None
+    return {
+        "organization_match": "single_verified_identity",
+        "organization_identity": organization_identity,
+    }
+
+
+def _organization_domain(organization: dict[str, object]) -> str | None:
+    for field_name in _ORGANIZATION_DOMAIN_FIELDS:
+        domain = _domain_from_value(organization.get(field_name))
+        if domain is not None:
+            return domain
+    return None
+
+
+def _domains_match(left: str | None, right: str | None) -> bool:
+    left_domain = _domain_from_value(left)
+    right_domain = _domain_from_value(right)
+    if left_domain is None or right_domain is None:
+        return False
+    return (
+        left_domain == right_domain
+        or left_domain.endswith(f".{right_domain}")
+        or right_domain.endswith(f".{left_domain}")
+    )
+
+
+def _domain_from_value(value: object) -> str | None:
+    raw = _required_str(value)
+    if raw is None:
+        return None
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    host = parsed.hostname or raw.split("/")[0]
+    domain = host.casefold().removeprefix("www.").strip(".")
+    return domain or None
+
+
+def _business_names_match(left: str, right: str | None) -> bool:
+    if right is None:
+        return False
+    left_normalized = _normalized_business_name(left)
+    right_normalized = _normalized_business_name(right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized == right_normalized:
+        return True
+    left_tokens = _business_name_tokens(left_normalized)
+    right_tokens = _business_name_tokens(right_normalized)
+    if not left_tokens or not right_tokens:
+        return False
+    shared = left_tokens & right_tokens
+    if len(shared) >= 2:
+        return True
+    if len(left_tokens) == 1 and left_tokens <= right_tokens:
+        return len(next(iter(left_tokens))) >= 5
+    if len(right_tokens) == 1 and right_tokens <= left_tokens:
+        return len(next(iter(right_tokens))) >= 5
+    return False
+
+
+def _normalized_business_name(value: str) -> str:
+    return " ".join(_business_name_token_list(value))
+
+
+def _business_name_tokens(value: str) -> set[str]:
+    return set(_business_name_token_list(value))
+
+
+def _business_name_token_list(value: str) -> list[str]:
+    tokens = []
+    current = []
+    for character in value.casefold():
+        if character.isalnum():
+            current.append(character)
+            continue
+        if current:
+            tokens.append("".join(current))
+            current = []
+    if current:
+        tokens.append("".join(current))
+    return [
+        token
+        for token in tokens
+        if len(token) > 1 and token not in _BUSINESS_NAME_STOPWORDS
+    ]
+
+
+def _organization_count(payload: dict[str, object]) -> int:
+    organizations = payload.get("organizations")
+    if not isinstance(organizations, list):
+        raise ApolloAPIError(
+            "Apollo API POST /api/v1/mixed_companies/search returned a malformed response"
+        )
+    return len(organizations)
+
+
+def _no_match(
+    *,
+    reason: str,
+    request_count: int,
+    evidence: dict[str, object],
+    organization_id: str | None = None,
+) -> ApolloNoMatch:
+    return ApolloNoMatch(
+        organization_id=organization_id,
+        evidence={
+            "strategy": _STRATEGY_VERSION,
+            "outcome": "no_verified_owner",
+            "rejection_reason": reason,
+            **evidence,
+        },
+        provider_usage={"request_count": request_count, "credits": None},
+    )
 
 
 def _person_payload(payload: dict[str, object]) -> dict[str, object] | None:
