@@ -66,7 +66,7 @@ module.exports = {
     },
     {
       name: 'dashboard',
-      script: 'node_modules/.bin/next',
+      script: 'node_modules/next/dist/bin/next',
       args: 'start',
       cwd: '/root/printeriq/services/dashboard',
       watch: false,
