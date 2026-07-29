@@ -29,8 +29,10 @@ jobs:
             python -m pip install -e services/pipeline
             npm --prefix services/reply-agent ci --include=dev
             npm --prefix services/reply-agent run build
-            npm --prefix services/dashboard ci --include=dev
-            npm --prefix services/dashboard run build
+            corepack enable
+            corepack prepare pnpm@10.18.3 --activate
+            pnpm --dir services/dashboard install --frozen-lockfile
+            pnpm --dir services/dashboard run build
             python -m playwright install --with-deps chromium
             # Apply any new migrations against Supabase
             # (psql must be available or use supabase CLI)
