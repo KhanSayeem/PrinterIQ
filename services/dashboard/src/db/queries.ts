@@ -1267,6 +1267,7 @@ export function buildFailStaleActiveDiscoveryRunsQuery(
   input: FailStaleActiveDiscoveryRunsInput,
 ) {
   requireTenantId(input.tenantId);
+  const processingStaleBeforeIso = input.processingStaleBefore.toISOString();
 
   return db
     .update(discoveryRuns)
@@ -1296,7 +1297,7 @@ export function buildFailStaleActiveDiscoveryRunsQuery(
                   ACTIVE_PROSPECT_DISCOVERY_JOB_TYPES.map((jobType) => sql`${jobType}`),
                   sql`, `,
                 )})
-                AND active_prospect_jobs.started_at > ${input.processingStaleBefore}
+                AND active_prospect_jobs.started_at > ${processingStaleBeforeIso}
                 AND active_prospect_jobs.payload->>'discovery_run_id' = ${discoveryRuns.id}::text
             )`,
           ),

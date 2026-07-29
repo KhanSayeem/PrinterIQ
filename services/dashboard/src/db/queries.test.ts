@@ -411,6 +411,7 @@ describe("dashboard discovery run queries", () => {
     expect(query.params).toContain("discovery_run_stale_active");
     expect(query.params.map(String)).toContain(staleBefore.toISOString());
     expect(query.params.map(String)).toContain(processingStaleBefore.toISOString());
+    expect(query.params.some((param) => param instanceof Date)).toBe(false);
   });
 
   it("fetches only the tenant's latest discovery run", () => {
