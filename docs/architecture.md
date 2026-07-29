@@ -33,9 +33,9 @@ Third-party APIs
 | Host                            | Destination              |
 |---------------------------------|--------------------------|
 | `dashboard.presciaiq.com`       | Next.js on port 3000     |
-| `webhooks.presciaiq.com/instantly/reply/:webhookId` | Reply agent on port 3001 |
-| `webhooks.presciaiq.com/instantly/bounced/:webhookId` | Reply agent on port 3001 |
-| `webhooks.presciaiq.com/instantly/unsubbed/:webhookId` | Reply agent on port 3001 |
+| `webhooks.presciaiq.com/instantly/reply` | Reply agent on port 3001; requires `X-Instantly-Secret` |
+| `webhooks.presciaiq.com/instantly/bounced` | Reply agent on port 3001; requires `X-Instantly-Secret` |
+| `webhooks.presciaiq.com/instantly/unsubbed` | Reply agent on port 3001; requires `X-Instantly-Secret` |
 | `webhooks.presciaiq.com/sms`    | Reply agent on port 3001 |
 | `webhooks.presciaiq.com/stripe` | Reply agent on port 3001 |
 

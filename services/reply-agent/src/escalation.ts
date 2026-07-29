@@ -131,12 +131,13 @@ export async function escalate(input: EscalationInput, deps: EscalationDeps = {}
 
   try {
     await instantly.pauseLead(context.instantly_lead_id, context.instantly_campaign_id);
-  } catch {
+  } catch (error) {
     logger.error(
       {
         tenant_id: input.tenant_id,
         lead_id: input.lead_id,
         conversation_id: input.conversation_id,
+        error: serializeError(error),
       },
       "Instantly lead pause failed after escalation SMS succeeded",
     );
@@ -152,14 +153,34 @@ function formatEscalationSms(
 ): string {
   const businessName = context.business_name ?? "Unknown business";
   const city = context.city ?? "Unknown city";
-  const leadName = [context.first_name, context.last_name].filter(Boolean).join(" ") || "Unknown lead";
+  const leadName = maskLeadName(context.first_name, context.last_name);
   const truncatedBody = maskSnippetPii(inboundBody).slice(0, 100);
 
   return `Reply from ${businessName} (${city}) needs attention: "${truncatedBody}". Lead: ${leadName}. Reason: ${reason}. View: ${dashboardUrl}/leads/${context.lead_id}`;
+}
+
+function maskLeadName(firstName: string | null, lastName: string | null): string {
+  const masked = [firstName, lastName]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .map((value) => `${value.trim()[0]}***`);
+  return masked.length > 0 ? masked.join(" ") : "Unknown lead";
 }
 
 function maskSnippetPii(snippet: string): string {
   return snippet
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
     .replace(/(?:\+?\d[\s().-]*){8,}\d/g, "[phone]");
+}
+
+function serializeError(error: unknown): { name: string; message: string } {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: maskSnippetPii(error.message),
+    };
+  }
+  return {
+    name: "UnknownError",
+    message: maskSnippetPii(String(error)),
+  };
 }
