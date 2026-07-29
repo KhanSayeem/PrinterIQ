@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, Play, RefreshCw } from "lucide-react";
-import { useMemo, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ProspectRunSummary, type ProspectRunView } from "./ProspectRunSummary";
 
@@ -386,9 +386,9 @@ function ManualReviewForm({
 }) {
   const [feedback, setFeedback] = useState<ProspectReviewActionState>(INITIAL_REVIEW_STATE);
   const [isPending, startTransition] = useTransition();
-  const idempotencyKey = useMemo(() => browserUuid(), []);
 
   function submit(formData: FormData) {
+    formData.set("idempotencyKey", browserUuid());
     startTransition(async () => {
       try {
         const result = await reviewAction(INITIAL_REVIEW_STATE, formData);
@@ -406,7 +406,7 @@ function ManualReviewForm({
     <form className="prospect-review-form" action={submit}>
       <input type="hidden" name="discoveryRunId" value={runId} />
       <input type="hidden" name="prospectId" value={prospect.id} />
-      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+      <input type="hidden" name="idempotencyKey" value="" />
       <label>
         Decision
         <select name="decision" defaultValue="">
