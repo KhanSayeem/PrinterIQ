@@ -81,6 +81,7 @@ export type ProspectEvidenceView = {
 
 const INITIAL_ACTION_STATE: ProspectRunActionState = { ok: false, message: "" };
 const INITIAL_REVIEW_STATE: ProspectReviewActionState = { ok: false, message: "" };
+const DASHBOARD_TIME_ZONE = "Australia/Brisbane";
 const BLOCKING_RUN_STATUSES = new Set([
   "created",
   "submitted",
@@ -578,7 +579,9 @@ function formatPercent(value: number) {
 
 function formatDate(value: Date | string) {
   const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? "unknown time" : date.toLocaleString("en-AU");
+  return Number.isNaN(date.getTime())
+    ? "unknown time"
+    : date.toLocaleString("en-AU", { timeZone: DASHBOARD_TIME_ZONE });
 }
 
 function browserUuid() {

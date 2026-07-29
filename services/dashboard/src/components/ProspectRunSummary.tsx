@@ -41,6 +41,7 @@ const RUN_LABELS: Record<string, string> = {
 };
 
 const PARTIAL_STATUSES = new Set(["submitted", "polling", "processing"]);
+const DASHBOARD_TIME_ZONE = "Australia/Brisbane";
 
 function providerState(run: ProspectRunView) {
   if (run.status === "failed") return "Provider failed";
@@ -52,7 +53,9 @@ function providerState(run: ProspectRunView) {
 
 function formatTimestamp(value: Date | string) {
   const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString("en-AU");
+  return Number.isNaN(date.getTime())
+    ? "Unknown"
+    : date.toLocaleString("en-AU", { timeZone: DASHBOARD_TIME_ZONE });
 }
 
 export function ProspectRunSummary({
