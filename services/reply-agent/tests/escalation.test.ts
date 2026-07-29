@@ -42,7 +42,7 @@ function createInstantly(): InstantlyClient {
 }
 
 describe("escalation", () => {
-  it("sends an operator SMS with lead details, reason, truncated body, and dashboard URL before pausing Instantly", async () => {
+  it("sends an operator SMS with masked lead details, reason, truncated body, and dashboard URL before pausing Instantly", async () => {
     const sms = createSms();
     const instantly = createInstantly();
 
@@ -67,7 +67,8 @@ describe("escalation", () => {
       body: expect.stringContaining("Reply from Stone Builders (Newcastle) needs attention"),
     });
     const smsBody = vi.mocked(sms.sendSms).mock.calls[0]![0].body;
-    expect(smsBody).toContain("Brett Stone");
+    expect(smsBody).toContain("Lead: B*** S***.");
+    expect(smsBody).not.toContain("Brett Stone");
     expect(smsBody).toContain(`"${"x".repeat(100)}"`);
     expect(smsBody).toContain("Reason: low_confidence.");
     expect(smsBody).toContain(`View: https://dashboard.presciaiq.com/leads/${leadId}`);
@@ -143,6 +144,10 @@ describe("escalation", () => {
         tenant_id: tenantId,
         lead_id: leadId,
         conversation_id: conversationId,
+        error: {
+          name: "Error",
+          message: "Instantly unavailable for [email]",
+        },
       }),
       "Instantly lead pause failed after escalation SMS succeeded",
     );

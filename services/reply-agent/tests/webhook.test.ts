@@ -6,7 +6,7 @@ import { queries as defaultQueries } from "../src/db/queries.js";
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const leadId = "22222222-2222-4222-8222-222222222222";
 
-const webhookIds = {
+const webhookSecrets = {
   reply: "reply-token",
   bounced: "bounced-token",
   unsubbed: "unsubbed-token",
@@ -28,7 +28,7 @@ function createQueries(): Pick<typeof defaultQueries, "recordInstantlyBounce" | 
 
 function createServer(options: Partial<Parameters<typeof buildServer>[0]> = {}) {
   return buildServer({
-    instantlyWebhookIds: webhookIds,
+    instantlyWebhookSecrets: webhookSecrets,
     queue: createQueue(),
     queries: createQueries(),
     ...options,
@@ -76,13 +76,13 @@ describe("Instantly webhook", () => {
     expect(queries.recordInstantlyUnsubscribe).not.toHaveBeenCalled();
   });
 
-  it("rejects an invalid reply webhook ID", async () => {
+  it("rejects reply webhooks without the Instantly secret header", async () => {
     const queue = createQueue();
     const server = createServer({ queue });
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/reply/wrong-token",
+      url: "/instantly/reply",
       payload: {
         tenant_id: tenantId,
         lead_id: leadId,
@@ -91,35 +91,58 @@ describe("Instantly webhook", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "invalid webhook id" });
+    expect(response.json()).toEqual({ error: "invalid webhook secret" });
     expect(queue.add).not.toHaveBeenCalled();
   });
 
-  it("rejects an invalid reply webhook ID before parsing the request body", async () => {
+  it("rejects an invalid reply webhook secret before parsing the request body", async () => {
     const queue = createQueue();
     const server = createServer({ queue });
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/reply/wrong-token",
+      url: "/instantly/reply",
       headers: {
         "content-type": "application/json",
+        "x-instantly-secret": "wrong-token",
       },
       payload: "{",
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "invalid webhook id" });
+    expect(response.json()).toEqual({ error: "invalid webhook secret" });
     expect(queue.add).not.toHaveBeenCalled();
   });
 
-  it("queues a process_reply job and returns 200 for a valid reply webhook ID", async () => {
+  it("rejects legacy reply path-secret routes before parsing the request body", async () => {
     const queue = createQueue();
     const server = createServer({ queue });
 
     const response = await server.inject({
       method: "POST",
       url: "/instantly/reply/reply-token",
+      headers: {
+        "content-type": "application/json",
+        "x-instantly-secret": "reply-token",
+      },
+      payload: "{",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "invalid instantly webhook route" });
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  it("queues a process_reply job and returns 200 for a valid reply webhook secret", async () => {
+    const queue = createQueue();
+    const server = createServer({ queue });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/reply",
+      headers: {
+        "x-instantly-secret": "reply-token",
+      },
       payload: {
         metadata: { tenant_id: tenantId, lead_id: leadId },
         reply_text: "Yeah mate how much is it?",
@@ -148,7 +171,10 @@ describe("Instantly webhook", () => {
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/reply/reply-token",
+      url: "/instantly/reply",
+      headers: {
+        "x-instantly-secret": "reply-token",
+      },
       payload: {
         metadata: { tenant_id: tenantId, lead_id: leadId },
         reply_text: "Send me the details",
@@ -174,7 +200,10 @@ describe("Instantly webhook", () => {
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/reply/reply-token",
+      url: "/instantly/reply",
+      headers: {
+        "x-instantly-secret": "reply-token",
+      },
       payload: {
         metadata: { tenant_id: tenantId, lead_id: leadId },
         text: "Interested",
@@ -193,7 +222,10 @@ describe("Instantly webhook", () => {
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/reply/reply-token",
+      url: "/instantly/reply",
+      headers: {
+        "x-instantly-secret": "reply-token",
+      },
       payload: {
         custom_variables: { tenant_id: tenantId, lead_id: leadId },
         text: "Interested",
@@ -216,7 +248,10 @@ describe("Instantly webhook", () => {
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/reply/reply-token",
+      url: "/instantly/reply",
+      headers: {
+        "x-instantly-secret": "reply-token",
+      },
       payload: {
         metadata: { tenant_id: tenantId, lead_id: leadId },
         text: "Interested",
@@ -236,7 +271,10 @@ describe("Instantly webhook", () => {
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/bounced/bounced-token",
+      url: "/instantly/bounced",
+      headers: {
+        "x-instantly-secret": "bounced-token",
+      },
       payload: {
         metadata: { tenant_id: tenantId, lead_id: leadId },
         lead: { id: "instantly-lead-123" },
@@ -256,7 +294,10 @@ describe("Instantly webhook", () => {
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/unsubbed/unsubbed-token",
+      url: "/instantly/unsubbed",
+      headers: {
+        "x-instantly-secret": "unsubbed-token",
+      },
       payload: {
         metadata: { tenant_id: tenantId, lead_id: leadId },
         lead: { id: "instantly-lead-123" },
@@ -269,21 +310,22 @@ describe("Instantly webhook", () => {
     expect(queue.add).not.toHaveBeenCalled();
   });
 
-  it("rejects an invalid bounced webhook ID before parsing the request body", async () => {
+  it("rejects an invalid bounced webhook secret before parsing the request body", async () => {
     const queries = createQueries();
     const server = createServer({ queries });
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/bounced/wrong-token",
+      url: "/instantly/bounced",
       headers: {
         "content-type": "application/json",
+        "x-instantly-secret": "wrong-token",
       },
       payload: "{",
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "invalid webhook id" });
+    expect(response.json()).toEqual({ error: "invalid webhook secret" });
     expect(queries.recordInstantlyBounce).not.toHaveBeenCalled();
   });
 
@@ -293,7 +335,10 @@ describe("Instantly webhook", () => {
 
     const response = await server.inject({
       method: "POST",
-      url: "/instantly/unsubbed/unsubbed-token",
+      url: "/instantly/unsubbed",
+      headers: {
+        "x-instantly-secret": "unsubbed-token",
+      },
       payload: {
         custom_variables: { tenant_id: tenantId, lead_id: leadId },
         lead: { id: "instantly-lead-123" },

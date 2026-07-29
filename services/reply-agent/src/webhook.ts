@@ -1,5 +1,6 @@
 import { Queue } from "bullmq";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import type { ProcessReplyJob } from "./types.js";
@@ -12,7 +13,7 @@ export type ReplyQueue = {
 };
 
 type BuildServerOptions = {
-  instantlyWebhookIds: {
+  instantlyWebhookSecrets: {
     reply: string;
     bounced: string;
     unsubbed: string;
@@ -48,6 +49,26 @@ function readNestedString(payload: Record<string, unknown>, path: string[]): str
   }
 
   return typeof current === "string" && current.trim().length > 0 ? current : null;
+}
+
+function readInstantlySecret(request: FastifyRequest): string | null {
+  const value = request.headers["x-instantly-secret"];
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  if (Array.isArray(value) && value.length === 1 && value[0]?.trim()) {
+    return value[0];
+  }
+  return null;
+}
+
+function secretsMatch(actual: string | null, expected: string): boolean {
+  if (!actual) {
+    return false;
+  }
+  const actualBuffer = Buffer.from(actual);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
 function mapInstantlyPayload(payload: Record<string, unknown>): ProcessReplyJob {
@@ -130,17 +151,19 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
   server.post("/instantly/reply/:webhookId", {
     onRequest: async (request, reply) => {
-      const { webhookId } = request.params as { webhookId?: string };
+      return reply.code(400).send({ error: "invalid instantly webhook route" });
+    },
+  }, async () => undefined);
 
-      if (webhookId !== options.instantlyWebhookIds.reply) {
-        return reply.code(400).send({ error: "invalid webhook id" });
+  server.post("/instantly/reply", {
+    onRequest: async (request, reply) => {
+      if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.reply)) {
+        return reply.code(400).send({ error: "invalid webhook secret" });
       }
     },
   }, async (request, reply) => {
-    const { webhookId } = request.params as { webhookId?: string };
-
-    if (webhookId !== options.instantlyWebhookIds.reply) {
-      return reply.code(400).send({ error: "invalid webhook id" });
+    if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.reply)) {
+      return reply.code(400).send({ error: "invalid webhook secret" });
     }
 
     const parsed = webhookPayloadSchema.safeParse(request.body);
@@ -166,17 +189,19 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
   server.post("/instantly/bounced/:webhookId", {
     onRequest: async (request, reply) => {
-      const { webhookId } = request.params as { webhookId?: string };
+      return reply.code(400).send({ error: "invalid instantly webhook route" });
+    },
+  }, async () => undefined);
 
-      if (webhookId !== options.instantlyWebhookIds.bounced) {
-        return reply.code(400).send({ error: "invalid webhook id" });
+  server.post("/instantly/bounced", {
+    onRequest: async (request, reply) => {
+      if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.bounced)) {
+        return reply.code(400).send({ error: "invalid webhook secret" });
       }
     },
   }, async (request, reply) => {
-    const { webhookId } = request.params as { webhookId?: string };
-
-    if (webhookId !== options.instantlyWebhookIds.bounced) {
-      return reply.code(400).send({ error: "invalid webhook id" });
+    if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.bounced)) {
+      return reply.code(400).send({ error: "invalid webhook secret" });
     }
 
     const parsed = webhookPayloadSchema.safeParse(request.body);
@@ -202,17 +227,19 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 
   server.post("/instantly/unsubbed/:webhookId", {
     onRequest: async (request, reply) => {
-      const { webhookId } = request.params as { webhookId?: string };
+      return reply.code(400).send({ error: "invalid instantly webhook route" });
+    },
+  }, async () => undefined);
 
-      if (webhookId !== options.instantlyWebhookIds.unsubbed) {
-        return reply.code(400).send({ error: "invalid webhook id" });
+  server.post("/instantly/unsubbed", {
+    onRequest: async (request, reply) => {
+      if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.unsubbed)) {
+        return reply.code(400).send({ error: "invalid webhook secret" });
       }
     },
   }, async (request, reply) => {
-    const { webhookId } = request.params as { webhookId?: string };
-
-    if (webhookId !== options.instantlyWebhookIds.unsubbed) {
-      return reply.code(400).send({ error: "invalid webhook id" });
+    if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.unsubbed)) {
+      return reply.code(400).send({ error: "invalid webhook secret" });
     }
 
     const parsed = webhookPayloadSchema.safeParse(request.body);
@@ -275,19 +302,28 @@ function createQueue(): Queue<ProcessReplyJob> {
 }
 
 async function main(): Promise<void> {
-  const instantlyWebhookIds = {
-    reply: process.env.INSTANTLY_WEBHOOK_ID_REPLY,
-    bounced: process.env.INSTANTLY_WEBHOOK_ID_BOUNCED,
-    unsubbed: process.env.INSTANTLY_WEBHOOK_ID_UNSUBBED,
+  const instantlyWebhookSecrets = {
+    reply:
+      process.env.INSTANTLY_WEBHOOK_AUTH_REPLY ??
+      process.env.INSTANTLY_WEBHOOK_SECRET_REPLY ??
+      process.env.INSTANTLY_WEBHOOK_ID_REPLY,
+    bounced:
+      process.env.INSTANTLY_WEBHOOK_AUTH_BOUNCED ??
+      process.env.INSTANTLY_WEBHOOK_SECRET_BOUNCED ??
+      process.env.INSTANTLY_WEBHOOK_ID_BOUNCED,
+    unsubbed:
+      process.env.INSTANTLY_WEBHOOK_AUTH_UNSUBBED ??
+      process.env.INSTANTLY_WEBHOOK_SECRET_UNSUBBED ??
+      process.env.INSTANTLY_WEBHOOK_ID_UNSUBBED,
   };
-  const missingInstantlyWebhookId = Object.entries(instantlyWebhookIds).find(([, value]) => !value)?.[0];
-  if (missingInstantlyWebhookId) {
-    throw new Error(`INSTANTLY_WEBHOOK_ID_${missingInstantlyWebhookId.toUpperCase()} is required`);
+  const missingInstantlyWebhookSecret = Object.entries(instantlyWebhookSecrets).find(([, value]) => !value)?.[0];
+  if (missingInstantlyWebhookSecret) {
+    throw new Error(`INSTANTLY_WEBHOOK_AUTH_${missingInstantlyWebhookSecret.toUpperCase()} is required`);
   }
 
   const queue = createQueue();
   const server = buildServer({
-    instantlyWebhookIds: instantlyWebhookIds as { reply: string; bounced: string; unsubbed: string },
+    instantlyWebhookSecrets: instantlyWebhookSecrets as { reply: string; bounced: string; unsubbed: string },
     queue,
   });
   const port = Number.parseInt(process.env.PORT ?? "3001", 10);
