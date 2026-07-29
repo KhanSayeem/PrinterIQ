@@ -88,6 +88,7 @@ describe("prospect run actions", () => {
     expect(deps.failStaleActiveDiscoveryRuns).toHaveBeenCalledWith({
       tenantId,
       staleBefore: expect.any(Date),
+      processingStaleBefore: expect.any(Date),
     });
     expect(deps.enqueueStartDiscoveryJob).toHaveBeenCalledWith({
       tenantId,
@@ -166,6 +167,7 @@ describe("prospect run actions", () => {
     expect(failStaleActiveDiscoveryRunsMock).toHaveBeenCalledWith({
       tenantId,
       staleBefore: expect.any(Date),
+      processingStaleBefore: expect.any(Date),
     });
     expect(createDiscoveryRunMock).toHaveBeenCalledWith({
       tenantId,

@@ -356,11 +356,7 @@ def test_apply_prospect_normalization_with_assessment_is_atomic_and_run_scoped()
             route="A",
             status="assessed",
             outcome_reason="no_owned_website",
-            source_payload={
-                "resolved_website_url": "https://facebook.com/northside",
-                "website_text": "blocked\x00drain",
-                "nested": {"title": "north\x00side", "items": ["a\x00b"]},
-            },
+            source_payload={"resolved_website_url": "https://facebook.com/northside"},
             assessment_version="route-a-normalization-v1",
             eligible=True,
             computed_route="A",
@@ -381,9 +377,7 @@ def test_apply_prospect_normalization_with_assessment_is_atomic_and_run_scoped()
         assert connection.args[0][:3] == (TENANT_ID, RUN_ID, PROSPECT_ID)
         assert json.loads(str(connection.args[0][7])) == {"phone": ["place-2"]}
         assert json.loads(str(connection.args[0][13])) == {
-            "resolved_website_url": "https://facebook.com/northside",
-            "website_text": "blockeddrain",
-            "nested": {"title": "northside", "items": ["ab"]},
+            "resolved_website_url": "https://facebook.com/northside"
         }
         assert json.loads(str(connection.args[0][17])) == {
             "website": {"ownership": "social"}

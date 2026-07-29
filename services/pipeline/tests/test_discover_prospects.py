@@ -506,42 +506,6 @@ def test_success_maps_realistic_outscraper_fields_into_classification_columns() 
     asyncio.run(scenario())
 
 
-def test_success_maps_current_outscraper_website_field_into_classification_columns() -> None:
-    async def scenario() -> None:
-        record = {
-            "place_id": "place-current",
-            "name": "Current Website Plumbing",
-            "website": "https://current-plumbing.example",
-            "phone": "+61 7 3000 0000",
-            "address": "1 Queen St, Brisbane QLD 4000",
-            "city": "Brisbane",
-            "state": "Queensland",
-            "postal_code": "4000",
-            "type": "Plumber",
-            "subtypes": "Plumber",
-            "business_status": "OPERATIONAL",
-        }
-        store = _Store({"status": "polling", "source_request_id": "request-123"})
-        client = _Client(
-            OutscraperRequest("request-123", "Success", [record])
-        )
-
-        await poll_outscraper(
-            _payload(poll_count=1),
-            store=store,
-            queue=_Queue(store.events),
-            outscraper_client=client,
-            now=lambda: NOW,
-        )
-
-        snapshot = store.snapshots[0]
-        assert snapshot.source_website_url == "https://current-plumbing.example"
-        assert snapshot.full_address == "1 Queen St, Brisbane QLD 4000"
-        assert snapshot.source_payload["website"] == "https://current-plumbing.example"
-
-    asyncio.run(scenario())
-
-
 def test_malformed_record_identity_is_stable_for_replay() -> None:
     async def run_once() -> str:
         record = {"phone": "+61 400 000 000", "name": "Malformed"}

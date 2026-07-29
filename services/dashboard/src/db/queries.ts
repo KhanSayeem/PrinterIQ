@@ -32,6 +32,13 @@ export const PIPELINE_STATUSES = [
 const ACTIVE_PIPELINE_STATUSES = PIPELINE_STATUSES.filter((status) => status !== "archived");
 const ROUTE_A_ASSESSMENT_VERSION = "route-a-normalization-v1";
 const WEBSITE_HEALTH_ASSESSMENT_VERSION = "website-health-v1";
+const STALE_PROCESSING_DISCOVERY_MINUTES = 120;
+const ACTIVE_PROSPECT_DISCOVERY_JOB_TYPES = [
+  "normalize_prospects",
+  "assess_prospects",
+  "enrich_prospect_contacts",
+  "prepare_shadow_review",
+] as const;
 
 export const REVENUE_PERIODS = ["today", "week", "month"] as const;
 
@@ -77,6 +84,7 @@ export type MarkDiscoveryRunFailedInput = {
 export type FailStaleActiveDiscoveryRunsInput = {
   tenantId: string;
   staleBefore: Date;
+  processingStaleBefore: Date;
 };
 
 export type ProspectEvidenceView = {
@@ -1271,8 +1279,28 @@ export function buildFailStaleActiveDiscoveryRunsQuery(
     .where(
       and(
         eq(discoveryRuns.tenantId, input.tenantId),
-        inArray(discoveryRuns.status, ["created", "submitted", "polling", "processing"]),
-        lte(discoveryRuns.updatedAt, input.staleBefore),
+        or(
+          and(
+            inArray(discoveryRuns.status, ["created", "submitted", "polling"]),
+            lte(discoveryRuns.updatedAt, input.staleBefore),
+          ),
+          and(
+            eq(discoveryRuns.status, "processing"),
+            lte(discoveryRuns.updatedAt, input.processingStaleBefore),
+            sql`NOT EXISTS (
+              SELECT 1
+              FROM queue_jobs active_prospect_jobs
+              WHERE active_prospect_jobs.tenant_id = ${discoveryRuns.tenantId}
+                AND active_prospect_jobs.status = 'active'
+                AND active_prospect_jobs.job_type IN (${sql.join(
+                  ACTIVE_PROSPECT_DISCOVERY_JOB_TYPES.map((jobType) => sql`${jobType}`),
+                  sql`, `,
+                )})
+                AND active_prospect_jobs.started_at > ${input.processingStaleBefore}
+                AND active_prospect_jobs.payload->>'discovery_run_id' = ${discoveryRuns.id}::text
+            )`,
+          ),
+        ),
       ),
     )
     .returning();
@@ -1370,6 +1398,9 @@ export async function failStaleActiveDiscoveryRunsForTenant(identity: { tenantId
   return failStaleActiveDiscoveryRuns({
     tenantId: identity.tenantId,
     staleBefore: new Date(Date.now() - 10 * 60 * 1000),
+    processingStaleBefore: new Date(
+      Date.now() - STALE_PROCESSING_DISCOVERY_MINUTES * 60 * 1000,
+    ),
   });
 }
 
