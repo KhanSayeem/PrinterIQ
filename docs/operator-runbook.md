@@ -56,6 +56,26 @@ pm2 restart all
 pm2 save
 ```
 
+## Fresh worktree dashboard dependencies
+
+`services/dashboard` uses pnpm so Codex worktrees can share one package store instead of duplicating full npm `node_modules` installs in every checkout.
+
+On Windows agent machines, run this once per user:
+
+```powershell
+corepack enable
+pnpm config set store-dir C:\Users\Hi\.pnpm-store
+```
+
+Then use this inside each fresh worktree:
+
+```powershell
+cd services/dashboard
+pnpm install --frozen-lockfile
+```
+
+Do not commit a machine-specific `.npmrc` or `.pnpm-store` path. The store setting belongs in the user-level pnpm config.
+
 ## Apply a new database migration
 
 ```bash
