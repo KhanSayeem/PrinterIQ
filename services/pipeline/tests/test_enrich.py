@@ -136,6 +136,7 @@ def _payload() -> dict[str, object]:
         "job_type": JobType.ENRICH_LEAD.value,
         "tenant_id": str(TENANT_ID),
         "lead_id": str(LEAD_ID),
+        "score_threshold": 40,
     }
 
 
@@ -168,6 +169,7 @@ def test_apollo_present_path_uses_apollo_tech_source_and_skips_playwright() -> N
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "enriched")]
         assert len(queue.jobs) == 1
         assert queue.jobs[0]["job_type"] == JobType.QUALIFY_LEAD.value
+        assert queue.jobs[0]["score_threshold"] == 40
 
     asyncio.run(scenario())
 

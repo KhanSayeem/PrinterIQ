@@ -194,6 +194,27 @@ def _payload(score_threshold: int = 40, **overrides: object) -> dict[str, object
 # ---------------------------------------------------------------------------
 
 
+def test_missing_score_threshold_rejects_without_claude_call() -> None:
+    async def scenario() -> None:
+        payload = _payload()
+        payload.pop("score_threshold")
+        client = FakeClaudeClient(responses=[_haiku_response(score=75)])
+
+        with pytest.raises(ValueError, match="score_threshold missing from qualify_lead payload"):
+            await qualify_lead(
+                payload,
+                lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+                enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+                qualification_repo=FakeQualificationRepository(),
+                outreach_queue=FakeOutreachQueue(),
+                claude_client=client,
+            )
+
+        assert client.calls == []
+
+    asyncio.run(scenario())
+
+
 def test_below_threshold_archives_lead_without_sonnet_call() -> None:
     async def scenario() -> None:
         fetcher = FakeLeadFetcher(lead=_make_lead())
