@@ -58,6 +58,7 @@ describe("LeadDetailView", () => {
         conversations={[]}
         outreachSends={[]}
         payment={null}
+        websitePreview={null}
       />,
     );
 
@@ -83,6 +84,7 @@ describe("LeadDetailView", () => {
         ]}
         outreachSends={[]}
         payment={null}
+        websitePreview={null}
       />,
     );
 
