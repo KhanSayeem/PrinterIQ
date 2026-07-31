@@ -69,6 +69,7 @@ describe("enqueueIngestCsvJob", () => {
         sourceFile: "apollo.csv",
         vertical: "tradies",
         dryRun: false,
+        scoreThreshold: 40,
       }),
     ).rejects.toThrow("Missing env var: REDIS_URL");
 
@@ -90,6 +91,7 @@ describe("enqueueIngestCsvJob", () => {
       sourceFile: "apollo.csv",
       vertical: "tradies",
       dryRun: false,
+      scoreThreshold: 40,
     });
 
     expect(result).toEqual({ id: "import-csv-tenant-1", acquired: true });
@@ -105,6 +107,7 @@ describe("enqueueIngestCsvJob", () => {
         source_file: "apollo.csv",
         vertical: "tradies",
         dry_run: false,
+        score_threshold: 40,
       },
       {
         attempts: 3,
@@ -128,6 +131,7 @@ describe("enqueueIngestCsvJob", () => {
       sourceFile: "apollo.csv",
       vertical: "tradies",
       dryRun: false,
+      scoreThreshold: 40,
     });
 
     expect(result).toEqual({ id: "import-csv-tenant-1", acquired: false });
@@ -207,6 +211,7 @@ describe("enqueueIngestCsvJob", () => {
       sourceFile: "apollo.csv",
       vertical: "tradies",
       dryRun: false,
+      scoreThreshold: 40,
     });
 
     expect(result).toEqual({ id: "import-csv-tenant-1", acquired: false });
@@ -227,6 +232,7 @@ describe("enqueueIngestCsvJob", () => {
       sourceFile: "new-upload.csv",
       vertical: "tradies",
       dryRun: false,
+      scoreThreshold: 40,
     });
 
     expect(result).toEqual({ id: "import-csv-tenant-1", acquired: false });
@@ -248,6 +254,7 @@ describe("enqueueIngestCsvJob", () => {
       sourceFile: "apollo.csv",
       vertical: "tradies",
       dryRun: false,
+      scoreThreshold: 40,
     });
 
     expect(result).toEqual({ id: "import-csv-tenant-1", acquired: true });
@@ -268,6 +275,7 @@ describe("enqueueIngestCsvJob", () => {
       sourceFile: "new-upload.csv",
       vertical: "tradies",
       dryRun: false,
+      scoreThreshold: 40,
     });
 
     expect(result).toEqual({ id: "import-csv-tenant-1", acquired: false });
@@ -294,6 +302,7 @@ describe("enqueueIngestCsvJob", () => {
       sourceFile: "apollo.csv",
       vertical: "tradies",
       dryRun: false,
+      scoreThreshold: 40,
     });
 
     expect(removeMock).toHaveBeenCalledOnce();

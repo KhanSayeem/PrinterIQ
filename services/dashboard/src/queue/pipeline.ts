@@ -6,6 +6,7 @@ export type IngestCsvJobInput = {
   sourceFile: string;
   vertical: string;
   dryRun: boolean;
+  scoreThreshold: number;
 };
 
 export type QueueJobLease = {
@@ -25,6 +26,7 @@ type IngestCsvPayload = {
   source_file: string;
   vertical: string;
   dry_run: boolean;
+  score_threshold: number;
 };
 
 type StartDiscoveryPayload = {
@@ -122,6 +124,7 @@ export async function enqueueIngestCsvJob(input: IngestCsvJobInput): Promise<Que
       source_file: input.sourceFile,
       vertical: input.vertical,
       dry_run: input.dryRun,
+      score_threshold: input.scoreThreshold,
     };
 
     const job = await queue.add("ingest_csv", payload, {

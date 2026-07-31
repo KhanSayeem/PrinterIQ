@@ -48,5 +48,5 @@ module = ["clients.playwright_audit"]
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = ["anthropic.*", "jsonschema.*"]
+module = ["anthropic.*", "jsonschema", "jsonschema.*", "playwright.*"]
 ignore_missing_imports = true

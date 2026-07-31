@@ -44,6 +44,7 @@ async def enrich_lead(
 ) -> None:
     tenant_id = UUID(str(payload["tenant_id"]))
     lead_id = UUID(str(payload["lead_id"]))
+    score_threshold = int(str(payload["score_threshold"]))
 
     lead = await lead_fetcher.get_lead(tenant_id=tenant_id, lead_id=lead_id)
     technologies = str(lead.get("technologies", "")).strip()
@@ -64,6 +65,7 @@ async def enrich_lead(
             "job_type": JobType.QUALIFY_LEAD.value,
             "tenant_id": str(tenant_id),
             "lead_id": str(lead_id),
+            "score_threshold": score_threshold,
         }
     )
 

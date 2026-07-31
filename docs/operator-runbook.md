@@ -86,6 +86,10 @@ psql $DATABASE_URL -f database/migrations/0003_<name>.sql
 
 ## Ingest a new Apollo CSV
 
+Confirm `QUALIFICATION_SCORE_THRESHOLD` is configured on the server before any
+dashboard CSV import. Imports fail closed without it so doomed qualification
+jobs are not queued.
+
 1. Upload the CSV to `/root/printeriq/uploads/` on the VPS
 2. Trigger the ingest job (dashboard upload feature or direct queue push):
 
