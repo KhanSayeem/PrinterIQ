@@ -26,7 +26,15 @@ type Enrichment = { cmsDetected: string | null; techSource: string; loadMs: numb
 type Qualification = { score: number; rationale: string; topWeakness: string; personalisedOpener: string | null; followup1: string | null; followup2: string | null } | null;
 type Outreach = { id: string; step: number; channel: string; templateRef: string | null; sentAt: Date | null; delivered: boolean | null; opened: boolean | null; replied: boolean | null };
 type Payment = { amountAud: string; status: string; stripeSessionId: string; paidAt: Date | null } | null;
-type Conversation = { id: string; direction: string; channel: string; body: string; createdAt: Date | string };
+type Conversation = {
+  id: string;
+  direction: string;
+  channel: string;
+  body: string;
+  instantlyEmailId?: string | null;
+  instantlyAccountId?: string | null;
+  createdAt: Date | string;
+};
 
 type Actions = {
   deleteNote: (previousState: LeadActionState, formData: FormData) => Promise<LeadActionState>;
@@ -64,6 +72,12 @@ export function LeadDetailView({
   const [, startTransition] = useTransition();
   const name = displayName(lead);
   const deleteNoteAction = actions.deleteNote ?? deleteNote;
+  const canOverrideReply = conversations.some(
+    (conversation) =>
+      conversation.direction === "inbound" &&
+      Boolean(conversation.instantlyEmailId) &&
+      Boolean(conversation.instantlyAccountId),
+  );
 
   function handleDeleteNote(conversationId: string) {
     const formData = new FormData();
@@ -100,6 +114,7 @@ export function LeadDetailView({
             leadId={lead.id}
             initialStatus={lead.status}
             score={qualification?.score ?? null}
+            canOverrideReply={canOverrideReply}
             onConversationCreated={(conversation) => setConversations((current) => [...current, conversation])}
           />
         </div>

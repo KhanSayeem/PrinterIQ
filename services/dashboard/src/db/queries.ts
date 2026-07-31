@@ -216,6 +216,8 @@ export type LeadLatestConversation = {
   leadId: string;
   direction: string;
   body: string;
+  instantlyEmailId: string | null;
+  instantlyAccountId: string | null;
   createdAt: Date | string;
 };
 
@@ -523,6 +525,8 @@ export function buildLatestConversationsForLeadsQuery(
       leadId: conversations.leadId,
       direction: conversations.direction,
       body: conversations.body,
+      instantlyEmailId: conversations.instantlyEmailId,
+      instantlyAccountId: conversations.instantlyAccountId,
       createdAt: conversations.createdAt,
     })
     .from(conversations)
@@ -593,13 +597,13 @@ export function buildInsertOperatorConversationQuery(
     createdAt: Date | string;
   }>(sql`
     INSERT INTO ${conversations} (
-      ${conversations.tenantId},
-      ${conversations.leadId},
-      ${conversations.direction},
-      ${conversations.channel},
-      ${conversations.body},
-      ${conversations.operatorOverride},
-      ${conversations.sentAt}
+      tenant_id,
+      lead_id,
+      direction,
+      channel,
+      body,
+      operator_override,
+      sent_at
     )
     SELECT
       ${leads.tenantId},
