@@ -14,6 +14,8 @@ const maxAllowedCsvUploadBytes = 75 * 1024 * 1024;
 const maxMultipartOverheadBytes = 1024 * 1024;
 const maxCsvFileNameLength = 120;
 const contentLengthRequiredMessage = "Content-Length header is required";
+const qualificationThresholdMissingMessage = "Qualification score threshold is not configured";
+const qualificationThresholdInvalidMessage = "Qualification score threshold must be an integer from 0 to 100";
 
 function uploadRoot() {
   return process.env.DASHBOARD_UPLOAD_DIR ?? path.resolve(process.cwd(), "..", "..", "uploads", "dashboard-imports");
@@ -53,6 +55,23 @@ function readMaxCsvUploadBytes() {
   }
 
   return value;
+}
+
+function readQualificationScoreThreshold() {
+  const configured = process.env.QUALIFICATION_SCORE_THRESHOLD?.trim();
+  if (!configured) {
+    return { error: qualificationThresholdMissingMessage };
+  }
+  if (!/^(0|[1-9][0-9]*)$/.test(configured)) {
+    return { error: qualificationThresholdInvalidMessage };
+  }
+
+  const value = Number(configured);
+  if (!Number.isSafeInteger(value) || value < 0 || value > 100) {
+    return { error: qualificationThresholdInvalidMessage };
+  }
+
+  return { value };
 }
 
 function maxRequestUploadBytes(maxCsvUploadBytes: number) {
@@ -123,6 +142,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Dashboard tenant not configured" }, { status: 500 });
   }
 
+  const qualificationThreshold = readQualificationScoreThreshold();
+  if ("error" in qualificationThreshold) {
+    return NextResponse.json({ error: qualificationThreshold.error }, { status: 500 });
+  }
+
   const contentLength = readContentLength(request);
   if (contentLength === null) {
     return NextResponse.json({ error: contentLengthRequiredMessage }, { status: 411 });
@@ -185,6 +209,7 @@ export async function POST(request: NextRequest) {
         sourceFile,
         vertical: "tradies",
         dryRun: false,
+        scoreThreshold: qualificationThreshold.value,
       });
     } catch (error) {
       const cleanedUp = await cleanupUploadedFile(filePath);

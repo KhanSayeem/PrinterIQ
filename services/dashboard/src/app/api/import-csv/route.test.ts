@@ -82,6 +82,7 @@ function requestWithUpload(
 describe("POST /api/import-csv", () => {
   beforeEach(() => {
     vi.stubEnv("DASHBOARD_OPERATOR_EMAILS", "operator@presciaiq.com");
+    vi.stubEnv("QUALIFICATION_SCORE_THRESHOLD", "40");
     getUserMock.mockReset();
     enqueueIngestCsvJobMock.mockReset();
     hasActiveIngestCsvJobMock.mockReset();
@@ -151,6 +152,45 @@ describe("POST /api/import-csv", () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "Dashboard tenant not configured" });
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before writing files when QUALIFICATION_SCORE_THRESHOLD is missing", async () => {
+    vi.stubEnv("QUALIFICATION_SCORE_THRESHOLD", "");
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+
+    const response = await POST(requestWithUpload("apollo.csv", "Email\nlead@example.com\n"));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Qualification score threshold is not configured" });
+    expect(hasActiveIngestCsvJobMock).not.toHaveBeenCalled();
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before writing files when QUALIFICATION_SCORE_THRESHOLD is malformed", async () => {
+    vi.stubEnv("QUALIFICATION_SCORE_THRESHOLD", "40.5");
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+
+    const response = await POST(requestWithUpload("apollo.csv", "Email\nlead@example.com\n"));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Qualification score threshold must be an integer from 0 to 100" });
+    expect(hasActiveIngestCsvJobMock).not.toHaveBeenCalled();
+    expect(writeFileMock).not.toHaveBeenCalled();
+    expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before writing files when QUALIFICATION_SCORE_THRESHOLD is out of range", async () => {
+    vi.stubEnv("QUALIFICATION_SCORE_THRESHOLD", "101");
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1", email: "operator@presciaiq.com" } } });
+
+    const response = await POST(requestWithUpload("apollo.csv", "Email\nlead@example.com\n"));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Qualification score threshold must be an integer from 0 to 100" });
+    expect(hasActiveIngestCsvJobMock).not.toHaveBeenCalled();
     expect(writeFileMock).not.toHaveBeenCalled();
     expect(enqueueIngestCsvJobMock).not.toHaveBeenCalled();
   });
@@ -364,6 +404,7 @@ describe("POST /api/import-csv", () => {
       sourceFile: "Apollo Export.csv",
       vertical: "tradies",
       dryRun: false,
+      scoreThreshold: 40,
     });
     expect(unlinkMock).not.toHaveBeenCalled();
   });

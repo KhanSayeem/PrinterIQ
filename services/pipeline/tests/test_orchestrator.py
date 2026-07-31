@@ -361,6 +361,7 @@ def test_production_pipeline_handlers_inject_worker_dependencies() -> None:
             "tenant_id": str(TENANT_ID),
             "file_path": "uploads/leads.csv",
             "source_file": "leads.csv",
+            "score_threshold": 40,
         }
         enrich_payload = {
             "job_type": JobType.ENRICH_LEAD.value,
@@ -396,6 +397,7 @@ def test_production_pipeline_handlers_inject_worker_dependencies() -> None:
         assert ingest_path == Path("uploads/leads.csv")
         assert ingest_deps["tenant_id"] == TENANT_ID
         assert ingest_deps["source_file"] == "leads.csv"
+        assert ingest_deps["score_threshold"] == 40
         assert ingest_deps["lead_repository"] is lead_repository
         assert ingest_deps["queue"] is queue
 
@@ -478,6 +480,7 @@ def test_production_ingest_handler_deletes_uploaded_csv_after_success(tmp_path: 
                 "tenant_id": str(TENANT_ID),
                 "file_path": str(csv_path),
                 "source_file": "leads.csv",
+                "score_threshold": 40,
             }
         )
 
@@ -513,6 +516,7 @@ def test_production_ingest_handler_keeps_uploaded_csv_after_failure(tmp_path: Pa
                     "tenant_id": str(TENANT_ID),
                     "file_path": str(csv_path),
                     "source_file": "leads.csv",
+                    "score_threshold": 40,
                 }
             )
 
@@ -554,6 +558,7 @@ def test_production_ingest_handler_fails_when_cleanup_fails(
                     "tenant_id": str(TENANT_ID),
                     "file_path": str(csv_path),
                     "source_file": "leads.csv",
+                    "score_threshold": 40,
                 }
             )
 
@@ -1507,7 +1512,8 @@ def test_redis_pipeline_queue_reads_bullmq_hash_job_when_wait_list_is_absent() -
             "data": (
                 '{"job_type":"ingest_csv","tenant_id":"'
                 + str(TENANT_ID)
-                + '","file_path":"/uploads/apollo.csv","source_file":"apollo.csv"}'
+                + '","file_path":"/uploads/apollo.csv","source_file":"apollo.csv",'
+                + '"score_threshold":40}'
             )
         }
         queue = RedisPipelineQueue(redis)

@@ -157,6 +157,7 @@ def test_valid_apollo_csv_inserts_imported_leads_and_enqueues_enrichment(tmp_pat
             tenant_id=TENANT_ID,
             source_file="apollo.csv",
             vertical="tradies",
+            score_threshold=40,
             lead_repository=repository,
             queue=queue,
         )
@@ -171,6 +172,7 @@ def test_valid_apollo_csv_inserts_imported_leads_and_enqueues_enrichment(tmp_pat
         assert all(lead.vertical == "tradies" for lead in repository.inserted)
         assert [job["job_type"] for job in queue.jobs] == [JobType.ENRICH_LEAD.value] * 10
         assert all(job["tenant_id"] == str(TENANT_ID) for job in queue.jobs)
+        assert all(job["score_threshold"] == 40 for job in queue.jobs)
 
     asyncio.run(scenario())
 
@@ -186,6 +188,7 @@ def test_existing_email_is_skipped_without_insert_or_enrichment_job(tmp_path: Pa
             tenant_id=TENANT_ID,
             source_file="apollo.csv",
             vertical="tradies",
+            score_threshold=40,
             lead_repository=repository,
             queue=queue,
         )
@@ -215,6 +218,7 @@ def test_missing_required_email_is_rejected_without_crashing(
             tenant_id=TENANT_ID,
             source_file="apollo.csv",
             vertical="tradies",
+            score_threshold=40,
             lead_repository=repository,
             queue=queue,
         )
@@ -241,6 +245,7 @@ def test_dry_run_reports_valid_rows_without_db_writes_or_jobs(tmp_path: Path) ->
             tenant_id=TENANT_ID,
             source_file="apollo.csv",
             vertical="tradies",
+            score_threshold=40,
             lead_repository=repository,
             queue=queue,
             dry_run=True,

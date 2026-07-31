@@ -22,11 +22,14 @@
   "file_path": "/uploads/apollo_2026_05.csv",
   "source_file": "apollo_2026_05.csv",
   "vertical": "tradies",
-  "dry_run": false
+  "dry_run": false,
+  "score_threshold": 40
 }
 ```
 
 On completion fans out one `enrich_lead` job per new lead.
+`score_threshold` is read from server-side import configuration and carried
+through every downstream lead-pipeline handoff. It must not be client supplied.
 
 ---
 
@@ -38,11 +41,13 @@ On completion fans out one `enrich_lead` job per new lead.
 {
   "job_type": "enrich_lead",
   "tenant_id": "uuid",
-  "lead_id": "uuid"
+  "lead_id": "uuid",
+  "score_threshold": 40
 }
 ```
 
-Minimal payload by design — worker fetches full lead from DB. Never put DB field values in the payload.
+Minimal payload by design — worker fetches full lead from DB and carries only
+execution context needed by the next stage. Never put DB field values in the payload.
 
 ---
 

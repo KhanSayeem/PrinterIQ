@@ -49,6 +49,7 @@ async def ingest_csv_file(
     tenant_id: UUID,
     source_file: str,
     vertical: str,
+    score_threshold: int,
     lead_repository: LeadRepository,
     queue: EnrichmentQueue,
     dry_run: bool = False,
@@ -92,6 +93,7 @@ async def ingest_csv_file(
                     "job_type": JobType.ENRICH_LEAD.value,
                     "tenant_id": str(tenant_id),
                     "lead_id": str(lead_id),
+                    "score_threshold": score_threshold,
                 }
             )
             enqueued_jobs += 1
