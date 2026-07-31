@@ -209,7 +209,7 @@ def _parse_and_validate(text: str, schema: dict[str, Any]) -> dict[str, Any] | N
     import jsonschema
 
     try:
-        raw = json.loads(text)
+        raw = json.loads(_strip_json_code_fence(text))
     except (json.JSONDecodeError, ValueError):
         return None
     if not isinstance(raw, dict):
@@ -219,6 +219,17 @@ def _parse_and_validate(text: str, schema: dict[str, Any]) -> dict[str, Any] | N
     except jsonschema.ValidationError:
         return None
     return raw
+
+
+def _strip_json_code_fence(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+
+    lines = stripped.splitlines()
+    if len(lines) >= 3 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
 
 
 def _campaign_id(payload: dict[str, object]) -> str:

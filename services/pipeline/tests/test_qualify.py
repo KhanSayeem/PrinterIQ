@@ -287,6 +287,36 @@ def test_above_threshold_qualifies_lead_calls_sonnet_enqueues_outreach(
     asyncio.run(scenario())
 
 
+def test_fenced_haiku_json_is_accepted_and_qualifies_lead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-from-env")
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        haiku = _haiku_response(score=75)
+        fenced_haiku = ClaudeResponse(
+            text=f"```json\n{haiku.text}\n```",
+            cost_usd=haiku.cost_usd,
+            model=haiku.model,
+        )
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=FakeClaudeClient(responses=[fenced_haiku, _sonnet_response()]),
+        )
+
+        assert repo.inserted[0]["score"] == 75
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
+        assert queue.jobs[0]["job_type"] == JobType.GENERATE_PREVIEW.value
+
+    asyncio.run(scenario())
+
+
 def test_outreach_campaign_id_can_come_from_qualify_payload() -> None:
     async def scenario() -> None:
         queue = FakeOutreachQueue()
