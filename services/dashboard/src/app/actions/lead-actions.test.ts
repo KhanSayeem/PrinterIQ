@@ -160,6 +160,42 @@ describe("lead actions", () => {
     expect(deps.insertOperatorConversation).not.toHaveBeenCalled();
   });
 
+  it("returns a graceful override reply error when no Instantly reply metadata exists", async () => {
+    const deps = createDeps();
+    deps.getLatestInstantlyReplyMetadata.mockRejectedValueOnce(new Error("Instantly reply metadata not found for lead"));
+    const actions = createLeadActions(deps);
+
+    const result = await actions.overrideReply(
+      initialLeadActionState,
+      form({ tenantId, leadId, body: "Happy to send the details." }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message: "This lead does not have an inbound Instantly reply thread yet.",
+    });
+    expect(deps.instantly.sendReply).not.toHaveBeenCalled();
+    expect(deps.insertOperatorConversation).not.toHaveBeenCalled();
+  });
+
+  it("returns a graceful override reply error when Instantly is not configured", async () => {
+    const deps = createDeps();
+    deps.instantly.sendReply.mockRejectedValueOnce(new Error("Missing env var: INSTANTLY_API_KEY"));
+    const actions = createLeadActions(deps);
+
+    const result = await actions.overrideReply(
+      initialLeadActionState,
+      form({ tenantId, leadId, body: "Happy to send the details." }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message: "Instantly is not configured for dashboard replies.",
+    });
+    expect(deps.insertOperatorConversation).not.toHaveBeenCalled();
+    expect(deps.updateLeadStatus).not.toHaveBeenCalled();
+  });
+
   it("checks pause eligibility before pausing through Instantly", async () => {
     const deps = createDeps();
     deps.assertLeadStatusTransitionAllowed.mockRejectedValueOnce(new Error("Lead is not eligible for archived"));

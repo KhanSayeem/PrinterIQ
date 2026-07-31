@@ -71,6 +71,10 @@ function readConversationIdentity(formData: FormData) {
   return { ...identity, conversationId };
 }
 
+function isErrorMessage(error: unknown, message: string) {
+  return error instanceof Error && error.message === message;
+}
+
 export function createLeadActions(deps: LeadActionDeps) {
   return {
     async addNote(_previousState: LeadActionState, formData: FormData): Promise<LeadActionState> {
@@ -101,12 +105,29 @@ export function createLeadActions(deps: LeadActionDeps) {
       }
 
       await deps.assertLeadStatusTransitionAllowed({ ...identity, status: "replied" });
-      const metadata = await deps.getLatestInstantlyReplyMetadata(identity);
-      await deps.instantly.sendReply({
-        ...metadata,
-        subject: null,
-        body,
-      });
+
+      let metadata: Awaited<ReturnType<typeof deps.getLatestInstantlyReplyMetadata>>;
+      try {
+        metadata = await deps.getLatestInstantlyReplyMetadata(identity);
+      } catch (error) {
+        if (isErrorMessage(error, "Instantly reply metadata not found for lead")) {
+          return { ok: false, message: "This lead does not have an inbound Instantly reply thread yet." };
+        }
+        throw error;
+      }
+
+      try {
+        await deps.instantly.sendReply({
+          ...metadata,
+          subject: null,
+          body,
+        });
+      } catch (error) {
+        if (isErrorMessage(error, "Missing env var: INSTANTLY_API_KEY")) {
+          return { ok: false, message: "Instantly is not configured for dashboard replies." };
+        }
+        throw error;
+      }
       const conversation = await deps.insertOperatorConversation({
         ...identity,
         direction: "outbound",
