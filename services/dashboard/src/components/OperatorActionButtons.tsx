@@ -39,6 +39,7 @@ export function OperatorActionButtons({
   actions = defaultActions,
   onConversationCreated,
   compact = false,
+  canOverrideReply = true,
 }: {
   tenantId: string;
   leadId: string;
@@ -47,6 +48,7 @@ export function OperatorActionButtons({
   actions?: LeadActions;
   onConversationCreated: (conversation: Conversation) => void;
   compact?: boolean;
+  canOverrideReply?: boolean;
 }) {
   const [noteBody, setNoteBody] = useState("");
   const [replyBody, setReplyBody] = useState("");
@@ -69,6 +71,7 @@ export function OperatorActionButtons({
     action: (previousState: LeadActionState, formData: FormData) => Promise<LeadActionState>,
     formData: FormData,
     onSuccess?: () => void,
+    failureMessage = "Action failed. Check Instantly and database connectivity.",
   ) {
     startTransition(async () => {
       try {
@@ -78,7 +81,7 @@ export function OperatorActionButtons({
           onSuccess?.();
         }
       } catch {
-        setMessage("Action failed. Check Instantly and database connectivity.");
+        setMessage(failureMessage);
       }
     });
   }
@@ -116,7 +119,7 @@ export function OperatorActionButtons({
           <button
             className={actionButtonClass}
             type="button"
-            disabled={isPending}
+            disabled={isPending || !canOverrideReply}
             onClick={() => setOpenDrawer(openDrawer === "reply" ? null : "reply")}
           >
             <Reply size={compact ? 18 : 14} />
@@ -144,7 +147,12 @@ export function OperatorActionButtons({
       {openDrawer === "note" ? (
         <form
           className="operator-action-drawer"
-          action={(formData) => run(actions.addNote, formData, () => setNoteBody(""))}
+          action={(formData) => run(
+            actions.addNote,
+            formData,
+            () => setNoteBody(""),
+            "Note failed. Check dashboard database and tenant configuration.",
+          )}
         >
           <input type="hidden" name="tenantId" value={tenantId} />
           <input type="hidden" name="leadId" value={leadId} />
@@ -165,10 +173,19 @@ export function OperatorActionButtons({
         </form>
       ) : null}
 
+      {!canOverrideReply ? (
+        <div className="operator-action-message">No inbound Instantly reply thread yet.</div>
+      ) : null}
+
       {openDrawer === "reply" ? (
         <form
           className="operator-action-drawer"
-          action={(formData) => run(actions.overrideReply, formData, () => setReplyBody(""))}
+          action={(formData) => run(
+            actions.overrideReply,
+            formData,
+            () => setReplyBody(""),
+            "Reply failed. Check Instantly setup and the inbound reply thread.",
+          )}
         >
           <input type="hidden" name="tenantId" value={tenantId} />
           <input type="hidden" name="leadId" value={leadId} />

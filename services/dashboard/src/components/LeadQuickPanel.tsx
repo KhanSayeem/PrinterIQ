@@ -22,6 +22,8 @@ export type LeadListRow = {
     id: string;
     direction: string;
     body: string;
+    instantlyEmailId?: string | null;
+    instantlyAccountId?: string | null;
     createdAt: Date | string;
   } | null;
   updatedAt: Date | string | null;
@@ -106,6 +108,11 @@ function LeadQuickPanelContent({
   onClose?: () => void;
   autoFocusClose?: boolean;
 }) {
+  const canOverrideReply =
+    lead.latestConversation?.direction === "inbound" &&
+    Boolean(lead.latestConversation.instantlyEmailId) &&
+    Boolean(lead.latestConversation.instantlyAccountId);
+
   return (
     <>
       <div className="dp-header">
@@ -147,6 +154,7 @@ function LeadQuickPanelContent({
           initialStatus={lead.status}
           score={lead.score}
           actions={actions}
+          canOverrideReply={canOverrideReply}
           onConversationCreated={() => {}}
           compact
         />
