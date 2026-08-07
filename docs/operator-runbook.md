@@ -88,7 +88,46 @@ psql $DATABASE_URL -f database/migrations/0003_<name>.sql
 
 Confirm `QUALIFICATION_SCORE_THRESHOLD` is configured on the server before any
 dashboard CSV import. Imports fail closed without it so doomed qualification
-jobs are not queued.
+jobs are not queued. The dashboard shows `Qualification score threshold is not
+configured` and returns HTTP 500 before creating anything.
+
+### Which env file to edit
+
+The two services read different env files. Putting a dashboard variable in the
+pipeline's file is a silent no-op.
+
+| Service | Runs as | Reads |
+| --- | --- | --- |
+| pipeline | python workers, cwd `/root/printeriq` | `/root/printeriq/.env` |
+| dashboard | `next start`, cwd `/root/printeriq/services/dashboard` | `/root/printeriq/services/dashboard/.env.production` |
+
+`QUALIFICATION_SCORE_THRESHOLD` is read by the **dashboard**, so it belongs in
+`services/dashboard/.env.production`. Adding it to `/root/printeriq/.env` has no
+effect. The pipeline never reads it from env at all: the dashboard validates it
+per upload and threads it through the job payload as `score_threshold`.
+
+Set it:
+
+```bash
+cd /root/printeriq/services/dashboard
+cp .env.production ".env.production.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+echo "QUALIFICATION_SCORE_THRESHOLD=20" >> .env.production
+pm2 restart dashboard
+pm2 save
+```
+
+Notes:
+
+- `pm2 restart dashboard --update-env` re-reads the **shell** environment, not
+  any `.env` file. It will not pick up a file edit on its own. Next.js loads
+  `.env.production` at process start, so a plain `pm2 restart` is what applies
+  the change.
+- `pm2 env <id> | grep QUALIFICATION` will stay empty even when the variable is
+  working, because Next.js loads it into the app at runtime rather than through
+  PM2's injected env. Verify by hard-refreshing the dashboard and confirming the
+  red banner is gone, not with `pm2 env`.
+- Value must be an integer `0..100` or the import is rejected. Qualification
+  compares with strict `<`, so a lead scoring exactly the threshold passes.
 
 1. Upload the CSV to `/root/printeriq/uploads/` on the VPS
 2. Trigger the ingest job (dashboard upload feature or direct queue push):
