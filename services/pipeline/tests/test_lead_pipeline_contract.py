@@ -94,10 +94,7 @@ class FakeClaudeClient:
                     "score": 54,
                     "rationale": "Below the configured threshold.",
                     "top_weakness": "no_mobile",
-                    "subject_line": "Subject",
-                    "opener": "Opener",
-                    "followup_1": "Follow 1",
-                    "followup_2": "Follow 2",
+                    "has_actionable_weakness": True,
                 }
             ),
             cost_usd=Decimal("0.000100"),

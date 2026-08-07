@@ -15,7 +15,13 @@ from db.queries import (
     insert_qualification,
 )
 from pipeline_queue.definitions import JobType
-from workers.qualify import ClaudeResponse, DeadLetterError, qualify_lead
+from workers.qualify import (
+    _HAIKU_SCHEMA,
+    ClaudeResponse,
+    DeadLetterError,
+    _parse_and_validate,
+    qualify_lead,
+)
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -151,16 +157,17 @@ def _make_enrichment() -> dict[str, object]:
     }
 
 
-def _haiku_response(score: int = 75) -> ClaudeResponse:
+def _haiku_response(
+    score: int = 75,
+    has_actionable_weakness: bool = True,
+    top_weakness: str = "no_mobile",
+) -> ClaudeResponse:
     content = json.dumps(
         {
             "score": score,
-            "rationale": "No mobile site, slow load — strong weakness for pitch.",
-            "top_weakness": "no_mobile",
-            "subject_line": "Your site isn't mobile — losing jobs every day",
-            "opener": "Hey Brett, Stone Builders site breaks on phones — losing quote requests.",
-            "followup_1": "Most tradies miss 40% of leads from mobile. Easy fix.",
-            "followup_2": "Happy to show you what a quick mobile fix looks like for builders.",
+            "rationale": "No mobile site, slow load. Strong weakness for pitch.",
+            "top_weakness": top_weakness,
+            "has_actionable_weakness": has_actionable_weakness,
         }
     )
     return ClaudeResponse(text=content, cost_usd=HAIKU_COST, model=HAIKU_MODEL)
@@ -238,10 +245,234 @@ def test_below_threshold_archives_lead_without_sonnet_call() -> None:
         assert q["model_sonnet"] is None
         assert q["personalised_opener"] is None
         assert q["followup_1"] is None
+        assert q["has_actionable_weakness"] is True
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
         assert queue.jobs == []
         assert len(client.calls) == 1
         assert client.calls[0][0] == "qualify-v1"
+
+    asyncio.run(scenario())
+
+
+def test_below_threshold_archives_lead_regardless_of_actionable_weakness() -> None:
+    async def scenario(has_actionable_weakness: bool) -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(
+            responses=[_haiku_response(score=30, has_actionable_weakness=has_actionable_weakness)]
+        )
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert repo.inserted[0]["has_actionable_weakness"] == has_actionable_weakness
+        assert repo.inserted[0]["model_sonnet"] is None
+        assert queue.jobs == []
+        assert len(client.calls) == 1
+
+    asyncio.run(scenario(True))
+    asyncio.run(scenario(False))
+
+
+def test_above_threshold_without_actionable_weakness_archives_lead_single_claude_call() -> None:
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(
+            responses=[_haiku_response(score=75, has_actionable_weakness=False)]
+        )
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert len(repo.inserted) == 1
+        q = repo.inserted[0]
+        assert q["score"] == 75
+        assert q["has_actionable_weakness"] is False
+        assert q["subject_line"] is None
+        assert q["personalised_opener"] is None
+        assert q["followup_1"] is None
+        assert q["followup_2"] is None
+        assert q["model_sonnet"] is None
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert queue.jobs == []
+        assert len(client.calls) == 1
+        assert client.calls[0][0] == "qualify-v1"
+
+    asyncio.run(scenario())
+
+
+def test_haiku_response_missing_has_actionable_weakness_dead_letters_after_retry() -> None:
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        missing_field = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 75,
+                    "rationale": "No mobile site, slow load.",
+                    "top_weakness": "no_mobile",
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        client = FakeClaudeClient(responses=[missing_field, missing_field])
+
+        with pytest.raises(DeadLetterError):
+            await qualify_lead(
+                _payload(score_threshold=40),
+                lead_fetcher=fetcher,
+                enrichment_fetcher=enrichment,
+                qualification_repo=repo,
+                outreach_queue=queue,
+                claude_client=client,
+            )
+
+        assert repo.inserted == []
+        assert queue.jobs == []
+        assert len(client.calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_haiku_schema_validates_with_only_core_fields() -> None:
+    data = {
+        "score": 75,
+        "rationale": "No mobile site, slow load.",
+        "top_weakness": "no_mobile",
+        "has_actionable_weakness": True,
+    }
+
+    result = _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA)
+
+    assert result == data
+
+
+def test_top_weakness_em_dash_is_normalised_on_persist() -> None:
+    async def scenario() -> None:
+        repo = FakeQualificationRepository()
+        haiku = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 30,
+                    "rationale": "Weak site overall—worth flagging.",
+                    "top_weakness": "Missing H1 tag on homepage—hurts SEO",
+                    "has_actionable_weakness": True,
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        client = FakeClaudeClient(responses=[haiku])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=repo,
+            outreach_queue=FakeOutreachQueue(),
+            claude_client=client,
+        )
+
+        q = repo.inserted[0]
+        assert "—" not in q["top_weakness"]
+        assert "—" not in q["rationale"]
+        assert q["top_weakness"] == "Missing H1 tag on homepage,hurts SEO"
+        assert q["rationale"] == "Weak site overall,worth flagging."
+
+    asyncio.run(scenario())
+
+
+def test_top_weakness_en_dash_is_normalised_on_persist() -> None:
+    async def scenario() -> None:
+        repo = FakeQualificationRepository()
+        haiku = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 30,
+                    "rationale": "Slow across the board.",
+                    "top_weakness": (
+                        "Website load time is 5.5 seconds – slower than ideal"
+                    ),
+                    "has_actionable_weakness": True,
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        client = FakeClaudeClient(responses=[haiku])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=repo,
+            outreach_queue=FakeOutreachQueue(),
+            claude_client=client,
+        )
+
+        q = repo.inserted[0]
+        assert "–" not in q["top_weakness"]
+        assert q["top_weakness"] == "Website load time is 5.5 seconds , slower than ideal"
+
+    asyncio.run(scenario())
+
+
+def test_sonnet_outputs_with_dashes_are_normalised_on_persist() -> None:
+    async def scenario() -> None:
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        sonnet = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "subject_line": "Stone Builders—your site's costing you jobs",
+                    "opener": "Brett, your site loads slow – that's costing quotes.",
+                    "followup_1": "Quick fix available—want a look?",
+                    "followup_2": "Last nudge – offer's open if timing works.",
+                }
+            ),
+            cost_usd=SONNET_COST,
+            model=SONNET_MODEL,
+        )
+        client = FakeClaudeClient(responses=[_haiku_response(score=75), sonnet])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        q = repo.inserted[0]
+        assert q["subject_line"] == "Stone Builders,your site's costing you jobs"
+        assert q["personalised_opener"] == "Brett, your site loads slow , that's costing quotes."
+        assert q["followup_1"] == "Quick fix available,want a look?"
+        assert q["followup_2"] == "Last nudge , offer's open if timing works."
+        for field_name in ("subject_line", "personalised_opener", "followup_1", "followup_2"):
+            assert "—" not in q[field_name]
+            assert "–" not in q[field_name]
 
     asyncio.run(scenario())
 
@@ -271,6 +502,7 @@ def test_above_threshold_qualifies_lead_calls_sonnet_enqueues_outreach(
         assert q["score"] == 75
         assert q["model_sonnet"] == SONNET_MODEL
         assert q["personalised_opener"] is not None
+        assert q["has_actionable_weakness"] is True
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
         assert len(queue.jobs) == 1
         outreach_payload = queue.jobs[0]
@@ -472,6 +704,7 @@ def test_insert_qualification_writes_tenant_scoped_row() -> None:
                 score=75,
                 rationale="Strong weakness",
                 top_weakness="no_mobile",
+                has_actionable_weakness=True,
                 subject_line="Subject",
                 personalised_opener="Opener",
                 followup_1="Follow 1",
@@ -494,6 +727,7 @@ def test_insert_qualification_writes_tenant_scoped_row() -> None:
         assert "qualifications.tenant_id = EXCLUDED.tenant_id" in q
         assert "tenant_id" in q
         assert "lead_id" in q
+        assert "has_actionable_weakness" in q
         assert conn.args[0][0] == LEAD_ID
         assert conn.args[0][1] == TENANT_ID
 

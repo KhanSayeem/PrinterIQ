@@ -230,6 +230,22 @@ def test_parse_personalisation_json_requires_exactly_six_services() -> None:
         module.parse_personalisation_json(json.dumps(invalid))
 
 
+def test_parse_personalisation_json_rejects_em_dash() -> None:
+    module = _generate_preview_module()
+    invalid = _personalisation(about_blurb="Great tradies—trusted locally.")
+
+    with pytest.raises(module.DeadLetterError, match="invalid preview personalisation dash"):
+        module.parse_personalisation_json(json.dumps(invalid))
+
+
+def test_parse_personalisation_json_rejects_en_dash() -> None:
+    module = _generate_preview_module()
+    invalid = _personalisation(about_blurb="Serving Brisbane – fast and reliable.")
+
+    with pytest.raises(module.DeadLetterError, match="invalid preview personalisation dash"):
+        module.parse_personalisation_json(json.dumps(invalid))
+
+
 def test_render_preview_html_escapes_lead_and_claude_values() -> None:
     module = _generate_preview_module()
     malicious = _personalisation(

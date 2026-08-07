@@ -81,6 +81,21 @@ def test_canonical_schema_includes_prospect_staging_contract() -> None:
     assert "prospect_manual_assessment_idempotency_idx" in schema
 
 
+def test_canonical_schema_includes_has_actionable_weakness_on_qualifications() -> None:
+    schema = (REPO_ROOT / "database" / "schema.sql").read_text()
+    migration_path = (
+        REPO_ROOT / "database" / "migrations" / "0010_add_has_actionable_weakness.sql"
+    )
+
+    assert migration_path.exists()
+    migration = migration_path.read_text()
+
+    assert "has_actionable_weakness" in schema
+    assert "CREATE TABLE qualifications" in schema
+    assert "ALTER TABLE qualifications" in migration
+    assert "ADD COLUMN IF NOT EXISTS has_actionable_weakness BOOLEAN" in migration
+
+
 def test_prospect_active_run_guard_migration_matches_canonical_schema() -> None:
     schema = (REPO_ROOT / "database" / "schema.sql").read_text()
     migration = (

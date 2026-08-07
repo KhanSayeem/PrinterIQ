@@ -374,6 +374,7 @@ class PipelineStore:
                 score=int(cast(SupportsInt, q["score"])),
                 rationale=str(q["rationale"]),
                 top_weakness=str(q["top_weakness"]),
+                has_actionable_weakness=cast(bool | None, q["has_actionable_weakness"]),
                 subject_line=cast(str | None, q["subject_line"]),
                 personalised_opener=cast(str | None, q["personalised_opener"]),
                 followup_1=cast(str | None, q["followup_1"]),
@@ -1613,6 +1614,7 @@ class QualificationInsert:
     score: int
     rationale: str
     top_weakness: str
+    has_actionable_weakness: bool | None
     subject_line: str | None
     personalised_opener: str | None
     followup_1: str | None
@@ -1656,14 +1658,14 @@ async def insert_qualification(
         """
         INSERT INTO qualifications (
           lead_id, tenant_id,
-          score, rationale, top_weakness,
+          score, rationale, top_weakness, has_actionable_weakness,
           subject_line, personalised_opener, followup_1, followup_2,
           model_haiku, model_sonnet,
           cost_usd, prompt_version
         )
         SELECT
-          $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14
         FROM leads
         WHERE id = $1
           AND tenant_id = $2
@@ -1673,6 +1675,7 @@ async def insert_qualification(
             score = EXCLUDED.score,
             rationale = EXCLUDED.rationale,
             top_weakness = EXCLUDED.top_weakness,
+            has_actionable_weakness = EXCLUDED.has_actionable_weakness,
             subject_line = EXCLUDED.subject_line,
             personalised_opener = EXCLUDED.personalised_opener,
             followup_1 = EXCLUDED.followup_1,
@@ -1690,6 +1693,7 @@ async def insert_qualification(
         q.score,
         q.rationale,
         q.top_weakness,
+        q.has_actionable_weakness,
         q.subject_line,
         q.personalised_opener,
         q.followup_1,
