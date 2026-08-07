@@ -129,13 +129,23 @@ Notes:
 - Value must be an integer `0..100` or the import is rejected. Qualification
   compares with strict `<`, so a lead scoring exactly the threshold passes.
 
-1. Upload the CSV to `/root/printeriq/uploads/` on the VPS
-2. Trigger the ingest job (dashboard upload feature or direct queue push):
+Use the dashboard **Import CSV** button. That is the only working ingest entry
+point.
 
-```bash
-cd /root/printeriq/services/pipeline
-python -m src.workers.ingest --file /uploads/<filename>.csv
 ```
+https://dashboard.presciaiq.com/leads  ->  Import CSV
+```
+
+The dashboard writes the file to disk and enqueues an `ingest_csv` job carrying
+`score_threshold`. It does not parse the CSV itself; header and row validation
+happen later in the pipeline worker, so a malformed file returns a successful
+upload and then silently rejects every row. Check the import summary for
+`inserted`, `rejected`, and `skipped_duplicates` rather than assuming success.
+
+There is **no working CLI ingest**. `src/workers/ingest.py` has no `__main__`
+block, so `python -m src.workers.ingest --file ...` exits without doing
+anything. Only `orchestrator.py` and `purge_prospect_data.py` are runnable as
+modules. Do not document or rely on a CLI ingest command until one exists.
 
 Use `--dry-run` first to validate without writing:
 
