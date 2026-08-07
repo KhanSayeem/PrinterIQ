@@ -397,8 +397,8 @@ def test_top_weakness_em_dash_is_normalised_on_persist() -> None:
         q = repo.inserted[0]
         assert "—" not in q["top_weakness"]
         assert "—" not in q["rationale"]
-        assert q["top_weakness"] == "Missing H1 tag on homepage,hurts SEO"
-        assert q["rationale"] == "Weak site overall,worth flagging."
+        assert q["top_weakness"] == "Missing H1 tag on homepage, hurts SEO"
+        assert q["rationale"] == "Weak site overall, worth flagging."
 
     asyncio.run(scenario())
 
@@ -433,7 +433,7 @@ def test_top_weakness_en_dash_is_normalised_on_persist() -> None:
 
         q = repo.inserted[0]
         assert "–" not in q["top_weakness"]
-        assert q["top_weakness"] == "Website load time is 5.5 seconds , slower than ideal"
+        assert q["top_weakness"] == "Website load time is 5.5 seconds, slower than ideal"
 
     asyncio.run(scenario())
 
@@ -466,10 +466,10 @@ def test_sonnet_outputs_with_dashes_are_normalised_on_persist() -> None:
         )
 
         q = repo.inserted[0]
-        assert q["subject_line"] == "Stone Builders,your site's costing you jobs"
-        assert q["personalised_opener"] == "Brett, your site loads slow , that's costing quotes."
-        assert q["followup_1"] == "Quick fix available,want a look?"
-        assert q["followup_2"] == "Last nudge , offer's open if timing works."
+        assert q["subject_line"] == "Stone Builders, your site's costing you jobs"
+        assert q["personalised_opener"] == "Brett, your site loads slow, that's costing quotes."
+        assert q["followup_1"] == "Quick fix available, want a look?"
+        assert q["followup_2"] == "Last nudge, offer's open if timing works."
         for field_name in ("subject_line", "personalised_opener", "followup_1", "followup_2"):
             assert "—" not in q[field_name]
             assert "–" not in q[field_name]

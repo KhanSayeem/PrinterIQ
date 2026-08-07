@@ -40,7 +40,10 @@ _HAIKU_SCHEMA: dict[str, Any] = {
 # Claude uses them despite prompt instructions. Normalise rather than reject:
 # rejecting on punctuation would dead-letter otherwise-good leads, and this
 # text goes straight into a customer-facing email.
-_DASH_SUBSTITUTES_PATTERN = re.compile("[—–]")
+# Consume whitespace either side of the dash so both spaced and unspaced forms
+# produce a correctly punctuated ", ". Replacing the dash alone yields
+# "homepage,hurts" or "seconds , slower".
+_DASH_SUBSTITUTES_PATTERN = re.compile(r"\s*[—–]\s*")
 _MULTIPLE_SPACES_PATTERN = re.compile(r" {2,}")
 
 _SONNET_SCHEMA: dict[str, Any] = {
@@ -259,8 +262,9 @@ def _normalise_dashes(value: str) -> str:
     straight into customer-facing email copy. Normalise rather than reject:
     rejecting on punctuation would throw away an otherwise-good lead.
     """
-    replaced = _DASH_SUBSTITUTES_PATTERN.sub(",", value)
-    return _MULTIPLE_SPACES_PATTERN.sub(" ", replaced)
+    replaced = _DASH_SUBSTITUTES_PATTERN.sub(", ", value)
+    collapsed = _MULTIPLE_SPACES_PATTERN.sub(" ", replaced)
+    return collapsed.strip(" ,")
 
 
 def _parse_and_validate(text: str, schema: dict[str, Any]) -> dict[str, Any] | None:
