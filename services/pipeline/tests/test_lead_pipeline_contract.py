@@ -116,7 +116,6 @@ class FakeClaudeClient:
                     "rationale": "Below the configured threshold.",
                     "top_weakness": "no_mobile",
                     "weakness_label": "no_mobile",
-                    "has_actionable_weakness": True,
                 }
             ),
             cost_usd=Decimal("0.000100"),
