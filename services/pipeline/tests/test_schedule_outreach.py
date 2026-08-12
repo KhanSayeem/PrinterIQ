@@ -156,6 +156,9 @@ def _qualification() -> dict[str, object]:
         "personalised_opener": "Brett, your site is hard to use on mobile.",
         "followup_1": "Worth fixing before the next batch of quote requests.",
         "followup_2": "Happy to show what a fast tradie site can look like.",
+        "weakness_sentence": (
+            "your site isn't built for mobile, so most visitors give up before they call"
+        ),
     }
 
 
@@ -203,6 +206,10 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
                         "custom_variables": {
                             "opener": "Brett, your site is hard to use on mobile.",
                             "weakness": "no_mobile",
+                            "weakness_sentence": (
+                                "your site isn't built for mobile, so most visitors give up "
+                                "before they call"
+                            ),
                             "followup_1": "Worth fixing before the next batch of quote requests.",
                             "followup_2": "Happy to show what a fast tradie site can look like.",
                             "lead_id": str(LEAD_ID),
@@ -233,6 +240,28 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
         assert repo.updates == [(TENANT_ID, LEAD_ID)]
         assert repo.preview_gets == [(TENANT_ID, LEAD_ID)]
         assert repo.lock_released is True
+
+    asyncio.run(scenario())
+
+
+def test_null_weakness_sentence_does_not_crash_and_sends_empty_string() -> None:
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+        instantly = FakeInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]})
+        qualification = _qualification()
+        qualification["weakness_sentence"] = None
+
+        await schedule_outreach(
+            _payload(),
+            lead_fetcher=FakeLeadFetcher(_lead()),
+            qualification_fetcher=FakeQualificationFetcher(qualification),
+            outreach_repo=repo,
+            instantly_client=instantly,
+        )
+
+        custom_variables = instantly.calls[0]["leads"][0]["custom_variables"]
+        assert isinstance(custom_variables, dict)
+        assert custom_variables["weakness_sentence"] == ""
 
     asyncio.run(scenario())
 

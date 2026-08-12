@@ -17,6 +17,7 @@ from db.queries import (
 from pipeline_queue.definitions import JobType
 from workers.qualify import (
     _HAIKU_SCHEMA,
+    _SONNET_SCHEMA,
     ClaudeResponse,
     DeadLetterError,
     _parse_and_validate,
@@ -180,6 +181,9 @@ def _sonnet_response() -> ClaudeResponse:
             "opener": "Brett, Stone Builders online — great work, but site's invisible on phones.",
             "followup_1": "Could be worth a quick chat — I build sites for tradies that get found.",
             "followup_2": "No pressure, just happy to show you what's possible.",
+            "weakness_sentence": (
+                "your site isn't built for mobile, so most visitors give up before they call"
+            ),
         }
     )
     return ClaudeResponse(text=content, cost_usd=SONNET_COST, model=SONNET_MODEL)
@@ -245,6 +249,7 @@ def test_below_threshold_archives_lead_without_sonnet_call() -> None:
         assert q["model_sonnet"] is None
         assert q["personalised_opener"] is None
         assert q["followup_1"] is None
+        assert q["weakness_sentence"] is None
         assert q["has_actionable_weakness"] is True
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
         assert queue.jobs == []
@@ -310,6 +315,7 @@ def test_above_threshold_without_actionable_weakness_archives_lead_single_claude
         assert q["personalised_opener"] is None
         assert q["followup_1"] is None
         assert q["followup_2"] is None
+        assert q["weakness_sentence"] is None
         assert q["model_sonnet"] is None
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
         assert queue.jobs == []
@@ -449,6 +455,7 @@ def test_sonnet_outputs_with_dashes_are_normalised_on_persist() -> None:
                     "opener": "Brett, your site loads slow – that's costing quotes.",
                     "followup_1": "Quick fix available—want a look?",
                     "followup_2": "Last nudge – offer's open if timing works.",
+                    "weakness_sentence": "loads slow—that costs you jobs",
                 }
             ),
             cost_usd=SONNET_COST,
@@ -470,9 +477,140 @@ def test_sonnet_outputs_with_dashes_are_normalised_on_persist() -> None:
         assert q["personalised_opener"] == "Brett, your site loads slow, that's costing quotes."
         assert q["followup_1"] == "Quick fix available, want a look?"
         assert q["followup_2"] == "Last nudge, offer's open if timing works."
-        for field_name in ("subject_line", "personalised_opener", "followup_1", "followup_2"):
+        assert q["weakness_sentence"] == "loads slow, that costs you jobs"
+        for field_name in (
+            "subject_line",
+            "personalised_opener",
+            "followup_1",
+            "followup_2",
+            "weakness_sentence",
+        ):
             assert "—" not in q[field_name]
             assert "–" not in q[field_name]
+
+    asyncio.run(scenario())
+
+
+def test_sonnet_response_missing_weakness_sentence_dead_letters_after_retry() -> None:
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        sonnet_missing_field = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "subject_line": "Stone Builders, your site's costing you mobile jobs",
+                    "opener": "Brett, Stone Builders online, great work, but invisible on phones.",
+                    "followup_1": "Could be worth a quick chat, I build sites for tradies.",
+                    "followup_2": "No pressure, just happy to show you what's possible.",
+                }
+            ),
+            cost_usd=SONNET_COST,
+            model=SONNET_MODEL,
+        )
+        client = FakeClaudeClient(
+            responses=[
+                _haiku_response(score=75),
+                sonnet_missing_field,
+                sonnet_missing_field,
+            ]
+        )
+
+        with pytest.raises(DeadLetterError):
+            await qualify_lead(
+                _payload(score_threshold=40),
+                lead_fetcher=fetcher,
+                enrichment_fetcher=enrichment,
+                qualification_repo=repo,
+                outreach_queue=queue,
+                claude_client=client,
+            )
+
+        assert repo.inserted == []
+        assert repo.status_updates == []
+        assert queue.jobs == []
+        assert len(client.calls) == 3
+
+    asyncio.run(scenario())
+
+
+def test_sonnet_schema_requires_weakness_sentence() -> None:
+    data = {
+        "subject_line": "Subject",
+        "opener": "Opener",
+        "followup_1": "Follow 1",
+        "followup_2": "Follow 2",
+    }
+
+    result = _parse_and_validate(json.dumps(data), _SONNET_SCHEMA)
+
+    assert result is None
+
+
+def test_happy_path_persists_weakness_sentence() -> None:
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(responses=[_haiku_response(score=75), _sonnet_response()])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        q = repo.inserted[0]
+        assert q["weakness_sentence"] == (
+            "your site isn't built for mobile, so most visitors give up before they call"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_weakness_sentence_dashes_normalised_on_persist() -> None:
+    async def scenario() -> None:
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        sonnet = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "subject_line": "Subject",
+                    "opener": "Opener",
+                    "followup_1": "Follow 1",
+                    "followup_2": "Follow 2",
+                    "weakness_sentence": (
+                        "site loads slowly—that costs you jobs, and takes 5 seconds "
+                        "– too long for mobile users"
+                    ),
+                }
+            ),
+            cost_usd=SONNET_COST,
+            model=SONNET_MODEL,
+        )
+        client = FakeClaudeClient(responses=[_haiku_response(score=75), sonnet])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        q = repo.inserted[0]
+        assert "—" not in q["weakness_sentence"]
+        assert "–" not in q["weakness_sentence"]
+        assert q["weakness_sentence"] == (
+            "site loads slowly, that costs you jobs, and takes 5 seconds, "
+            "too long for mobile users"
+        )
 
     asyncio.run(scenario())
 
@@ -709,6 +847,7 @@ def test_insert_qualification_writes_tenant_scoped_row() -> None:
                 personalised_opener="Opener",
                 followup_1="Follow 1",
                 followup_2="Follow 2",
+                weakness_sentence="Weakness sentence",
                 model_haiku=HAIKU_MODEL,
                 model_sonnet=SONNET_MODEL,
                 cost_usd=HAIKU_COST + SONNET_COST,
@@ -728,6 +867,7 @@ def test_insert_qualification_writes_tenant_scoped_row() -> None:
         assert "tenant_id" in q
         assert "lead_id" in q
         assert "has_actionable_weakness" in q
+        assert "weakness_sentence" in q
         assert conn.args[0][0] == LEAD_ID
         assert conn.args[0][1] == TENANT_ID
 

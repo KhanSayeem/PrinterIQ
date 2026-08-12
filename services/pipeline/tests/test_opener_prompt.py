@@ -42,6 +42,22 @@ def test_opener_v2_prompt_bans_dash_and_corporate_copy_patterns() -> None:
     assert re.search(r"No double-hyphen", prompt) is not None
 
 
+def test_opener_v2_prompt_contract_mentions_weakness_sentence() -> None:
+    prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert '"weakness_sentence"' in prompt
+    assert "weakness_sentence" in prompt
+    assert "I noticed" in prompt
+    assert "no main heading" in prompt.lower() or "missing h1" in prompt.lower()
+
+
+def test_opener_v2_prompt_bans_dashes_in_weakness_sentence() -> None:
+    prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert "en dash" in prompt.lower() or "en-dash" in prompt.lower()
+    assert "weakness_sentence" in prompt
+
+
 def test_opener_v2_uses_sonnet_model() -> None:
     assert claude_client._MODEL_MAP["opener-v2"] == "claude-sonnet-4-6"
 
