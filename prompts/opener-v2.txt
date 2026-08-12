@@ -11,6 +11,10 @@ Website weakness identified:
 Qualification rationale:
 {rationale}
 
+Enrichment data (ground truth for this lead's website, the only source of
+evidence for what is actually wrong with the site):
+{enrichment_json}
+
 Return raw JSON only.
 Do not wrap the JSON in Markdown fences.
 Do not include prose before or after the JSON.
@@ -31,6 +35,14 @@ weakness_sentence: one clause that slots directly into a sentence starting
   and where useful, its consequence for the business.
 - Never output a bare technical label. "missing H1 tag" is wrong;
   "no main heading, so Google struggles to understand what you do" is right.
+- Describe ONLY problems evidenced in the enrichment data above. Never
+  assert a problem that the enrichment data does not show. Do not claim
+  things like "you're not showing on Google Maps" or "you have no
+  reviews" unless the enrichment data actually contains that signal.
+- weakness_sentence must correspond to the weakness named in "Website
+  weakness identified" above (the same weakness_label the qualifier
+  already matched to this enrichment data). Do not switch to a
+  different problem.
 - Example: "your site takes over 5 seconds to load on mobile, and most
   visitors leave before it finishes".
 - Example: "your site shows as Not Secure in Chrome, which most visitors
@@ -61,6 +73,8 @@ Rules:
 - Never use "I hope this email finds you well" or equivalent openers.
 - No corporate language or buzzwords.
 - Casual Aussie tone.
+- Ground every claim about the website in the enrichment data above; never
+  state a problem that is not evidenced there.
 - State the price upfront as $$1,500 flat in the opener.
 - The opener must include [Check it out]({preview_url}) exactly as a Markdown hyperlink.
 - The opener value must contain the literal substring [Check it out]({preview_url}).

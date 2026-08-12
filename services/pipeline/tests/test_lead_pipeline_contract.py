@@ -77,9 +77,30 @@ class FakeQualificationStore:
         self.status_updates.append((tenant_id, lead_id, status))
 
 
-class UnexpectedAuditor:
+@dataclass
+class StubAuditor:
+    """CHANGE 2c: the Playwright audit now runs for every lead, including
+    ones with Apollo `technologies` data, so this contract test needs a
+    working auditor stub rather than one that asserts it is never called."""
+
+    calls: list[str] = field(default_factory=list)
+
     async def audit(self, url: str) -> dict[str, object]:
-        raise AssertionError(f"unexpected website audit for {url}")
+        self.calls.append(url)
+        return {
+            "has_site": True,
+            "is_reachable": True,
+            "is_mobile_friendly": False,
+            "has_ssl": True,
+            "has_meta_title": True,
+            "has_meta_description": True,
+            "has_h1": True,
+            "load_ms": 2100,
+            "cms_detected": "WordPress",
+            "lighthouse_mobile_score": None,
+            "weaknesses": ["no_mobile"],
+            "raw_audit": {"url": url, "status": 200},
+        }
 
 
 @dataclass
@@ -94,6 +115,7 @@ class FakeClaudeClient:
                     "score": 54,
                     "rationale": "Below the configured threshold.",
                     "top_weakness": "no_mobile",
+                    "weakness_label": "no_mobile",
                     "has_actionable_weakness": True,
                 }
             ),
@@ -130,13 +152,16 @@ def test_apollo_csv_pipeline_preserves_score_threshold_to_qualification(tmp_path
 
         enrichment_store = FakeEnrichmentStore()
         qualify_queue = RecordingQueue()
+        auditor = StubAuditor()
         await enrich_lead(
             enrich_queue.jobs[0],
             lead_fetcher=lead_store,
             enrichment_repo=enrichment_store,
             qualify_queue=qualify_queue,
-            auditor=UnexpectedAuditor(),
+            auditor=auditor,
         )
+
+        assert auditor.calls == ["https://stone.example.com"]
 
         assert qualify_queue.jobs == [
             {

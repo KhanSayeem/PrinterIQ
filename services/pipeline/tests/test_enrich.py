@@ -145,13 +145,18 @@ def _payload() -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
-def test_apollo_present_path_uses_apollo_tech_source_and_skips_playwright() -> None:
+def test_apollo_lead_still_runs_playwright_audit_for_measured_signals() -> None:
+    """CHANGE 2c: previously, a lead with Apollo `technologies` skipped the
+    Playwright audit entirely, hardcoding has_h1/load_ms/has_meta_* to
+    None. Now every lead gets the live audit for observed signals,
+    regardless of what the CSV happened to carry in `technologies`."""
+
     async def scenario() -> None:
         lead = _make_lead(technologies="WordPress, Mobile Friendly, Google Analytics")
         fetcher = FakeLeadFetcher(lead=lead)
         repo = FakeEnrichmentRepository()
         queue = FakeQualifyQueue()
-        auditor = FakeAuditor(result={})
+        auditor = FakeAuditor(result=_playwright_audit_result())
 
         await enrich_lead(
             _payload(),
@@ -161,15 +166,91 @@ def test_apollo_present_path_uses_apollo_tech_source_and_skips_playwright() -> N
             auditor=auditor,
         )
 
+        assert auditor.calls == ["https://example.com"]
         assert len(repo.inserted) == 1
         enrichment = repo.inserted[0]
-        assert enrichment["tech_source"] == "apollo"
-        assert auditor.calls == []
+        # Measured signals come from the live audit, not from Apollo's
+        # "Mobile Friendly" string (the audit here says is_mobile_friendly
+        # is False, overriding what Apollo's tech string implied).
+        assert enrichment["has_h1"] is True
+        assert enrichment["load_ms"] == 4200
+        assert enrichment["is_mobile_friendly"] is False
+        assert enrichment["has_meta_description"] is False
+        assert enrichment["tech_source"] == "playwright+apollo"
         assert enrichment["tenant_id"] == TENANT_ID
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "enriched")]
         assert len(queue.jobs) == 1
         assert queue.jobs[0]["job_type"] == JobType.QUALIFY_LEAD.value
         assert queue.jobs[0]["score_threshold"] == 40
+
+    asyncio.run(scenario())
+
+
+def test_apollo_cms_hint_used_only_when_audit_finds_no_cms() -> None:
+    async def scenario() -> None:
+        lead = _make_lead(technologies="Shopify")
+        fetcher = FakeLeadFetcher(lead=lead)
+        repo = FakeEnrichmentRepository()
+        queue = FakeQualifyQueue()
+        result = _playwright_audit_result()
+        result["cms_detected"] = None
+        auditor = FakeAuditor(result=result)
+
+        await enrich_lead(
+            _payload(),
+            lead_fetcher=fetcher,
+            enrichment_repo=repo,
+            qualify_queue=queue,
+            auditor=auditor,
+        )
+
+        assert repo.inserted[0]["cms_detected"] == "Shopify"
+
+    asyncio.run(scenario())
+
+
+def test_measured_cms_never_overridden_by_apollo_hint() -> None:
+    async def scenario() -> None:
+        lead = _make_lead(technologies="Shopify")
+        fetcher = FakeLeadFetcher(lead=lead)
+        repo = FakeEnrichmentRepository()
+        queue = FakeQualifyQueue()
+        result = _playwright_audit_result()
+        result["cms_detected"] = "WordPress"
+        auditor = FakeAuditor(result=result)
+
+        await enrich_lead(
+            _payload(),
+            lead_fetcher=fetcher,
+            enrichment_repo=repo,
+            qualify_queue=queue,
+            auditor=auditor,
+        )
+
+        assert repo.inserted[0]["cms_detected"] == "WordPress"
+
+    asyncio.run(scenario())
+
+
+def test_enrichment_weaknesses_filtered_to_canonical_labels() -> None:
+    async def scenario() -> None:
+        lead = _make_lead(technologies="")
+        fetcher = FakeLeadFetcher(lead=lead)
+        repo = FakeEnrichmentRepository()
+        queue = FakeQualifyQueue()
+        result = _playwright_audit_result()
+        result["weaknesses"] = ["no_mobile", "not_a_real_label"]
+        auditor = FakeAuditor(result=result)
+
+        await enrich_lead(
+            _payload(),
+            lead_fetcher=fetcher,
+            enrichment_repo=repo,
+            qualify_queue=queue,
+            auditor=auditor,
+        )
+
+        assert repo.inserted[0]["weaknesses"] == ["no_mobile"]
 
     asyncio.run(scenario())
 

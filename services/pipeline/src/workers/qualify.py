@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from env import load_pipeline_env
 from pipeline_queue.definitions import JobType
+from weaknesses import WEAKNESS_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,21 @@ _SEND_WINDOW_END = time(hour=17)
 
 _HAIKU_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["score", "rationale", "top_weakness", "has_actionable_weakness"],
+    "required": [
+        "score",
+        "rationale",
+        "top_weakness",
+        "weakness_label",
+        "has_actionable_weakness",
+    ],
     "properties": {
         "score": {"type": "integer", "minimum": 0, "maximum": 100},
         "rationale": {"type": "string"},
         "top_weakness": {"type": "string"},
+        # Constrained to the canonical vocabulary (services/pipeline/src/weaknesses.py)
+        # so a hallucinated label fails schema validation before it can reach
+        # the grounding check below.
+        "weakness_label": {"type": "string", "enum": sorted(WEAKNESS_LABELS)},
         "has_actionable_weakness": {"type": "boolean"},
     },
     "additionalProperties": False,
@@ -139,6 +150,7 @@ async def qualify_lead(
     score: int = int(haiku_data["score"])
     rationale: str = _normalise_dashes(str(haiku_data["rationale"]))
     top_weakness: str = _normalise_dashes(str(haiku_data["top_weakness"]))
+    weakness_label: str = str(haiku_data["weakness_label"])
     has_actionable_weakness: bool = bool(haiku_data["has_actionable_weakness"])
 
     if score < score_threshold:
@@ -167,16 +179,63 @@ async def qualify_lead(
         )
         return
 
+    # Grounding gate: a lead that reaches here is about to have
+    # customer-facing copy written about it, so weakness_label must name a
+    # weakness this lead's enrichment actually measured — not something
+    # Haiku inferred or hallucinated. Deliberately ordered after the score
+    # and has_actionable_weakness archive gates above, so a lead with an
+    # empty weaknesses array that Haiku correctly marked as
+    # has_actionable_weakness=False archives cleanly instead of
+    # dead-lettering on a grounding check it was never going to pass.
+    raw_enrichment_weaknesses = enrichment.get("weaknesses")
+    grounded_weaknesses = (
+        raw_enrichment_weaknesses if isinstance(raw_enrichment_weaknesses, list) else []
+    )
+    if weakness_label not in grounded_weaknesses:
+        logger.warning(
+            "Haiku weakness_label %r not present in enrichment weaknesses %r — retrying once",
+            weakness_label,
+            grounded_weaknesses,
+        )
+        haiku_resp = await claude_client.call(
+            _HAIKU_PROMPT, {"lead_json": lead_json, "enrichment_json": enrichment_json}
+        )
+        haiku_data = _parse_and_validate(haiku_resp.text, _HAIKU_SCHEMA)
+        if haiku_data is None:
+            raise DeadLetterError(
+                "Haiku returned invalid JSON on weakness_label grounding retry — dead-lettering"
+            )
+        weakness_label = str(haiku_data["weakness_label"])
+        if weakness_label not in grounded_weaknesses:
+            raise DeadLetterError(
+                "Haiku weakness_label not grounded in enrichment weaknesses "
+                "after retry — dead-lettering"
+            )
+        score = int(haiku_data["score"])
+        rationale = _normalise_dashes(str(haiku_data["rationale"]))
+        top_weakness = _normalise_dashes(str(haiku_data["top_weakness"]))
+        has_actionable_weakness = bool(haiku_data["has_actionable_weakness"])
+
     sonnet_resp = await claude_client.call(
         _SONNET_PROMPT,
-        {"lead_json": lead_json, "top_weakness": top_weakness, "rationale": rationale},
+        {
+            "lead_json": lead_json,
+            "top_weakness": top_weakness,
+            "rationale": rationale,
+            "enrichment_json": enrichment_json,
+        },
     )
     sonnet_data = _parse_and_validate(sonnet_resp.text, _SONNET_SCHEMA)
     if sonnet_data is None:
         logger.warning("Sonnet returned invalid JSON — retrying once")
         sonnet_resp = await claude_client.call(
             _SONNET_PROMPT,
-            {"lead_json": lead_json, "top_weakness": top_weakness, "rationale": rationale},
+            {
+                "lead_json": lead_json,
+                "top_weakness": top_weakness,
+                "rationale": rationale,
+                "enrichment_json": enrichment_json,
+            },
         )
         sonnet_data = _parse_and_validate(sonnet_resp.text, _SONNET_SCHEMA)
         if sonnet_data is None:
