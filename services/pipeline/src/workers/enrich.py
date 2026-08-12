@@ -5,6 +5,7 @@ from typing import Protocol
 from uuid import UUID
 
 from pipeline_queue.definitions import JobType
+from weaknesses import WEAKNESS_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +49,20 @@ async def enrich_lead(
 
     lead = await lead_fetcher.get_lead(tenant_id=tenant_id, lead_id=lead_id)
     technologies = str(lead.get("technologies", "")).strip()
+    website_url = str(lead.get("website_url", ""))
 
-    if technologies:
-        enrichment = _enrich_from_apollo(technologies, tenant_id=tenant_id, lead_id=lead_id)
-    else:
-        website_url = str(lead.get("website_url", ""))
-        audit = await auditor.audit(website_url)
-        enrichment = _enrich_from_playwright(audit, tenant_id=tenant_id, lead_id=lead_id)
+    # Deliberate behaviour change: the Playwright audit now runs for every
+    # lead, Apollo `technologies` or not — one page load per enrichment.
+    # Previously, a lead with Apollo tech data skipped Playwright entirely
+    # and had has_h1/load_ms/has_meta_* hardcoded to None, so whether a
+    # lead's H1/load-time/meta tags were ever checked depended on whether
+    # the CSV happened to carry Apollo data, not on the site itself. Apollo
+    # data may still inform cms_detected/tech_source below, but it never
+    # substitutes for a measured signal again.
+    audit = await auditor.audit(website_url)
+    enrichment = _enrich_from_playwright(
+        audit, technologies=technologies, tenant_id=tenant_id, lead_id=lead_id
+    )
 
     await enrichment_repo.insert_enrichment(enrichment)
     await enrichment_repo.update_lead_status(
@@ -70,46 +78,31 @@ async def enrich_lead(
     )
 
 
-def _enrich_from_apollo(
-    technologies: str,
-    *,
-    tenant_id: UUID,
-    lead_id: UUID,
-) -> dict[str, object]:
-    tech_lower = technologies.lower()
-    is_mobile_friendly = "mobile friendly" in tech_lower
-    has_ssl = "ssl" in tech_lower or "https" in tech_lower
-    cms = _detect_cms(tech_lower)
-    weaknesses: list[str] = []
-    if not is_mobile_friendly:
-        weaknesses.append("no_mobile")
-    if not has_ssl:
-        weaknesses.append("no_ssl")
-    return {
-        "tenant_id": tenant_id,
-        "lead_id": lead_id,
-        "has_site": True,
-        "is_reachable": True,
-        "is_mobile_friendly": is_mobile_friendly,
-        "has_ssl": has_ssl,
-        "has_meta_title": None,
-        "has_meta_description": None,
-        "has_h1": None,
-        "load_ms": None,
-        "lighthouse_mobile_score": None,
-        "cms_detected": cms,
-        "tech_source": "apollo",
-        "weaknesses": weaknesses,
-        "raw_audit": None,
-    }
-
-
 def _enrich_from_playwright(
     audit: dict[str, object],
     *,
+    technologies: str,
     tenant_id: UUID,
     lead_id: UUID,
 ) -> dict[str, object]:
+    """Build an enrichment row from a Playwright audit, always the source of
+    truth for measured signals (has_h1, load_ms, has_meta_*, is_mobile_friendly,
+    has_ssl, weaknesses). Apollo `technologies` may only ever inform
+    cms_detected (as a fallback when the audit found no CMS markers) and
+    tech_source — never a measured signal.
+    """
+    apollo_cms = _detect_cms(technologies.lower()) if technologies else None
+    measured_cms = audit.get("cms_detected")
+    cms_detected = measured_cms if measured_cms else apollo_cms
+    tech_source = "playwright+apollo" if technologies else "playwright"
+
+    raw_weaknesses = audit.get("weaknesses", [])
+    weaknesses = (
+        [w for w in raw_weaknesses if w in WEAKNESS_LABELS]
+        if isinstance(raw_weaknesses, list)
+        else []
+    )
+
     return {
         "tenant_id": tenant_id,
         "lead_id": lead_id,
@@ -122,9 +115,9 @@ def _enrich_from_playwright(
         "has_h1": audit.get("has_h1"),
         "load_ms": audit.get("load_ms"),
         "lighthouse_mobile_score": audit.get("lighthouse_mobile_score"),
-        "cms_detected": audit.get("cms_detected"),
-        "tech_source": "playwright",
-        "weaknesses": audit.get("weaknesses", []),
+        "cms_detected": cms_detected,
+        "tech_source": tech_source,
+        "weaknesses": weaknesses,
         "raw_audit": audit.get("raw_audit"),
     }
 
