@@ -1627,6 +1627,27 @@ class QualificationInsert:
     prompt_version: str
 
 
+# asyncpg returns json/jsonb columns as raw str unless a codec is registered
+# on the connection, and none is: the pool is created bare in
+# workers/orchestrator.py. Decoding cannot be done pool-wide with
+# set_type_codec, because that registers an encoder too, and every jsonb write
+# in this module already passes a json.dumps() string into a $n::jsonb
+# parameter. Registering one would double-encode all of them. So decode on the
+# way out, at the read that has a consumer.
+_ENRICHMENT_JSONB_COLUMNS: tuple[str, ...] = ("weaknesses", "raw_audit")
+
+
+def _decode_jsonb(value: object) -> object:
+    """Decode a jsonb column asyncpg handed back as str.
+
+    Non-str values pass through untouched, so this stays correct for NULL
+    columns and for a future pool that does register a codec.
+    """
+    if not isinstance(value, str):
+        return value
+    return json.loads(value)
+
+
 async def get_enrichment_by_lead_id(
     connection: DatabaseConnection,
     *,
@@ -1649,7 +1670,11 @@ async def get_enrichment_by_lead_id(
     )
     if result is None:
         raise LookupError(f"Enrichment for lead {lead_id} not found for tenant {tenant_id}")
-    return dict(cast(Mapping[str, object], result))
+    row = dict(cast(Mapping[str, object], result))
+    for column in _ENRICHMENT_JSONB_COLUMNS:
+        if column in row:
+            row[column] = _decode_jsonb(row[column])
+    return row
 
 
 async def insert_qualification(

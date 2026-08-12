@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -160,20 +161,21 @@ def _make_enrichment() -> dict[str, object]:
 
 def _haiku_response(
     score: int = 75,
-    has_actionable_weakness: bool = True,
     top_weakness: str = "no_mobile",
     weakness_label: str = "no_mobile",
 ) -> ClaudeResponse:
     # weakness_label defaults to "no_mobile", which matches an entry in
     # _make_enrichment()'s weaknesses list, so callers get a grounded
     # response by default and don't trip the grounding retry unintentionally.
+    # No has_actionable_weakness: the model is not asked for it, and the
+    # schema rejects it if supplied. Drive that gate from the enrichment
+    # weaknesses array instead.
     content = json.dumps(
         {
             "score": score,
             "rationale": "No mobile site, slow load. Strong weakness for pitch.",
             "top_weakness": top_weakness,
             "weakness_label": weakness_label,
-            "has_actionable_weakness": has_actionable_weakness,
         }
     )
     return ClaudeResponse(text=content, cost_usd=HAIKU_COST, model=HAIKU_MODEL)
@@ -265,14 +267,14 @@ def test_below_threshold_archives_lead_without_sonnet_call() -> None:
 
 
 def test_below_threshold_archives_lead_regardless_of_actionable_weakness() -> None:
-    async def scenario(has_actionable_weakness: bool) -> None:
+    async def scenario(weaknesses: list[str], expected_gate: bool) -> None:
+        enrichment_data = _make_enrichment()
+        enrichment_data["weaknesses"] = weaknesses
         fetcher = FakeLeadFetcher(lead=_make_lead())
-        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        enrichment = FakeEnrichmentFetcher(enrichment=enrichment_data)
         repo = FakeQualificationRepository()
         queue = FakeOutreachQueue()
-        client = FakeClaudeClient(
-            responses=[_haiku_response(score=30, has_actionable_weakness=has_actionable_weakness)]
-        )
+        client = FakeClaudeClient(responses=[_haiku_response(score=30)])
 
         await qualify_lead(
             _payload(score_threshold=40),
@@ -284,24 +286,26 @@ def test_below_threshold_archives_lead_regardless_of_actionable_weakness() -> No
         )
 
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
-        assert repo.inserted[0]["has_actionable_weakness"] == has_actionable_weakness
+        assert repo.inserted[0]["has_actionable_weakness"] is expected_gate
         assert repo.inserted[0]["model_sonnet"] is None
         assert queue.jobs == []
         assert len(client.calls) == 1
 
-    asyncio.run(scenario(True))
-    asyncio.run(scenario(False))
+    asyncio.run(scenario(["no_mobile", "no_meta_description"], True))
+    asyncio.run(scenario([], False))
 
 
 def test_above_threshold_without_actionable_weakness_archives_lead_single_claude_call() -> None:
     async def scenario() -> None:
+        # No measured weakness, so the derived gate archives the lead even
+        # though it scores well above threshold.
+        enrichment_data = _make_enrichment()
+        enrichment_data["weaknesses"] = []
         fetcher = FakeLeadFetcher(lead=_make_lead())
-        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        enrichment = FakeEnrichmentFetcher(enrichment=enrichment_data)
         repo = FakeQualificationRepository()
         queue = FakeOutreachQueue()
-        client = FakeClaudeClient(
-            responses=[_haiku_response(score=75, has_actionable_weakness=False)]
-        )
+        client = FakeClaudeClient(responses=[_haiku_response(score=75)])
 
         await qualify_lead(
             _payload(score_threshold=40),
@@ -330,26 +334,34 @@ def test_above_threshold_without_actionable_weakness_archives_lead_single_claude
     asyncio.run(scenario())
 
 
-def test_haiku_response_missing_has_actionable_weakness_dead_letters_after_retry() -> None:
+def test_haiku_response_supplying_has_actionable_weakness_dead_letters_after_retry() -> None:
+    """Successor to test_haiku_response_missing_has_actionable_weakness_...
+
+    The field used to be required; now it is forbidden. A model that supplies
+    it anyway must not be able to override the code-derived gate, so the
+    response is rejected and retried rather than trusted.
+    """
+
     async def scenario() -> None:
         fetcher = FakeLeadFetcher(lead=_make_lead())
         enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
         repo = FakeQualificationRepository()
         queue = FakeOutreachQueue()
-        missing_field = ClaudeResponse(
+        supplies_gate = ClaudeResponse(
             text=json.dumps(
                 {
                     "score": 75,
                     "rationale": "No mobile site, slow load.",
                     "top_weakness": "no_mobile",
                     "weakness_label": "no_mobile",
-                    # has_actionable_weakness deliberately omitted
+                    # The code owns this now; the model must not send it.
+                    "has_actionable_weakness": False,
                 }
             ),
             cost_usd=HAIKU_COST,
             model=HAIKU_MODEL,
         )
-        client = FakeClaudeClient(responses=[missing_field, missing_field])
+        client = FakeClaudeClient(responses=[supplies_gate, supplies_gate])
 
         with pytest.raises(DeadLetterError):
             await qualify_lead(
@@ -374,7 +386,6 @@ def test_haiku_schema_validates_with_only_core_fields() -> None:
         "rationale": "No mobile site, slow load.",
         "top_weakness": "no_mobile",
         "weakness_label": "no_mobile",
-        "has_actionable_weakness": True,
     }
 
     result = _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA)
@@ -388,7 +399,6 @@ def test_haiku_schema_rejects_weakness_label_outside_enum() -> None:
         "rationale": "No mobile site, slow load.",
         "top_weakness": "no_mobile",
         "weakness_label": "not_a_real_label",
-        "has_actionable_weakness": True,
     }
 
     result = _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA)
@@ -401,7 +411,6 @@ def test_haiku_schema_requires_weakness_label() -> None:
         "score": 75,
         "rationale": "No mobile site, slow load.",
         "top_weakness": "no_mobile",
-        "has_actionable_weakness": True,
     }
 
     result = _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA)
@@ -427,7 +436,6 @@ def test_haiku_weakness_label_outside_enum_dead_letters_after_retry() -> None:
                     "rationale": "No mobile site.",
                     "top_weakness": "no_mobile",
                     "weakness_label": "not_a_real_label",
-                    "has_actionable_weakness": True,
                 }
             ),
             cost_usd=HAIKU_COST,
@@ -469,7 +477,6 @@ def test_haiku_weakness_label_not_grounded_in_enrichment_weaknesses_dead_letters
                     "rationale": "Site has no SSL certificate.",
                     "top_weakness": "no_ssl",
                     "weakness_label": "no_ssl",
-                    "has_actionable_weakness": True,
                 }
             ),
             cost_usd=HAIKU_COST,
@@ -509,7 +516,6 @@ def test_haiku_weakness_label_grounded_on_retry_proceeds_to_sonnet() -> None:
                     "rationale": "Site has no SSL certificate.",
                     "top_weakness": "no_ssl",
                     "weakness_label": "no_ssl",
-                    "has_actionable_weakness": True,
                 }
             ),
             cost_usd=HAIKU_COST,
@@ -554,11 +560,11 @@ def test_empty_weaknesses_array_with_no_actionable_weakness_archives_without_dea
                     "rationale": "Site looks solid already.",
                     "top_weakness": "no weaknesses found",
                     # weakness_label must still be schema-valid even though
-                    # nothing was actually measured — the grounding check
-                    # that would otherwise catch this never runs, because
-                    # has_actionable_weakness=False archives first.
+                    # nothing was actually measured. The grounding check that
+                    # would otherwise dead-letter on it never runs, because
+                    # the derived has_actionable_weakness=False archives
+                    # first. This ordering is the point of the test.
                     "weakness_label": "no_mobile",
-                    "has_actionable_weakness": False,
                 }
             ),
             cost_usd=HAIKU_COST,
@@ -622,7 +628,6 @@ def test_top_weakness_em_dash_is_normalised_on_persist() -> None:
                     "rationale": "Weak site overall—worth flagging.",
                     "top_weakness": "Missing H1 tag on homepage—hurts SEO",
                     "weakness_label": "no_mobile",
-                    "has_actionable_weakness": True,
                 }
             ),
             cost_usd=HAIKU_COST,
@@ -660,7 +665,6 @@ def test_top_weakness_en_dash_is_normalised_on_persist() -> None:
                         "Website load time is 5.5 seconds – slower than ideal"
                     ),
                     "weakness_label": "slow_load",
-                    "has_actionable_weakness": True,
                 }
             ),
             cost_usd=HAIKU_COST,
@@ -729,6 +733,233 @@ def test_sonnet_outputs_with_dashes_are_normalised_on_persist() -> None:
             assert "–" not in q[field_name]
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# has_actionable_weakness is code-derived, not model-judged
+# ---------------------------------------------------------------------------
+
+
+def test_actionable_weakness_derived_true_from_non_empty_enrichment_weaknesses() -> None:
+    """The gate comes from the enrichment array, so Haiku need not supply it."""
+
+    async def scenario() -> None:
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(
+            responses=[_haiku_response(score=75), _sonnet_response()]
+        )
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.inserted[0]["has_actionable_weakness"] is True
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
+        assert len(queue.jobs) == 1
+
+    asyncio.run(scenario())
+
+
+def test_actionable_weakness_derived_false_from_empty_enrichment_weaknesses() -> None:
+    """An empty weaknesses array archives even when Haiku scores the lead well.
+
+    This is the original defect the gate was built for and it must keep
+    working once the value is derived rather than asked for.
+    """
+
+    async def scenario() -> None:
+        enrichment_data = _make_enrichment()
+        enrichment_data["weaknesses"] = []
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(responses=[_haiku_response(score=95)])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=enrichment_data),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert repo.inserted[0]["model_sonnet"] is None
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert queue.jobs == []
+        assert len(client.calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_measured_weakness_reaches_sonnet_despite_being_minor() -> None:
+    """The production bug: a lone no_h1 archived because the model judged it
+    not "worth pitching a rebuild over". Severity is the score threshold's
+    job; presence of a measured defect is the gate's."""
+
+    async def scenario() -> None:
+        enrichment_data = _make_enrichment()
+        enrichment_data["weaknesses"] = ["no_h1"]
+        enrichment_data["is_mobile_friendly"] = True
+        enrichment_data["has_meta_description"] = True
+        enrichment_data["has_h1"] = False
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(
+            responses=[
+                _haiku_response(
+                    score=42, top_weakness="no_h1", weakness_label="no_h1"
+                ),
+                _sonnet_response(),
+            ]
+        )
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=enrichment_data),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.inserted[0]["has_actionable_weakness"] is True
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
+        assert len(queue.jobs) == 1
+
+    asyncio.run(scenario())
+
+
+def test_missing_enrichment_weaknesses_key_derives_false_and_archives() -> None:
+    async def scenario() -> None:
+        enrichment_data = _make_enrichment()
+        del enrichment_data["weaknesses"]
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(responses=[_haiku_response(score=95)])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=enrichment_data),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert queue.jobs == []
+
+    asyncio.run(scenario())
+
+
+def test_non_list_enrichment_weaknesses_derives_false_and_archives() -> None:
+    """A non-list `weaknesses` must never be read as measured weaknesses.
+
+    The truthy case is the one that matters. An undecoded jsonb str is
+    truthy, and `"no_mobile" in '["no_mobile"]'` is True by substring match,
+    so without the isinstance guard the lead would clear both the derived
+    gate and the grounding check and be emailed on data nothing verified.
+    Delete the guard and this test fails; `None` alone cannot catch that,
+    because bool(None) already archives before the guard is reached.
+    """
+
+    async def scenario(weaknesses: object) -> None:
+        enrichment_data = _make_enrichment()
+        enrichment_data["weaknesses"] = weaknesses
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(responses=[_haiku_response(score=95)])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=enrichment_data),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert repo.inserted[0]["model_sonnet"] is None
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert queue.jobs == []
+        assert len(client.calls) == 1
+
+    asyncio.run(scenario(None))
+    asyncio.run(scenario('["no_mobile"]'))
+
+
+def test_haiku_schema_rejects_model_supplied_actionable_weakness() -> None:
+    """The model must not be able to send the gate value at all.
+
+    additionalProperties is False, so a stray has_actionable_weakness fails
+    validation and takes the retry path rather than silently overriding a
+    value the code now owns.
+    """
+    data = {
+        "score": 75,
+        "rationale": "No mobile site, slow load.",
+        "top_weakness": "no_mobile",
+        "weakness_label": "no_mobile",
+        "has_actionable_weakness": False,
+    }
+
+    assert _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA) is None
+
+
+def test_schema_violation_logs_the_validation_error_not_invalid_json(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stray field must not be reported to the operator as malformed JSON.
+
+    The retry-then-dead-letter path is deliberately fail-closed, so if the
+    model ever starts emitting has_actionable_weakness systematically the
+    operator sees a wave of dead-letters. "Haiku returned invalid JSON" would
+    send them looking at the parser; the schema error names the real cause.
+    """
+    data = {
+        "score": 75,
+        "rationale": "No mobile site, slow load.",
+        "top_weakness": "no_mobile",
+        "weakness_label": "no_mobile",
+        "has_actionable_weakness": False,
+    }
+
+    with caplog.at_level(logging.WARNING, logger="workers.qualify"):
+        assert _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA) is None
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "has_actionable_weakness" in logged
+    assert "invalid JSON" not in logged
+
+
+def test_malformed_json_logs_a_decode_error_distinct_from_schema_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="workers.qualify"):
+        assert _parse_and_validate("{not json at all", _HAIKU_SCHEMA) is None
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "schema" not in logged.lower()
+
+
+def test_haiku_schema_validates_response_without_actionable_weakness() -> None:
+    data = {
+        "score": 75,
+        "rationale": "No mobile site, slow load.",
+        "top_weakness": "no_mobile",
+        "weakness_label": "no_mobile",
+    }
+
+    assert _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA) == data
 
 
 def test_sonnet_response_missing_weakness_sentence_dead_letters_after_retry() -> None:
@@ -1069,6 +1300,58 @@ def test_get_enrichment_by_lead_id_is_tenant_scoped() -> None:
     asyncio.run(scenario())
 
 
+def test_get_enrichment_by_lead_id_decodes_jsonb_columns() -> None:
+    """asyncpg returns jsonb as str unless a codec is registered, and none is.
+
+    Verified against production: `SELECT weaknesses FROM enrichments` comes
+    back as the str '["no_ssl"]', not a list. Every consumer of this row
+    type-checks the value, so an undecoded str silently reads as "no
+    weaknesses measured" and archives the lead.
+    """
+
+    async def scenario() -> None:
+        class _Conn(RecordingConnection):
+            async def fetchrow(self, query: str, *args: object) -> object:
+                self.queries.append(query)
+                self.args.append(args)
+                return {
+                    "id": ENRICHMENT_ID,
+                    "lead_id": LEAD_ID,
+                    "tenant_id": TENANT_ID,
+                    "weaknesses": '["no_h1", "slow_load"]',
+                    "raw_audit": '{"url": "https://example.com", "status": 200}',
+                }
+
+        result = await get_enrichment_by_lead_id(_Conn(), tenant_id=TENANT_ID, lead_id=LEAD_ID)
+
+        assert result["weaknesses"] == ["no_h1", "slow_load"]
+        assert result["raw_audit"] == {"url": "https://example.com", "status": 200}
+
+    asyncio.run(scenario())
+
+
+def test_get_enrichment_by_lead_id_passes_through_already_decoded_values() -> None:
+    """Must stay correct if a jsonb codec is ever registered on the pool."""
+
+    async def scenario() -> None:
+        class _Conn(RecordingConnection):
+            async def fetchrow(self, query: str, *args: object) -> object:
+                self.queries.append(query)
+                self.args.append(args)
+                return {
+                    "id": ENRICHMENT_ID,
+                    "weaknesses": ["no_h1"],
+                    "raw_audit": None,
+                }
+
+        result = await get_enrichment_by_lead_id(_Conn(), tenant_id=TENANT_ID, lead_id=LEAD_ID)
+
+        assert result["weaknesses"] == ["no_h1"]
+        assert result["raw_audit"] is None
+
+    asyncio.run(scenario())
+
+
 def test_insert_qualification_writes_tenant_scoped_row() -> None:
     async def scenario() -> None:
         qual_id = UUID("40000000-0000-0000-0000-000000000001")
@@ -1149,8 +1432,15 @@ def test_grounding_retry_returning_below_threshold_score_archives_without_sonnet
     asyncio.run(scenario())
 
 
-def test_grounding_retry_returning_no_actionable_weakness_archives_without_sonnet() -> None:
-    """Same re-check for has_actionable_weakness, which the retry also replaces."""
+def test_grounding_retry_cannot_supply_has_actionable_weakness() -> None:
+    """Successor to test_grounding_retry_returning_no_actionable_weakness_...
+
+    That test protected the re-check of a gate the retry could replace. The
+    retry can no longer replace it: the value is derived from enrichment,
+    which no model call changes. What still needs protecting is the retry
+    path's schema validation, so a retry that smuggles the field in is
+    rejected rather than trusted, exactly as the first call would be.
+    """
 
     async def scenario() -> None:
         fetcher = FakeLeadFetcher(lead=_make_lead())
@@ -1158,10 +1448,49 @@ def test_grounding_retry_returning_no_actionable_weakness_archives_without_sonne
         repo = FakeQualificationRepository()
         queue = FakeOutreachQueue()
         ungrounded = _haiku_response(score=75, weakness_label="no_ssl", top_weakness="no_ssl")
-        retried_not_actionable = _haiku_response(
-            score=75, has_actionable_weakness=False, weakness_label="no_mobile"
+        retried_supplying_gate = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 75,
+                    "rationale": "No mobile site.",
+                    "top_weakness": "no_mobile",
+                    "weakness_label": "no_mobile",
+                    "has_actionable_weakness": False,
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
         )
-        client = FakeClaudeClient(responses=[ungrounded, retried_not_actionable])
+        client = FakeClaudeClient(responses=[ungrounded, retried_supplying_gate])
+
+        with pytest.raises(DeadLetterError):
+            await qualify_lead(
+                _payload(score_threshold=40, campaign_id="campaign-x"),
+                lead_fetcher=fetcher,
+                enrichment_fetcher=enrichment,
+                qualification_repo=repo,
+                outreach_queue=queue,
+                claude_client=client,
+            )
+
+        assert len(client.calls) == 2
+        assert repo.inserted == []
+        assert queue.jobs == []
+
+    asyncio.run(scenario())
+
+
+def test_grounding_retry_persists_derived_gate_not_a_model_claim() -> None:
+    """A successful grounding retry still persists the derived gate value."""
+
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        ungrounded = _haiku_response(score=75, weakness_label="no_ssl", top_weakness="no_ssl")
+        grounded = _haiku_response(score=75, weakness_label="no_mobile")
+        client = FakeClaudeClient(responses=[ungrounded, grounded, _sonnet_response()])
 
         await qualify_lead(
             _payload(score_threshold=40, campaign_id="campaign-x"),
@@ -1172,9 +1501,7 @@ def test_grounding_retry_returning_no_actionable_weakness_archives_without_sonne
             claude_client=client,
         )
 
-        assert len(client.calls) == 2
-        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
-        assert repo.inserted[0]["has_actionable_weakness"] is False
-        assert queue.jobs == []
+        assert repo.inserted[0]["has_actionable_weakness"] is True
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
 
     asyncio.run(scenario())
