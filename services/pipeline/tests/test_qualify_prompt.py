@@ -18,6 +18,7 @@ def test_qualify_v1_prompt_schema_matches_haiku_contract() -> None:
     assert '"score"' in prompt
     assert '"rationale"' in prompt
     assert '"top_weakness"' in prompt
+    assert '"weakness_label"' in prompt
     assert '"has_actionable_weakness"' in prompt
 
     # CHANGE 3: subject_line/opener/followup_1/followup_2 are generated and
@@ -27,6 +28,24 @@ def test_qualify_v1_prompt_schema_matches_haiku_contract() -> None:
     assert '"opener"' not in prompt
     assert '"followup_1"' not in prompt
     assert '"followup_2"' not in prompt
+
+
+def test_qualify_v1_prompt_declares_weakness_label_enum_matching_canonical_vocabulary() -> None:
+    from weaknesses import WEAKNESS_LABELS
+
+    prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert '"weakness_label"' in prompt
+    for label in WEAKNESS_LABELS:
+        assert label in prompt
+
+
+def test_qualify_v1_prompt_grounds_weakness_label_in_enrichment_data() -> None:
+    prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert "weaknesses array" in prompt.lower()
+    assert "actually measured" in prompt.lower()
+    assert "never pick a" in prompt.lower() or "does not show" in prompt.lower()
 
 
 def test_qualify_v1_prompt_defines_actionable_weakness() -> None:

@@ -162,12 +162,17 @@ def _haiku_response(
     score: int = 75,
     has_actionable_weakness: bool = True,
     top_weakness: str = "no_mobile",
+    weakness_label: str = "no_mobile",
 ) -> ClaudeResponse:
+    # weakness_label defaults to "no_mobile", which matches an entry in
+    # _make_enrichment()'s weaknesses list, so callers get a grounded
+    # response by default and don't trip the grounding retry unintentionally.
     content = json.dumps(
         {
             "score": score,
             "rationale": "No mobile site, slow load. Strong weakness for pitch.",
             "top_weakness": top_weakness,
+            "weakness_label": weakness_label,
             "has_actionable_weakness": has_actionable_weakness,
         }
     )
@@ -337,6 +342,8 @@ def test_haiku_response_missing_has_actionable_weakness_dead_letters_after_retry
                     "score": 75,
                     "rationale": "No mobile site, slow load.",
                     "top_weakness": "no_mobile",
+                    "weakness_label": "no_mobile",
+                    # has_actionable_weakness deliberately omitted
                 }
             ),
             cost_usd=HAIKU_COST,
@@ -366,12 +373,243 @@ def test_haiku_schema_validates_with_only_core_fields() -> None:
         "score": 75,
         "rationale": "No mobile site, slow load.",
         "top_weakness": "no_mobile",
+        "weakness_label": "no_mobile",
         "has_actionable_weakness": True,
     }
 
     result = _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA)
 
     assert result == data
+
+
+def test_haiku_schema_rejects_weakness_label_outside_enum() -> None:
+    data = {
+        "score": 75,
+        "rationale": "No mobile site, slow load.",
+        "top_weakness": "no_mobile",
+        "weakness_label": "not_a_real_label",
+        "has_actionable_weakness": True,
+    }
+
+    result = _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA)
+
+    assert result is None
+
+
+def test_haiku_schema_requires_weakness_label() -> None:
+    data = {
+        "score": 75,
+        "rationale": "No mobile site, slow load.",
+        "top_weakness": "no_mobile",
+        "has_actionable_weakness": True,
+    }
+
+    result = _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA)
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# weakness_label grounding (CHANGE 3b)
+# ---------------------------------------------------------------------------
+
+
+def test_haiku_weakness_label_outside_enum_dead_letters_after_retry() -> None:
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        invalid_label = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 75,
+                    "rationale": "No mobile site.",
+                    "top_weakness": "no_mobile",
+                    "weakness_label": "not_a_real_label",
+                    "has_actionable_weakness": True,
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        client = FakeClaudeClient(responses=[invalid_label, invalid_label])
+
+        with pytest.raises(DeadLetterError):
+            await qualify_lead(
+                _payload(score_threshold=40),
+                lead_fetcher=fetcher,
+                enrichment_fetcher=enrichment,
+                qualification_repo=repo,
+                outreach_queue=queue,
+                claude_client=client,
+            )
+
+        assert repo.inserted == []
+        assert queue.jobs == []
+        assert len(client.calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_haiku_weakness_label_not_grounded_in_enrichment_weaknesses_dead_letters_after_retry() -> (
+    None
+):
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        # _make_enrichment()'s weaknesses are ["no_mobile", "no_meta_description"] —
+        # "no_ssl" is a valid enum member but was never measured on this lead.
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        ungrounded = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 75,
+                    "rationale": "Site has no SSL certificate.",
+                    "top_weakness": "no_ssl",
+                    "weakness_label": "no_ssl",
+                    "has_actionable_weakness": True,
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        client = FakeClaudeClient(responses=[ungrounded, ungrounded])
+
+        with pytest.raises(DeadLetterError):
+            await qualify_lead(
+                _payload(score_threshold=40),
+                lead_fetcher=fetcher,
+                enrichment_fetcher=enrichment,
+                qualification_repo=repo,
+                outreach_queue=queue,
+                claude_client=client,
+            )
+
+        assert repo.inserted == []
+        assert queue.jobs == []
+        assert len(client.calls) == 2
+        assert client.calls[0][0] == "qualify-v1"
+        assert client.calls[1][0] == "qualify-v1"
+
+    asyncio.run(scenario())
+
+
+def test_haiku_weakness_label_grounded_on_retry_proceeds_to_sonnet() -> None:
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        ungrounded = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 75,
+                    "rationale": "Site has no SSL certificate.",
+                    "top_weakness": "no_ssl",
+                    "weakness_label": "no_ssl",
+                    "has_actionable_weakness": True,
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        grounded = _haiku_response(score=75, weakness_label="no_mobile", top_weakness="no_mobile")
+        client = FakeClaudeClient(responses=[ungrounded, grounded, _sonnet_response()])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert len(client.calls) == 3
+        assert client.calls[0][0] == "qualify-v1"
+        assert client.calls[1][0] == "qualify-v1"
+        assert client.calls[2][0] == "opener-v2"
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
+        assert len(queue.jobs) == 1
+
+    asyncio.run(scenario())
+
+
+def test_empty_weaknesses_array_with_no_actionable_weakness_archives_without_dead_letter() -> (
+    None
+):
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment_data = _make_enrichment()
+        enrichment_data["weaknesses"] = []
+        enrichment = FakeEnrichmentFetcher(enrichment=enrichment_data)
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        haiku = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 75,
+                    "rationale": "Site looks solid already.",
+                    "top_weakness": "no weaknesses found",
+                    # weakness_label must still be schema-valid even though
+                    # nothing was actually measured — the grounding check
+                    # that would otherwise catch this never runs, because
+                    # has_actionable_weakness=False archives first.
+                    "weakness_label": "no_mobile",
+                    "has_actionable_weakness": False,
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        client = FakeClaudeClient(responses=[haiku])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert queue.jobs == []
+        assert len(client.calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_sonnet_call_receives_enrichment_json() -> None:
+    async def scenario() -> None:
+        enrichment_data = _make_enrichment()
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(responses=[_haiku_response(score=75), _sonnet_response()])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=enrichment_data),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        haiku_call = client.calls[0]
+        sonnet_call = client.calls[1]
+        assert haiku_call[0] == "qualify-v1"
+        assert "enrichment_json" in haiku_call[1]
+        assert sonnet_call[0] == "opener-v2"
+        assert "enrichment_json" in sonnet_call[1]
+        assert json.loads(sonnet_call[1]["enrichment_json"]) == json.loads(
+            json.dumps(enrichment_data, default=str)
+        )
+
+    asyncio.run(scenario())
 
 
 def test_top_weakness_em_dash_is_normalised_on_persist() -> None:
@@ -383,6 +621,7 @@ def test_top_weakness_em_dash_is_normalised_on_persist() -> None:
                     "score": 30,
                     "rationale": "Weak site overall—worth flagging.",
                     "top_weakness": "Missing H1 tag on homepage—hurts SEO",
+                    "weakness_label": "no_mobile",
                     "has_actionable_weakness": True,
                 }
             ),
@@ -420,6 +659,7 @@ def test_top_weakness_en_dash_is_normalised_on_persist() -> None:
                     "top_weakness": (
                         "Website load time is 5.5 seconds – slower than ideal"
                     ),
+                    "weakness_label": "slow_load",
                     "has_actionable_weakness": True,
                 }
             ),
@@ -870,5 +1110,71 @@ def test_insert_qualification_writes_tenant_scoped_row() -> None:
         assert "weakness_sentence" in q
         assert conn.args[0][0] == LEAD_ID
         assert conn.args[0][1] == TENANT_ID
+
+    asyncio.run(scenario())
+
+
+def test_grounding_retry_returning_below_threshold_score_archives_without_sonnet() -> None:
+    """The grounding retry replaces score, so the threshold gate must re-run.
+
+    Without this the retried lead reaches Sonnet and is emailed despite scoring
+    below threshold, because the gate above already ran on the superseded
+    response.
+    """
+
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        ungrounded = _haiku_response(score=75, weakness_label="no_ssl", top_weakness="no_ssl")
+        retried_low_score = _haiku_response(score=5, weakness_label="no_mobile")
+        client = FakeClaudeClient(responses=[ungrounded, retried_low_score])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert len(client.calls) == 2
+        assert all(call[0] == "qualify-v1" for call in client.calls)
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert repo.inserted[0]["personalised_opener"] is None
+        assert queue.jobs == []
+
+    asyncio.run(scenario())
+
+
+def test_grounding_retry_returning_no_actionable_weakness_archives_without_sonnet() -> None:
+    """Same re-check for has_actionable_weakness, which the retry also replaces."""
+
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        ungrounded = _haiku_response(score=75, weakness_label="no_ssl", top_weakness="no_ssl")
+        retried_not_actionable = _haiku_response(
+            score=75, has_actionable_weakness=False, weakness_label="no_mobile"
+        )
+        client = FakeClaudeClient(responses=[ungrounded, retried_not_actionable])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert len(client.calls) == 2
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert queue.jobs == []
 
     asyncio.run(scenario())

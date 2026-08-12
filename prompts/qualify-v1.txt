@@ -11,7 +11,15 @@ Enrichment data:
 {enrichment_json}
 
 Respond ONLY with valid JSON matching this exact schema:
-{"score": int, "rationale": "string", "top_weakness": "string", "has_actionable_weakness": bool}
+{"score": int, "rationale": "string", "top_weakness": "string", "weakness_label": "string", "has_actionable_weakness": bool}
+
+weakness_label must be exactly one of these canonical values, and only
+these: "no_mobile", "no_ssl", "no_meta_title", "no_meta_description",
+"no_h1", "slow_load". Choose the value that matches an entry already
+present in the enrichment data's weaknesses array above. Never pick a
+label for a problem the enrichment data does not show. top_weakness and
+weakness_label must both describe something that was actually measured,
+not something you infer or assume.
 
 has_actionable_weakness rules: true ONLY when there is a concrete, fixable website
 deficiency worth pitching a rebuild over (e.g. no mobile site, broken contact form,

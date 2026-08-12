@@ -70,9 +70,36 @@ def test_opener_v2_render_leaves_only_preview_url_placeholder() -> None:
             "lead_json": '{"first_name":"Brett","business_name":"Stone Builders"}',
             "top_weakness": "no_mobile",
             "rationale": "The site is hard to use on mobile.",
+            "enrichment_json": '{"weaknesses":["no_mobile"]}',
         },
     )
 
     placeholders = re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", rendered)
     assert placeholders
     assert set(placeholders) == {"preview_url"}
+
+
+def test_opener_v2_prompt_receives_enrichment_json_placeholder() -> None:
+    prompt = PROMPT_PATH.read_text(encoding="utf-8")
+    rendered = claude_client._render_prompt(
+        prompt,
+        {
+            "lead_json": '{"first_name":"Brett"}',
+            "top_weakness": "no_mobile",
+            "rationale": "No mobile site.",
+            "enrichment_json": '{"weaknesses":["no_mobile"]}',
+        },
+    )
+
+    assert "{enrichment_json}" in prompt
+    assert '{"weaknesses":["no_mobile"]}' in rendered
+    assert "{enrichment_json}" not in rendered
+
+
+def test_opener_v2_prompt_grounds_weakness_sentence_in_enrichment_data() -> None:
+    prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert "enrichment data" in prompt.lower()
+    assert "weakness_label" in prompt.lower()
+    assert "never" in prompt.lower()
+    assert "does not show" in prompt.lower()

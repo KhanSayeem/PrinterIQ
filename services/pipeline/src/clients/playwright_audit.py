@@ -3,9 +3,20 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from weaknesses import Weakness
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_MS = 30_000
+
+# Ported from clients.prospect_website_audit._MOBILE_VIEWPORT so this audit
+# measures the site the way a mobile visitor actually experiences it — our
+# email copy says "on mobile", so the audit must run under mobile emulation.
+_MOBILE_VIEWPORT = {"width": 390, "height": 844, "isMobile": True}
+
+# "over 5 seconds" is the exact claim made in customer-facing copy, so the
+# threshold is strictly-greater-than 5000ms, not inclusive of it.
+_SLOW_LOAD_THRESHOLD_MS = 5_000
 
 _CMS_MARKERS: dict[str, list[str]] = {
     "WordPress": ["wp-content", "wp-includes"],
@@ -25,7 +36,7 @@ class PlaywrightAuditor:
         async with async_playwright() as p:
             browser = await p.chromium.launch()
             try:
-                page = await browser.new_page()
+                page = await browser.new_page(viewport=_MOBILE_VIEWPORT)
                 try:
                     loop = asyncio.get_event_loop()
                     start = loop.time()
@@ -57,15 +68,17 @@ class PlaywrightAuditor:
 
                     weaknesses: list[str] = []
                     if not is_mobile:
-                        weaknesses.append("no_mobile")
+                        weaknesses.append(Weakness.NO_MOBILE)
                     if not has_ssl:
-                        weaknesses.append("no_ssl")
+                        weaknesses.append(Weakness.NO_SSL)
                     if not has_title:
-                        weaknesses.append("no_meta_title")
+                        weaknesses.append(Weakness.NO_META_TITLE)
                     if not has_meta_desc:
-                        weaknesses.append("no_meta_description")
+                        weaknesses.append(Weakness.NO_META_DESCRIPTION)
                     if not has_h1:
-                        weaknesses.append("no_h1")
+                        weaknesses.append(Weakness.NO_H1)
+                    if load_ms > _SLOW_LOAD_THRESHOLD_MS:
+                        weaknesses.append(Weakness.SLOW_LOAD)
 
                     return {
                         "has_site": True,
