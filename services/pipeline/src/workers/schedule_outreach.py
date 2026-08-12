@@ -263,6 +263,7 @@ def _instantly_payload(
     custom_variables = {
         "opener": opener,
         "weakness": str(qualification.get("top_weakness", "")),
+        "weakness_sentence": str(qualification.get("weakness_sentence") or ""),
         "followup_1": str(qualification.get("followup_1", "")),
         "followup_2": str(qualification.get("followup_2", "")),
         "lead_id": str(lead_id),

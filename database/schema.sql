@@ -90,6 +90,7 @@ CREATE TABLE qualifications (
   personalised_opener   TEXT,
   followup_1            TEXT,
   followup_2            TEXT,
+  weakness_sentence     TEXT,
   -- Audit
   model_haiku           TEXT NOT NULL,
   model_sonnet          TEXT,

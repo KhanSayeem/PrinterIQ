@@ -48,12 +48,13 @@ _MULTIPLE_SPACES_PATTERN = re.compile(r" {2,}")
 
 _SONNET_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["subject_line", "opener", "followup_1", "followup_2"],
+    "required": ["subject_line", "opener", "followup_1", "followup_2", "weakness_sentence"],
     "properties": {
         "subject_line": {"type": "string"},
         "opener": {"type": "string"},
         "followup_1": {"type": "string"},
         "followup_2": {"type": "string"},
+        "weakness_sentence": {"type": "string"},
     },
     "additionalProperties": False,
 }
@@ -194,6 +195,7 @@ async def qualify_lead(
             "personalised_opener": _normalise_dashes(str(sonnet_data["opener"])),
             "followup_1": _normalise_dashes(str(sonnet_data["followup_1"])),
             "followup_2": _normalise_dashes(str(sonnet_data["followup_2"])),
+            "weakness_sentence": _normalise_dashes(str(sonnet_data["weakness_sentence"])),
             "model_haiku": haiku_resp.model,
             "model_sonnet": sonnet_resp.model,
             "cost_usd": total_cost,
@@ -243,6 +245,7 @@ async def _archive_without_outreach(
             "personalised_opener": None,
             "followup_1": None,
             "followup_2": None,
+            "weakness_sentence": None,
             "model_haiku": haiku_resp.model,
             "model_sonnet": None,
             "cost_usd": haiku_resp.cost_usd,
