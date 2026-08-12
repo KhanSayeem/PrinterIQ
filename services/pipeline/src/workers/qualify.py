@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -25,21 +26,25 @@ _SEND_WINDOW_END = time(hour=17)
 
 _HAIKU_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": [
-        "score", "rationale", "top_weakness",
-        "subject_line", "opener", "followup_1", "followup_2",
-    ],
+    "required": ["score", "rationale", "top_weakness", "has_actionable_weakness"],
     "properties": {
         "score": {"type": "integer", "minimum": 0, "maximum": 100},
         "rationale": {"type": "string"},
         "top_weakness": {"type": "string"},
-        "subject_line": {"type": "string"},
-        "opener": {"type": "string"},
-        "followup_1": {"type": "string"},
-        "followup_2": {"type": "string"},
+        "has_actionable_weakness": {"type": "boolean"},
     },
     "additionalProperties": False,
 }
+
+# Em dash (U+2014) and en dash (U+2013) reach customer-facing email copy when
+# Claude uses them despite prompt instructions. Normalise rather than reject:
+# rejecting on punctuation would dead-letter otherwise-good leads, and this
+# text goes straight into a customer-facing email.
+# Consume whitespace either side of the dash so both spaced and unspaced forms
+# produce a correctly punctuated ", ". Replacing the dash alone yields
+# "homepage,hurts" or "seconds , slower".
+_DASH_SUBSTITUTES_PATTERN = re.compile(r"\s*[—–]\s*")
+_MULTIPLE_SPACES_PATTERN = re.compile(r" {2,}")
 
 _SONNET_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -131,29 +136,33 @@ async def qualify_lead(
             raise DeadLetterError("Haiku returned invalid JSON twice — dead-lettering")
 
     score: int = int(haiku_data["score"])
-    rationale: str = str(haiku_data["rationale"])
-    top_weakness: str = str(haiku_data["top_weakness"])
+    rationale: str = _normalise_dashes(str(haiku_data["rationale"]))
+    top_weakness: str = _normalise_dashes(str(haiku_data["top_weakness"]))
+    has_actionable_weakness: bool = bool(haiku_data["has_actionable_weakness"])
 
     if score < score_threshold:
-        await qualification_repo.insert_qualification(
-            {
-                "lead_id": lead_id,
-                "tenant_id": tenant_id,
-                "score": score,
-                "rationale": rationale,
-                "top_weakness": top_weakness,
-                "subject_line": None,
-                "personalised_opener": None,
-                "followup_1": None,
-                "followup_2": None,
-                "model_haiku": haiku_resp.model,
-                "model_sonnet": None,
-                "cost_usd": haiku_resp.cost_usd,
-                "prompt_version": _PROMPT_VERSION,
-            }
+        await _archive_without_outreach(
+            qualification_repo,
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            score=score,
+            rationale=rationale,
+            top_weakness=top_weakness,
+            has_actionable_weakness=has_actionable_weakness,
+            haiku_resp=haiku_resp,
         )
-        await qualification_repo.update_lead_status(
-            tenant_id=tenant_id, lead_id=lead_id, status="archived"
+        return
+
+    if not has_actionable_weakness:
+        await _archive_without_outreach(
+            qualification_repo,
+            tenant_id=tenant_id,
+            lead_id=lead_id,
+            score=score,
+            rationale=rationale,
+            top_weakness=top_weakness,
+            has_actionable_weakness=has_actionable_weakness,
+            haiku_resp=haiku_resp,
         )
         return
 
@@ -180,10 +189,11 @@ async def qualify_lead(
             "score": score,
             "rationale": rationale,
             "top_weakness": top_weakness,
-            "subject_line": str(sonnet_data["subject_line"]),
-            "personalised_opener": str(sonnet_data["opener"]),
-            "followup_1": str(sonnet_data["followup_1"]),
-            "followup_2": str(sonnet_data["followup_2"]),
+            "has_actionable_weakness": has_actionable_weakness,
+            "subject_line": _normalise_dashes(str(sonnet_data["subject_line"])),
+            "personalised_opener": _normalise_dashes(str(sonnet_data["opener"])),
+            "followup_1": _normalise_dashes(str(sonnet_data["followup_1"])),
+            "followup_2": _normalise_dashes(str(sonnet_data["followup_2"])),
             "model_haiku": haiku_resp.model,
             "model_sonnet": sonnet_resp.model,
             "cost_usd": total_cost,
@@ -203,6 +213,58 @@ async def qualify_lead(
             "send_after": _send_after(payload),
         }
     )
+
+
+async def _archive_without_outreach(
+    qualification_repo: QualificationRepository,
+    *,
+    tenant_id: UUID,
+    lead_id: UUID,
+    score: int,
+    rationale: str,
+    top_weakness: str,
+    has_actionable_weakness: bool,
+    haiku_resp: ClaudeResponse,
+) -> None:
+    """Archive a lead on Haiku output alone: no Sonnet call, no preview, no outreach.
+
+    Used both when the score misses threshold and when the lead has no
+    actionable weakness worth pitching a rebuild over.
+    """
+    await qualification_repo.insert_qualification(
+        {
+            "lead_id": lead_id,
+            "tenant_id": tenant_id,
+            "score": score,
+            "rationale": rationale,
+            "top_weakness": top_weakness,
+            "has_actionable_weakness": has_actionable_weakness,
+            "subject_line": None,
+            "personalised_opener": None,
+            "followup_1": None,
+            "followup_2": None,
+            "model_haiku": haiku_resp.model,
+            "model_sonnet": None,
+            "cost_usd": haiku_resp.cost_usd,
+            "prompt_version": _PROMPT_VERSION,
+        }
+    )
+    await qualification_repo.update_lead_status(
+        tenant_id=tenant_id, lead_id=lead_id, status="archived"
+    )
+
+
+def _normalise_dashes(value: str) -> str:
+    """Replace em/en dashes with a comma and collapse resulting double spaces.
+
+    Model output occasionally uses em dashes (U+2014) or en dashes (U+2013)
+    despite prompt instructions banning them, and this text is persisted
+    straight into customer-facing email copy. Normalise rather than reject:
+    rejecting on punctuation would throw away an otherwise-good lead.
+    """
+    replaced = _DASH_SUBSTITUTES_PATTERN.sub(", ", value)
+    collapsed = _MULTIPLE_SPACES_PATTERN.sub(" ", replaced)
+    return collapsed.strip(" ,")
 
 
 def _parse_and_validate(text: str, schema: dict[str, Any]) -> dict[str, Any] | None:

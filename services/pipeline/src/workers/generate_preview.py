@@ -317,7 +317,7 @@ def _escape_token(value: str) -> str:
 
 def _reject_dash_substitutes(value: object) -> None:
     if isinstance(value, str):
-        if "\u2014" in value or "--" in value:
+        if "\u2014" in value or "\u2013" in value or "--" in value:
             raise DeadLetterError("invalid preview personalisation dash")
         return
     if isinstance(value, dict):
