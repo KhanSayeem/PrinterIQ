@@ -1112,3 +1112,69 @@ def test_insert_qualification_writes_tenant_scoped_row() -> None:
         assert conn.args[0][1] == TENANT_ID
 
     asyncio.run(scenario())
+
+
+def test_grounding_retry_returning_below_threshold_score_archives_without_sonnet() -> None:
+    """The grounding retry replaces score, so the threshold gate must re-run.
+
+    Without this the retried lead reaches Sonnet and is emailed despite scoring
+    below threshold, because the gate above already ran on the superseded
+    response.
+    """
+
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        ungrounded = _haiku_response(score=75, weakness_label="no_ssl", top_weakness="no_ssl")
+        retried_low_score = _haiku_response(score=5, weakness_label="no_mobile")
+        client = FakeClaudeClient(responses=[ungrounded, retried_low_score])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert len(client.calls) == 2
+        assert all(call[0] == "qualify-v1" for call in client.calls)
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert repo.inserted[0]["personalised_opener"] is None
+        assert queue.jobs == []
+
+    asyncio.run(scenario())
+
+
+def test_grounding_retry_returning_no_actionable_weakness_archives_without_sonnet() -> None:
+    """Same re-check for has_actionable_weakness, which the retry also replaces."""
+
+    async def scenario() -> None:
+        fetcher = FakeLeadFetcher(lead=_make_lead())
+        enrichment = FakeEnrichmentFetcher(enrichment=_make_enrichment())
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        ungrounded = _haiku_response(score=75, weakness_label="no_ssl", top_weakness="no_ssl")
+        retried_not_actionable = _haiku_response(
+            score=75, has_actionable_weakness=False, weakness_label="no_mobile"
+        )
+        client = FakeClaudeClient(responses=[ungrounded, retried_not_actionable])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=fetcher,
+            enrichment_fetcher=enrichment,
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert len(client.calls) == 2
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert queue.jobs == []
+
+    asyncio.run(scenario())

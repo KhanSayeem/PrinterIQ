@@ -216,6 +216,24 @@ async def qualify_lead(
         top_weakness = _normalise_dashes(str(haiku_data["top_weakness"]))
         has_actionable_weakness = bool(haiku_data["has_actionable_weakness"])
 
+        # The retry replaced score and has_actionable_weakness, but the archive
+        # gates above already ran against the superseded response. Re-run them
+        # against the retried values, or a retry returning a below-threshold
+        # score or has_actionable_weakness=False would reach Sonnet and be
+        # emailed - the exact outcome those gates exist to prevent.
+        if score < score_threshold or not has_actionable_weakness:
+            await _archive_without_outreach(
+                qualification_repo,
+                tenant_id=tenant_id,
+                lead_id=lead_id,
+                score=score,
+                rationale=rationale,
+                top_weakness=top_weakness,
+                has_actionable_weakness=has_actionable_weakness,
+                haiku_resp=haiku_resp,
+            )
+            return
+
     sonnet_resp = await claude_client.call(
         _SONNET_PROMPT,
         {
