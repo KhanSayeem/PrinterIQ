@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -860,11 +861,19 @@ def test_missing_enrichment_weaknesses_key_derives_false_and_archives() -> None:
 
 
 def test_non_list_enrichment_weaknesses_derives_false_and_archives() -> None:
-    """`weaknesses` is nullable in the schema, so None must not raise."""
+    """A non-list `weaknesses` must never be read as measured weaknesses.
 
-    async def scenario() -> None:
+    The truthy case is the one that matters. An undecoded jsonb str is
+    truthy, and `"no_mobile" in '["no_mobile"]'` is True by substring match,
+    so without the isinstance guard the lead would clear both the derived
+    gate and the grounding check and be emailed on data nothing verified.
+    Delete the guard and this test fails; `None` alone cannot catch that,
+    because bool(None) already archives before the guard is reached.
+    """
+
+    async def scenario(weaknesses: object) -> None:
         enrichment_data = _make_enrichment()
-        enrichment_data["weaknesses"] = None
+        enrichment_data["weaknesses"] = weaknesses
         repo = FakeQualificationRepository()
         queue = FakeOutreachQueue()
         client = FakeClaudeClient(responses=[_haiku_response(score=95)])
@@ -879,10 +888,13 @@ def test_non_list_enrichment_weaknesses_derives_false_and_archives() -> None:
         )
 
         assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert repo.inserted[0]["model_sonnet"] is None
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
         assert queue.jobs == []
+        assert len(client.calls) == 1
 
-    asyncio.run(scenario())
+    asyncio.run(scenario(None))
+    asyncio.run(scenario('["no_mobile"]'))
 
 
 def test_haiku_schema_rejects_model_supplied_actionable_weakness() -> None:
@@ -901,6 +913,42 @@ def test_haiku_schema_rejects_model_supplied_actionable_weakness() -> None:
     }
 
     assert _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA) is None
+
+
+def test_schema_violation_logs_the_validation_error_not_invalid_json(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stray field must not be reported to the operator as malformed JSON.
+
+    The retry-then-dead-letter path is deliberately fail-closed, so if the
+    model ever starts emitting has_actionable_weakness systematically the
+    operator sees a wave of dead-letters. "Haiku returned invalid JSON" would
+    send them looking at the parser; the schema error names the real cause.
+    """
+    data = {
+        "score": 75,
+        "rationale": "No mobile site, slow load.",
+        "top_weakness": "no_mobile",
+        "weakness_label": "no_mobile",
+        "has_actionable_weakness": False,
+    }
+
+    with caplog.at_level(logging.WARNING, logger="workers.qualify"):
+        assert _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA) is None
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "has_actionable_weakness" in logged
+    assert "invalid JSON" not in logged
+
+
+def test_malformed_json_logs_a_decode_error_distinct_from_schema_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="workers.qualify"):
+        assert _parse_and_validate("{not json at all", _HAIKU_SCHEMA) is None
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "schema" not in logged.lower()
 
 
 def test_haiku_schema_validates_response_without_actionable_weakness() -> None:
@@ -1248,6 +1296,58 @@ def test_get_enrichment_by_lead_id_is_tenant_scoped() -> None:
         assert "lead_id = $2" in conn.queries[0]
         assert conn.args[0] == (TENANT_ID, LEAD_ID)
         assert result == expected
+
+    asyncio.run(scenario())
+
+
+def test_get_enrichment_by_lead_id_decodes_jsonb_columns() -> None:
+    """asyncpg returns jsonb as str unless a codec is registered, and none is.
+
+    Verified against production: `SELECT weaknesses FROM enrichments` comes
+    back as the str '["no_ssl"]', not a list. Every consumer of this row
+    type-checks the value, so an undecoded str silently reads as "no
+    weaknesses measured" and archives the lead.
+    """
+
+    async def scenario() -> None:
+        class _Conn(RecordingConnection):
+            async def fetchrow(self, query: str, *args: object) -> object:
+                self.queries.append(query)
+                self.args.append(args)
+                return {
+                    "id": ENRICHMENT_ID,
+                    "lead_id": LEAD_ID,
+                    "tenant_id": TENANT_ID,
+                    "weaknesses": '["no_h1", "slow_load"]',
+                    "raw_audit": '{"url": "https://example.com", "status": 200}',
+                }
+
+        result = await get_enrichment_by_lead_id(_Conn(), tenant_id=TENANT_ID, lead_id=LEAD_ID)
+
+        assert result["weaknesses"] == ["no_h1", "slow_load"]
+        assert result["raw_audit"] == {"url": "https://example.com", "status": 200}
+
+    asyncio.run(scenario())
+
+
+def test_get_enrichment_by_lead_id_passes_through_already_decoded_values() -> None:
+    """Must stay correct if a jsonb codec is ever registered on the pool."""
+
+    async def scenario() -> None:
+        class _Conn(RecordingConnection):
+            async def fetchrow(self, query: str, *args: object) -> object:
+                self.queries.append(query)
+                self.args.append(args)
+                return {
+                    "id": ENRICHMENT_ID,
+                    "weaknesses": ["no_h1"],
+                    "raw_audit": None,
+                }
+
+        result = await get_enrichment_by_lead_id(_Conn(), tenant_id=TENANT_ID, lead_id=LEAD_ID)
+
+        assert result["weaknesses"] == ["no_h1"]
+        assert result["raw_audit"] is None
 
     asyncio.run(scenario())
 

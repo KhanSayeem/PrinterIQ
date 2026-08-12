@@ -142,7 +142,14 @@ async def qualify_lead(
     # archived leads whose only measured defect was a missing H1, even though
     # they scored above threshold. Severity is the score threshold's dial;
     # this gate only asks whether anything was measured at all.
-    # `weaknesses` is nullable in the schema, so guard the type before bool().
+    #
+    # The isinstance guard is load-bearing, not defensive noise. `weaknesses`
+    # is jsonb, and asyncpg hands jsonb back as str unless a codec is
+    # registered; db.queries.get_enrichment_by_lead_id decodes it, but any
+    # caller that does not would otherwise pass a truthy '["no_h1"]' string
+    # straight through this gate, and `"no_h1" in '["no_h1"]'` also passes
+    # the grounding check below by substring match. Treat anything that is
+    # not a list as nothing measured.
     raw_enrichment_weaknesses = enrichment.get("weaknesses")
     grounded_weaknesses = (
         raw_enrichment_weaknesses if isinstance(raw_enrichment_weaknesses, list) else []
@@ -319,8 +326,10 @@ async def _archive_without_outreach(
 ) -> None:
     """Archive a lead on Haiku output alone: no Sonnet call, no preview, no outreach.
 
-    Used both when the score misses threshold and when the lead has no
-    actionable weakness worth pitching a rebuild over.
+    Used both when the score misses threshold and when the lead's enrichment
+    measured no weakness at all. Note the second condition is presence, not
+    severity: "worth pitching a rebuild over" was the prompt wording that
+    caused leads with real measured defects to archive, and it is gone.
     """
     await qualification_repo.insert_qualification(
         {
@@ -360,17 +369,28 @@ def _normalise_dashes(value: str) -> str:
 
 
 def _parse_and_validate(text: str, schema: dict[str, Any]) -> dict[str, Any] | None:
+    """Parse a model response, returning None if it is unusable.
+
+    Both failure modes return None so callers can share one retry path, but
+    they are logged distinctly. A schema violation and malformed JSON need
+    completely different diagnoses, and the caller's "invalid JSON" wording
+    would send an operator to the parser when the real cause is a changed
+    model output contract.
+    """
     import jsonschema
 
     try:
         raw = json.loads(_strip_json_code_fence(text))
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Model response was not decodable JSON: %s", exc)
         return None
     if not isinstance(raw, dict):
+        logger.warning("Model response decoded to %s, expected a JSON object", type(raw).__name__)
         return None
     try:
         jsonschema.validate(instance=raw, schema=schema)
-    except jsonschema.ValidationError:
+    except jsonschema.ValidationError as exc:
+        logger.warning("Model response failed schema validation: %s", exc.message)
         return None
     return raw
 
