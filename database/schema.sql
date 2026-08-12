@@ -84,11 +84,13 @@ CREATE TABLE qualifications (
   score                 INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
   rationale             TEXT NOT NULL,
   top_weakness          TEXT NOT NULL,
+  has_actionable_weakness BOOLEAN,
   -- Generated content
   subject_line          TEXT,
   personalised_opener   TEXT,
   followup_1            TEXT,
   followup_2            TEXT,
+  weakness_sentence     TEXT,
   -- Audit
   model_haiku           TEXT NOT NULL,
   model_sonnet          TEXT,

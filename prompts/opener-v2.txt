@@ -19,8 +19,22 @@ Respond with valid JSON matching this schema:
   "subject_line": "string",
   "opener": "string",
   "followup_1": "string",
-  "followup_2": "string"
+  "followup_2": "string",
+  "weakness_sentence": "string"
 }
+
+weakness_sentence: one clause that slots directly into a sentence starting
+"I noticed ..." or "... and noticed ...". Requirements:
+- Start lower-case, no trailing full stop, and read correctly after both
+  "I noticed " and "and noticed ".
+- Name the concrete observed problem in plain language a tradie understands,
+  and where useful, its consequence for the business.
+- Never output a bare technical label. "missing H1 tag" is wrong;
+  "no main heading, so Google struggles to understand what you do" is right.
+- Example: "your site takes over 5 seconds to load on mobile, and most
+  visitors leave before it finishes".
+- Example: "your site shows as Not Secure in Chrome, which most visitors
+  leave immediately".
 
 Use this Step 1 opener structure:
 Hey [first name], spotted [business name]'s site and noticed [specific weakness].
@@ -42,6 +56,7 @@ Last nudge from me. Offer's open if the timing works. No pressure.
 
 Rules:
 - No em-dashes in any output field.
+- No en dashes in any output field, including weakness_sentence.
 - No double-hyphen substitutes for em-dashes in any output field.
 - Never use "I hope this email finds you well" or equivalent openers.
 - No corporate language or buzzwords.

@@ -374,10 +374,12 @@ class PipelineStore:
                 score=int(cast(SupportsInt, q["score"])),
                 rationale=str(q["rationale"]),
                 top_weakness=str(q["top_weakness"]),
+                has_actionable_weakness=cast(bool | None, q["has_actionable_weakness"]),
                 subject_line=cast(str | None, q["subject_line"]),
                 personalised_opener=cast(str | None, q["personalised_opener"]),
                 followup_1=cast(str | None, q["followup_1"]),
                 followup_2=cast(str | None, q["followup_2"]),
+                weakness_sentence=cast(str | None, q["weakness_sentence"]),
                 model_haiku=str(q["model_haiku"]),
                 model_sonnet=cast(str | None, q["model_sonnet"]),
                 cost_usd=cast(Decimal, q["cost_usd"]),
@@ -1613,10 +1615,12 @@ class QualificationInsert:
     score: int
     rationale: str
     top_weakness: str
+    has_actionable_weakness: bool | None
     subject_line: str | None
     personalised_opener: str | None
     followup_1: str | None
     followup_2: str | None
+    weakness_sentence: str | None
     model_haiku: str
     model_sonnet: str | None
     cost_usd: Decimal
@@ -1656,14 +1660,15 @@ async def insert_qualification(
         """
         INSERT INTO qualifications (
           lead_id, tenant_id,
-          score, rationale, top_weakness,
+          score, rationale, top_weakness, has_actionable_weakness,
           subject_line, personalised_opener, followup_1, followup_2,
+          weakness_sentence,
           model_haiku, model_sonnet,
           cost_usd, prompt_version
         )
         SELECT
-          $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, $15
         FROM leads
         WHERE id = $1
           AND tenant_id = $2
@@ -1673,10 +1678,12 @@ async def insert_qualification(
             score = EXCLUDED.score,
             rationale = EXCLUDED.rationale,
             top_weakness = EXCLUDED.top_weakness,
+            has_actionable_weakness = EXCLUDED.has_actionable_weakness,
             subject_line = EXCLUDED.subject_line,
             personalised_opener = EXCLUDED.personalised_opener,
             followup_1 = EXCLUDED.followup_1,
             followup_2 = EXCLUDED.followup_2,
+            weakness_sentence = EXCLUDED.weakness_sentence,
             model_haiku = EXCLUDED.model_haiku,
             model_sonnet = EXCLUDED.model_sonnet,
             cost_usd = EXCLUDED.cost_usd,
@@ -1690,10 +1697,12 @@ async def insert_qualification(
         q.score,
         q.rationale,
         q.top_weakness,
+        q.has_actionable_weakness,
         q.subject_line,
         q.personalised_opener,
         q.followup_1,
         q.followup_2,
+        q.weakness_sentence,
         q.model_haiku,
         q.model_sonnet,
         q.cost_usd,
@@ -1717,6 +1726,7 @@ async def get_qualification_by_lead_id(
         SELECT id, lead_id, tenant_id,
                score, rationale, top_weakness,
                subject_line, personalised_opener, followup_1, followup_2,
+               weakness_sentence,
                model_haiku, model_sonnet, cost_usd, prompt_version,
                qualified_at
         FROM qualifications
