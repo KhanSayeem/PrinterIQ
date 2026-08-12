@@ -32,7 +32,6 @@ _HAIKU_SCHEMA: dict[str, Any] = {
         "rationale",
         "top_weakness",
         "weakness_label",
-        "has_actionable_weakness",
     ],
     "properties": {
         "score": {"type": "integer", "minimum": 0, "maximum": 100},
@@ -42,7 +41,11 @@ _HAIKU_SCHEMA: dict[str, Any] = {
         # so a hallucinated label fails schema validation before it can reach
         # the grounding check below.
         "weakness_label": {"type": "string", "enum": sorted(WEAKNESS_LABELS)},
-        "has_actionable_weakness": {"type": "boolean"},
+        # has_actionable_weakness is deliberately absent: it is derived in
+        # qualify_lead from the enrichment weaknesses array. With
+        # additionalProperties False, a model that supplies it anyway fails
+        # validation and takes the retry path rather than overriding a value
+        # the code owns.
     },
     "additionalProperties": False,
 }
@@ -131,6 +134,21 @@ async def qualify_lead(
     lead = await lead_fetcher.get_lead(tenant_id=tenant_id, lead_id=lead_id)
     enrichment = await enrichment_fetcher.get_enrichment(tenant_id=tenant_id, lead_id=lead_id)
 
+    # The website audit already answered "does this lead have a fixable
+    # defect?" — every entry in `weaknesses` is something a producer actually
+    # measured (see services/pipeline/src/weaknesses.py). Deriving the gate
+    # from that array instead of asking Haiku removes a second, redundant
+    # severity judgement: the prompt's "worth pitching a rebuild over" wording
+    # archived leads whose only measured defect was a missing H1, even though
+    # they scored above threshold. Severity is the score threshold's dial;
+    # this gate only asks whether anything was measured at all.
+    # `weaknesses` is nullable in the schema, so guard the type before bool().
+    raw_enrichment_weaknesses = enrichment.get("weaknesses")
+    grounded_weaknesses = (
+        raw_enrichment_weaknesses if isinstance(raw_enrichment_weaknesses, list) else []
+    )
+    has_actionable_weakness: bool = bool(grounded_weaknesses)
+
     lead_json = json.dumps(lead, default=str)
     enrichment_json = json.dumps(enrichment, default=str)
 
@@ -151,7 +169,6 @@ async def qualify_lead(
     rationale: str = _normalise_dashes(str(haiku_data["rationale"]))
     top_weakness: str = _normalise_dashes(str(haiku_data["top_weakness"]))
     weakness_label: str = str(haiku_data["weakness_label"])
-    has_actionable_weakness: bool = bool(haiku_data["has_actionable_weakness"])
 
     if score < score_threshold:
         await _archive_without_outreach(
@@ -183,14 +200,9 @@ async def qualify_lead(
     # customer-facing copy written about it, so weakness_label must name a
     # weakness this lead's enrichment actually measured — not something
     # Haiku inferred or hallucinated. Deliberately ordered after the score
-    # and has_actionable_weakness archive gates above, so a lead with an
-    # empty weaknesses array that Haiku correctly marked as
-    # has_actionable_weakness=False archives cleanly instead of
-    # dead-lettering on a grounding check it was never going to pass.
-    raw_enrichment_weaknesses = enrichment.get("weaknesses")
-    grounded_weaknesses = (
-        raw_enrichment_weaknesses if isinstance(raw_enrichment_weaknesses, list) else []
-    )
+    # and has_actionable_weakness archive gates above: a lead with an empty
+    # weaknesses array archives cleanly on the derived gate instead of
+    # dead-lettering here on a grounding check no label could ever pass.
     if weakness_label not in grounded_weaknesses:
         logger.warning(
             "Haiku weakness_label %r not present in enrichment weaknesses %r — retrying once",
@@ -214,14 +226,14 @@ async def qualify_lead(
         score = int(haiku_data["score"])
         rationale = _normalise_dashes(str(haiku_data["rationale"]))
         top_weakness = _normalise_dashes(str(haiku_data["top_weakness"]))
-        has_actionable_weakness = bool(haiku_data["has_actionable_weakness"])
 
-        # The retry replaced score and has_actionable_weakness, but the archive
-        # gates above already ran against the superseded response. Re-run them
-        # against the retried values, or a retry returning a below-threshold
-        # score or has_actionable_weakness=False would reach Sonnet and be
-        # emailed - the exact outcome those gates exist to prevent.
-        if score < score_threshold or not has_actionable_weakness:
+        # The retry replaced score, but the threshold gate above already ran
+        # against the superseded response. Re-run it against the retried
+        # value, or a retry returning a below-threshold score would reach
+        # Sonnet and be emailed - the exact outcome that gate exists to
+        # prevent. has_actionable_weakness needs no re-check: it is derived
+        # from enrichment, which the retry cannot change.
+        if score < score_threshold:
             await _archive_without_outreach(
                 qualification_repo,
                 tenant_id=tenant_id,

@@ -19,7 +19,12 @@ def test_qualify_v1_prompt_schema_matches_haiku_contract() -> None:
     assert '"rationale"' in prompt
     assert '"top_weakness"' in prompt
     assert '"weakness_label"' in prompt
-    assert '"has_actionable_weakness"' in prompt
+
+    # has_actionable_weakness is derived in code from the enrichment
+    # weaknesses array, so the prompt must not ask the model for it. Asking
+    # produced the production defect where leads with measured weaknesses
+    # were judged "not worth pitching a rebuild over" and archived.
+    assert "has_actionable_weakness" not in prompt
 
     # CHANGE 3: subject_line/opener/followup_1/followup_2 are generated and
     # discarded on every qualification — Sonnet (opener-v2) is the only prompt
@@ -48,14 +53,18 @@ def test_qualify_v1_prompt_grounds_weakness_label_in_enrichment_data() -> None:
     assert "never pick a" in prompt.lower() or "does not show" in prompt.lower()
 
 
-def test_qualify_v1_prompt_defines_actionable_weakness() -> None:
+def test_qualify_v1_prompt_does_not_ask_the_model_to_judge_actionability() -> None:
+    """Replaces test_qualify_v1_prompt_defines_actionable_weakness.
+
+    The old wording, "worth pitching a rebuild over", was read literally and
+    archived every lead whose only measured defect was a missing H1. The
+    judgement is gone from the prompt entirely; presence of a measured
+    weakness is now decided in code and severity is the score's job.
+    """
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-    assert "has_actionable_weakness" in prompt
-    assert "concrete" in prompt.lower()
-    assert "fixable" in prompt.lower() or "fixable" in prompt.lower()
-    assert "already good" in prompt.lower() or "no weaknesses found" in prompt.lower()
-    assert "false" in prompt.lower()
+    assert "has_actionable_weakness" not in prompt
+    assert "worth pitching a rebuild over" not in prompt.lower()
 
 
 def test_qualify_v1_prompt_bans_dash_substitutes() -> None:
