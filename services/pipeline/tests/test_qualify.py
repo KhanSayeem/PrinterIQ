@@ -393,7 +393,13 @@ def test_haiku_schema_validates_with_only_core_fields() -> None:
     assert result == data
 
 
-def test_haiku_schema_rejects_weakness_label_outside_enum() -> None:
+def test_haiku_schema_no_longer_rejects_an_unknown_weakness_label() -> None:
+    """Replaces test_haiku_schema_rejects_weakness_label_outside_enum.
+
+    Rejection moved from the schema to the grounding check, which is stronger.
+    See test_ungrounded_weakness_label_still_dead_letters_when_something_was_
+    measured for the end-to-end guarantee this hands off to.
+    """
     data = {
         "score": 75,
         "rationale": "No mobile site, slow load.",
@@ -401,9 +407,7 @@ def test_haiku_schema_rejects_weakness_label_outside_enum() -> None:
         "weakness_label": "not_a_real_label",
     }
 
-    result = _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA)
-
-    assert result is None
+    assert _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA) == data
 
 
 def test_haiku_schema_requires_weakness_label() -> None:
@@ -982,6 +986,89 @@ def test_weakness_label_none_against_measured_weaknesses_still_dead_letters() ->
         queue = FakeOutreachQueue()
         says_none = _haiku_response(score=75, weakness_label="none", top_weakness="none found")
         client = FakeClaudeClient(responses=[says_none, says_none])
+
+        with pytest.raises(DeadLetterError):
+            await qualify_lead(
+                _payload(score_threshold=40),
+                lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+                enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+                qualification_repo=repo,
+                outreach_queue=queue,
+                claude_client=client,
+            )
+
+        assert repo.inserted == []
+        assert queue.jobs == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "label", ["none", "", "no_weakness_detected", "n/a", "None detected in audit"]
+)
+def test_any_weakness_label_archives_cleanly_when_nothing_was_measured(label: str) -> None:
+    """Haiku has no single spelling for "nothing", and it does not need one.
+
+    Production returned "none", "" and "no_weakness_detected" for the same
+    situation within one batch. Constraining the field to an enum turned each
+    new spelling into a dead-lettered lead. The label only feeds the grounding
+    check, which never runs for an empty array because the derived gate
+    archives first, so any value here is harmless.
+    """
+
+    async def scenario() -> None:
+        enrichment_data = _make_enrichment()
+        enrichment_data["weaknesses"] = []
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        haiku = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 30,
+                    "rationale": "Site is in good shape already.",
+                    "top_weakness": "none found",
+                    "weakness_label": label,
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        client = FakeClaudeClient(responses=[haiku])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=enrichment_data),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert queue.jobs == []
+        assert len(client.calls) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("label", ["none", "", "not_a_real_label", "no_ssl"])
+def test_ungrounded_weakness_label_still_dead_letters_when_something_was_measured(
+    label: str,
+) -> None:
+    """Dropping the enum must not weaken the guarantee that matters.
+
+    The grounding check is stronger than the enum ever was: it validates
+    against what this lead's audit actually measured, not merely against the
+    vocabulary. "no_ssl" is a perfectly valid canonical label and still has to
+    be rejected here, because this lead's array does not contain it.
+    """
+
+    async def scenario() -> None:
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        ungrounded = _haiku_response(score=75, weakness_label=label, top_weakness="x")
+        client = FakeClaudeClient(responses=[ungrounded, ungrounded])
 
         with pytest.raises(DeadLetterError):
             await qualify_lead(

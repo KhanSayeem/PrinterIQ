@@ -14,7 +14,6 @@ from zoneinfo import ZoneInfo
 from env import load_pipeline_env
 from offer import offer_price_display
 from pipeline_queue.definitions import JobType
-from weaknesses import WEAKNESS_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +24,6 @@ _DEFAULT_CHANNEL = "email"
 _SEND_WINDOW_TZ = ZoneInfo("Australia/Sydney")
 _SEND_WINDOW_START = time(hour=9)
 _SEND_WINDOW_END = time(hour=17)
-
-# Haiku's answer when the enrichment measured no weakness at all. Deliberately
-# outside the canonical vocabulary: it names the absence of a weakness, so it
-# can never satisfy the grounding check against a non-empty weaknesses array.
-_NO_WEAKNESS_LABEL = "none"
 
 _HAIKU_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -43,23 +37,28 @@ _HAIKU_SCHEMA: dict[str, Any] = {
         "score": {"type": "integer", "minimum": 0, "maximum": 100},
         "rationale": {"type": "string"},
         "top_weakness": {"type": "string"},
-        # Constrained to the canonical vocabulary (services/pipeline/src/weaknesses.py)
-        # so a hallucinated label fails schema validation before it can reach
-        # the grounding check below.
+        # Deliberately unconstrained, after an enum here proved to be the
+        # wrong tool twice in production.
         #
-        # _NO_WEAKNESS_LABEL is accepted in addition. The prompt asks for a
-        # label matching an entry in the enrichment weaknesses array, and for
-        # a clean site that array is empty, so Haiku answers "none". Schema
-        # validation runs before the archive gates and cannot be moved after
-        # them, so rejecting "none" dead-lettered leads that should simply
-        # archive. About 60% of real audits come back with no weakness, so
-        # this was dead-lettering in bulk. It is not added to
-        # WEAKNESS_LABELS: that is the set of things a producer can measure,
-        # and "none" is an answer, not a measurement.
-        "weakness_label": {
-            "type": "string",
-            "enum": sorted(WEAKNESS_LABELS | {_NO_WEAKNESS_LABEL}),
-        },
+        # The value feeds exactly one thing: the grounding check below, which
+        # tests membership of *this lead's* measured weaknesses array. That is
+        # strictly stronger than an enum, because a perfectly valid canonical
+        # label like "no_ssl" must still be rejected for a lead whose audit
+        # never measured it. So the enum protected nothing the grounding check
+        # does not already protect.
+        #
+        # What it did do was dead-letter clean sites. The prompt asks for a
+        # label matching an entry in the weaknesses array; when the audit
+        # measured nothing that array is empty, so Haiku answers with whatever
+        # it picks for "nothing". One production batch produced "none", "" and
+        # "no_weakness_detected" for the same situation. Schema validation
+        # runs while parsing, before the archive gates, so each new spelling
+        # became a dead-lettered lead. Roughly 60% of real audits measure no
+        # weakness, so this failed in bulk.
+        #
+        # For an empty array the derived gate archives before grounding ever
+        # runs, which makes any value here harmless.
+        "weakness_label": {"type": "string"},
         # has_actionable_weakness is deliberately absent: it is derived in
         # qualify_lead from the enrichment weaknesses array. With
         # additionalProperties False, a model that supplies it anyway fails
