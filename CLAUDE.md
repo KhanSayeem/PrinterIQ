@@ -51,7 +51,10 @@ Status only advances forward. Never skip stages. Never go backward.
 ## Security
 
 - Stripe webhooks: always verify signature via `stripe.webhooks.constructEvent`
-- Instantly webhooks: always verify `X-Instantly-Secret` header
+- Instantly webhooks: always verify the shared secret, via the `X-Instantly-Secret`
+  header **or** the `:webhookId` path segment. Instantly cannot send custom headers,
+  so its own deliveries only ever authenticate by path. Do not "harden" the path form
+  away: doing so once already dropped every reply, bounce and unsubscribe silently.
 - No PII in logs — mask emails: `u***@domain.com`
 - All secrets in env vars — never in source code
 - Invoke `.claude/agents/security-reviewer.md` after any auth/payment/webhook code

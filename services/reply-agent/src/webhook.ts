@@ -62,6 +62,41 @@ function readInstantlySecret(request: FastifyRequest): string | null {
   return null;
 }
 
+/** Read the shared secret from either the header or the `:webhookId` path segment.
+ *
+ * Instantly cannot send a custom header: its webhook object exposes only
+ * target_hook_url, name, event_type and status. The secret therefore has to
+ * travel in the URL, and it is the id Instantly issues per webhook, stored in
+ * INSTANTLY_WEBHOOK_ID_*. The header form is kept because it is strictly
+ * better, and lets another provider, or a proxy that injects the header,
+ * authenticate without the secret ever appearing in a URL.
+ */
+function readWebhookSecret(request: FastifyRequest): string | null {
+  const fromHeader = readInstantlySecret(request);
+  if (fromHeader) {
+    return fromHeader;
+  }
+  const params = request.params as { webhookId?: string } | undefined;
+  const fromPath = params?.webhookId;
+  return typeof fromPath === "string" && fromPath.trim().length > 0 ? fromPath : null;
+}
+
+/** Authenticate a webhook request, and make a rejection visible if it fails.
+ *
+ * The route logs on failure because the previous auth regression was silent:
+ * Fastify runs with `logger: false` and nginx sets `access_log off` on
+ * `/instantly/`, so every delivery 400'd for two months without a trace. Only
+ * the route name and the reason are logged, never the supplied secret, the
+ * expected secret, or any part of the payload, which keeps the no-PII rule.
+ */
+function authorised(request: FastifyRequest, expected: string, route: string): boolean {
+  if (secretsMatch(readWebhookSecret(request), expected)) {
+    return true;
+  }
+  console.warn(`instantly webhook rejected: route=${route} reason=invalid_secret`);
+  return false;
+}
+
 function secretsMatch(actual: string | null, expected: string): boolean {
   if (!actual) {
     return false;
@@ -149,119 +184,107 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     },
   }, async () => undefined);
 
-  server.post("/instantly/reply/:webhookId", {
-    onRequest: async (request, reply) => {
-      return reply.code(400).send({ error: "invalid instantly webhook route" });
-    },
-  }, async () => undefined);
-
-  server.post("/instantly/reply", {
-    onRequest: async (request, reply) => {
-      if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.reply)) {
+  for (const path of ["/instantly/reply", "/instantly/reply/:webhookId"]) {
+    server.post(path, {
+      onRequest: async (request, reply) => {
+        if (!authorised(request, options.instantlyWebhookSecrets.reply, "reply")) {
+          return reply.code(400).send({ error: "invalid webhook secret" });
+        }
+      },
+    }, async (request, reply) => {
+      if (!authorised(request, options.instantlyWebhookSecrets.reply, "reply")) {
         return reply.code(400).send({ error: "invalid webhook secret" });
       }
-    },
-  }, async (request, reply) => {
-    if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.reply)) {
-      return reply.code(400).send({ error: "invalid webhook secret" });
-    }
 
-    const parsed = webhookPayloadSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid webhook payload" });
-    }
+      const parsed = webhookPayloadSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid webhook payload" });
+      }
 
-    let job: ProcessReplyJob;
-    try {
-      job = mapInstantlyPayload(parsed.data);
-    } catch {
-      return reply.code(400).send({ error: "invalid webhook payload" });
-    }
+      let job: ProcessReplyJob;
+      try {
+        job = mapInstantlyPayload(parsed.data);
+      } catch {
+        return reply.code(400).send({ error: "invalid webhook payload" });
+      }
 
-    try {
-      await options.queue.add("process_reply", job);
-    } catch {
-      return reply.code(500).send({ error: "webhook processing failed" });
-    }
+      try {
+        await options.queue.add("process_reply", job);
+      } catch {
+        return reply.code(500).send({ error: "webhook processing failed" });
+      }
 
-    return reply.code(200).send({ ok: true });
-  });
+      return reply.code(200).send({ ok: true });
+    });
+  }
 
-  server.post("/instantly/bounced/:webhookId", {
-    onRequest: async (request, reply) => {
-      return reply.code(400).send({ error: "invalid instantly webhook route" });
-    },
-  }, async () => undefined);
-
-  server.post("/instantly/bounced", {
-    onRequest: async (request, reply) => {
-      if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.bounced)) {
+  for (const path of ["/instantly/bounced", "/instantly/bounced/:webhookId"]) {
+    server.post(path, {
+      onRequest: async (request, reply) => {
+        if (!authorised(request, options.instantlyWebhookSecrets.bounced, "bounced")) {
+          return reply.code(400).send({ error: "invalid webhook secret" });
+        }
+      },
+    }, async (request, reply) => {
+      if (!authorised(request, options.instantlyWebhookSecrets.bounced, "bounced")) {
         return reply.code(400).send({ error: "invalid webhook secret" });
       }
-    },
-  }, async (request, reply) => {
-    if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.bounced)) {
-      return reply.code(400).send({ error: "invalid webhook secret" });
-    }
 
-    const parsed = webhookPayloadSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid webhook payload" });
-    }
+      const parsed = webhookPayloadSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid webhook payload" });
+      }
 
-    let event: { tenantId: string; leadId: string; instantlyLeadId: string };
-    try {
-      event = mapInstantlyLeadEventPayload(parsed.data);
-    } catch {
-      return reply.code(400).send({ error: "invalid webhook payload" });
-    }
+      let event: { tenantId: string; leadId: string; instantlyLeadId: string };
+      try {
+        event = mapInstantlyLeadEventPayload(parsed.data);
+      } catch {
+        return reply.code(400).send({ error: "invalid webhook payload" });
+      }
 
-    try {
-      await queries.recordInstantlyBounce(event.tenantId, event.leadId, event.instantlyLeadId);
-    } catch {
-      return reply.code(500).send({ error: "webhook processing failed" });
-    }
+      try {
+        await queries.recordInstantlyBounce(event.tenantId, event.leadId, event.instantlyLeadId);
+      } catch {
+        return reply.code(500).send({ error: "webhook processing failed" });
+      }
 
-    return reply.code(200).send({ ok: true });
-  });
+      return reply.code(200).send({ ok: true });
+    });
+  }
 
-  server.post("/instantly/unsubbed/:webhookId", {
-    onRequest: async (request, reply) => {
-      return reply.code(400).send({ error: "invalid instantly webhook route" });
-    },
-  }, async () => undefined);
-
-  server.post("/instantly/unsubbed", {
-    onRequest: async (request, reply) => {
-      if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.unsubbed)) {
+  for (const path of ["/instantly/unsubbed", "/instantly/unsubbed/:webhookId"]) {
+    server.post(path, {
+      onRequest: async (request, reply) => {
+        if (!authorised(request, options.instantlyWebhookSecrets.unsubbed, "unsubbed")) {
+          return reply.code(400).send({ error: "invalid webhook secret" });
+        }
+      },
+    }, async (request, reply) => {
+      if (!authorised(request, options.instantlyWebhookSecrets.unsubbed, "unsubbed")) {
         return reply.code(400).send({ error: "invalid webhook secret" });
       }
-    },
-  }, async (request, reply) => {
-    if (!secretsMatch(readInstantlySecret(request), options.instantlyWebhookSecrets.unsubbed)) {
-      return reply.code(400).send({ error: "invalid webhook secret" });
-    }
 
-    const parsed = webhookPayloadSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid webhook payload" });
-    }
+      const parsed = webhookPayloadSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid webhook payload" });
+      }
 
-    let event: { tenantId: string; leadId: string; instantlyLeadId: string };
-    try {
-      event = mapInstantlyLeadEventPayload(parsed.data);
-    } catch {
-      return reply.code(400).send({ error: "invalid webhook payload" });
-    }
+      let event: { tenantId: string; leadId: string; instantlyLeadId: string };
+      try {
+        event = mapInstantlyLeadEventPayload(parsed.data);
+      } catch {
+        return reply.code(400).send({ error: "invalid webhook payload" });
+      }
 
-    try {
-      await queries.recordInstantlyUnsubscribe(event.tenantId, event.leadId, event.instantlyLeadId);
-    } catch {
-      return reply.code(500).send({ error: "webhook processing failed" });
-    }
+      try {
+        await queries.recordInstantlyUnsubscribe(event.tenantId, event.leadId, event.instantlyLeadId);
+      } catch {
+        return reply.code(500).send({ error: "webhook processing failed" });
+      }
 
-    return reply.code(200).send({ ok: true });
-  });
+      return reply.code(200).send({ ok: true });
+    });
+  }
 
   server.post("/stripe", async (request, reply) => {
     const signature = request.headers["stripe-signature"];
