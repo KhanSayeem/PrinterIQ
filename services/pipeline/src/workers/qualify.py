@@ -12,6 +12,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from env import load_pipeline_env
+from offer import offer_price_display
 from pipeline_queue.definitions import JobType
 from weaknesses import WEAKNESS_LABELS
 
@@ -260,6 +261,7 @@ async def qualify_lead(
             "top_weakness": top_weakness,
             "rationale": rationale,
             "enrichment_json": enrichment_json,
+            "price_aud": offer_price_display(),
         },
     )
     sonnet_data = _parse_and_validate(sonnet_resp.text, _SONNET_SCHEMA)
@@ -272,6 +274,7 @@ async def qualify_lead(
                 "top_weakness": top_weakness,
                 "rationale": rationale,
                 "enrichment_json": enrichment_json,
+                "price_aud": offer_price_display(),
             },
         )
         sonnet_data = _parse_and_validate(sonnet_resp.text, _SONNET_SCHEMA)

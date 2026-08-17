@@ -2,9 +2,8 @@ import Stripe from "stripe";
 import { queries as defaultQueries } from "./db/queries.js";
 import { resendClient, type WelcomeEmailSender } from "./resend.js";
 import type { CheckoutLead, CompletedPaymentInput, CompletedPaymentResult } from "./types.js";
+import { offerPriceCents } from "./offer.js";
 
-const CHECKOUT_AMOUNT_CENTS = 150000;
-const CHECKOUT_AMOUNT_AUD = 1500;
 
 export type PaymentQueries = {
   fetchCheckoutLead(tenantId: string, leadId: string): Promise<CheckoutLead>;
@@ -80,7 +79,7 @@ export async function createCheckoutSession(
         quantity: 1,
         price_data: {
           currency: "aud",
-          unit_amount: CHECKOUT_AMOUNT_CENTS,
+          unit_amount: offerPriceCents(),
           product_data: {
             name: "Done-for-you tradie website",
           },
@@ -131,7 +130,7 @@ export async function handleStripeWebhookEvent(
     lead_id: leadId,
     stripe_session_id: session.id,
     stripe_payment_intent_id: paymentIntentId(session),
-    amount_aud: (session.amount_total ?? CHECKOUT_AMOUNT_CENTS) / 100,
+    amount_aud: (session.amount_total ?? offerPriceCents()) / 100,
   });
 
   if (payment.should_send_welcome) {

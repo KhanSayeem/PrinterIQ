@@ -1,7 +1,52 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../src/webhook.js";
 import { handleRetryCheckout } from "../src/handler.js";
-import { handleStripeWebhook, handleStripeWebhookEvent } from "../src/stripe.js";
+import { createCheckoutSession, handleStripeWebhook, handleStripeWebhookEvent } from "../src/stripe.js";
+import { offerPriceAud, offerPriceCents } from "../src/offer.js";
+
+describe("offer price", () => {
+  // The email copy quoted $1,499 while checkout charged a hardcoded $1,500,
+  // so a lead would have been billed more than they were quoted. The price now
+  // comes from one place, OFFER_PRICE_AUD, shared by checkout and the prompts.
+  it("defaults to the quoted price", () => {
+    expect(offerPriceAud()).toBe(1499);
+    expect(offerPriceCents()).toBe(149900);
+  });
+
+  it("is driven by OFFER_PRICE_AUD", () => {
+    vi.stubEnv("OFFER_PRICE_AUD", "1799");
+
+    expect(offerPriceAud()).toBe(1799);
+    expect(offerPriceCents()).toBe(179900);
+  });
+
+  it("rejects a non-numeric OFFER_PRICE_AUD rather than silently charging a default", () => {
+    vi.stubEnv("OFFER_PRICE_AUD", "1,499");
+
+    expect(() => offerPriceAud()).toThrow(/OFFER_PRICE_AUD/);
+  });
+
+  it("charges the quoted price on the checkout session", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "cs_1", url: "https://checkout" });
+
+    await createCheckoutSession(
+      { tenant_id: tenantId, lead_id: leadId },
+      {
+        queries: {
+          fetchCheckoutLead: vi.fn().mockResolvedValue({
+            email: "owner@example.com",
+            business_name: "Test Plumbing",
+          }),
+          recordCompletedPayment: vi.fn(),
+        },
+        stripe: { checkout: { sessions: { create } } } as never,
+      },
+    );
+
+    const params = create.mock.calls[0][0];
+    expect(params.line_items[0].price_data.unit_amount).toBe(149900);
+  });
+});
 
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const leadId = "22222222-2222-4222-8222-222222222222";
