@@ -923,6 +923,100 @@ def test_non_list_enrichment_weaknesses_derives_false_and_archives() -> None:
     asyncio.run(scenario('["no_mobile"]'))
 
 
+def test_empty_weaknesses_with_weakness_label_none_archives_without_dead_letter() -> None:
+    """Found by re-enriching production: a clean site dead-lettered.
+
+    The prompt tells Haiku to pick a label matching an entry in the enrichment
+    weaknesses array. When that array is empty there is no such entry, so it
+    answers "none", which failed the enum. Schema validation runs before the
+    archive gates and cannot be reordered after them, so the lead died on
+    parsing instead of archiving on the derived gate. Roughly 60% of real
+    audits have an empty array, so this was set to dead-letter leads in bulk.
+    """
+
+    async def scenario() -> None:
+        enrichment_data = _make_enrichment()
+        enrichment_data["weaknesses"] = []
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        haiku = ClaudeResponse(
+            text=json.dumps(
+                {
+                    "score": 30,
+                    "rationale": "Site is in good shape already.",
+                    "top_weakness": "none found",
+                    "weakness_label": "none",
+                }
+            ),
+            cost_usd=HAIKU_COST,
+            model=HAIKU_MODEL,
+        )
+        client = FakeClaudeClient(responses=[haiku])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=enrichment_data),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.inserted[0]["has_actionable_weakness"] is False
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert queue.jobs == []
+        assert len(client.calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_weakness_label_none_against_measured_weaknesses_still_dead_letters() -> None:
+    """"none" must not become an escape hatch for a lead that does have one.
+
+    If the enrichment measured something, "none" is ungrounded and the lead
+    must not reach Sonnet on it.
+    """
+
+    async def scenario() -> None:
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        says_none = _haiku_response(score=75, weakness_label="none", top_weakness="none found")
+        client = FakeClaudeClient(responses=[says_none, says_none])
+
+        with pytest.raises(DeadLetterError):
+            await qualify_lead(
+                _payload(score_threshold=40),
+                lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+                enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+                qualification_repo=repo,
+                outreach_queue=queue,
+                claude_client=client,
+            )
+
+        assert repo.inserted == []
+        assert queue.jobs == []
+
+    asyncio.run(scenario())
+
+
+def test_haiku_schema_accepts_weakness_label_none() -> None:
+    data = {
+        "score": 30,
+        "rationale": "Site is in good shape already.",
+        "top_weakness": "none found",
+        "weakness_label": "none",
+    }
+
+    assert _parse_and_validate(json.dumps(data), _HAIKU_SCHEMA) == data
+
+
+def test_none_is_not_added_to_the_canonical_measured_vocabulary() -> None:
+    """"none" is a Haiku answer, not a weakness a producer can measure."""
+    from weaknesses import WEAKNESS_LABELS
+
+    assert "none" not in WEAKNESS_LABELS
+
+
 def test_haiku_schema_rejects_model_supplied_actionable_weakness() -> None:
     """The model must not be able to send the gate value at all.
 

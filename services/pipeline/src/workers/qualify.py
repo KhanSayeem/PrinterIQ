@@ -26,6 +26,11 @@ _SEND_WINDOW_TZ = ZoneInfo("Australia/Sydney")
 _SEND_WINDOW_START = time(hour=9)
 _SEND_WINDOW_END = time(hour=17)
 
+# Haiku's answer when the enrichment measured no weakness at all. Deliberately
+# outside the canonical vocabulary: it names the absence of a weakness, so it
+# can never satisfy the grounding check against a non-empty weaknesses array.
+_NO_WEAKNESS_LABEL = "none"
+
 _HAIKU_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": [
@@ -41,7 +46,20 @@ _HAIKU_SCHEMA: dict[str, Any] = {
         # Constrained to the canonical vocabulary (services/pipeline/src/weaknesses.py)
         # so a hallucinated label fails schema validation before it can reach
         # the grounding check below.
-        "weakness_label": {"type": "string", "enum": sorted(WEAKNESS_LABELS)},
+        #
+        # _NO_WEAKNESS_LABEL is accepted in addition. The prompt asks for a
+        # label matching an entry in the enrichment weaknesses array, and for
+        # a clean site that array is empty, so Haiku answers "none". Schema
+        # validation runs before the archive gates and cannot be moved after
+        # them, so rejecting "none" dead-lettered leads that should simply
+        # archive. About 60% of real audits come back with no weakness, so
+        # this was dead-lettering in bulk. It is not added to
+        # WEAKNESS_LABELS: that is the set of things a producer can measure,
+        # and "none" is an answer, not a measurement.
+        "weakness_label": {
+            "type": "string",
+            "enum": sorted(WEAKNESS_LABELS | {_NO_WEAKNESS_LABEL}),
+        },
         # has_actionable_weakness is deliberately absent: it is derived in
         # qualify_lead from the enrichment weaknesses array. With
         # additionalProperties False, a model that supplies it anyway fails
