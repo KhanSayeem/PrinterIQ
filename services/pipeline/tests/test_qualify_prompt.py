@@ -67,6 +67,22 @@ def test_qualify_v1_prompt_does_not_ask_the_model_to_judge_actionability() -> No
     assert "worth pitching a rebuild over" not in prompt.lower()
 
 
+def test_opener_v2_prompt_does_not_hardcode_the_price() -> None:
+    """The price is one env var, not four hand-maintained copies.
+
+    The Instantly copy was corrected to $1,499 while stripe.ts still charged
+    $1,500 and both prompts still said $1,500, so a lead would have been billed
+    more than the email quoted.
+    """
+    opener = (REPO_ROOT / "prompts" / "opener-v2.txt").read_text(encoding="utf-8")
+    reply_agent = (REPO_ROOT / "prompts" / "reply-agent-v1.txt").read_text(encoding="utf-8")
+
+    assert "1,500" not in opener
+    assert "1,500" not in reply_agent
+    assert "{price_aud}" in opener
+    assert "{price_aud}" in reply_agent
+
+
 def test_qualify_v1_prompt_bans_dash_substitutes() -> None:
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
 

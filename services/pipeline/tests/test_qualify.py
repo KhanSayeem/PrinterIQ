@@ -618,6 +618,32 @@ def test_sonnet_call_receives_enrichment_json() -> None:
     asyncio.run(scenario())
 
 
+def test_sonnet_call_receives_the_offer_price() -> None:
+    """opener-v2 renders {price_aud}, so the caller must supply it.
+
+    Without this the prompt would emit a literal "{price_aud}" into
+    customer-facing email copy.
+    """
+
+    async def scenario() -> None:
+        client = FakeClaudeClient(responses=[_haiku_response(score=75), _sonnet_response()])
+
+        await qualify_lead(
+            _payload(score_threshold=40, campaign_id="campaign-x"),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=FakeQualificationRepository(),
+            outreach_queue=FakeOutreachQueue(),
+            claude_client=client,
+        )
+
+        sonnet_call = client.calls[1]
+        assert sonnet_call[0] == "opener-v2"
+        assert sonnet_call[1]["price_aud"] == "1,499"
+
+    asyncio.run(scenario())
+
+
 def test_top_weakness_em_dash_is_normalised_on_persist() -> None:
     async def scenario() -> None:
         repo = FakeQualificationRepository()

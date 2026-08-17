@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { ClaudeReplyClassification, ConversationHistoryItem, LeadContext } from "./types.js";
+import { offerPriceDisplay } from "./offer.js";
 
 const promptVersion = "reply-agent-v1";
 const defaultModel = "claude-3-5-sonnet-latest";
@@ -38,6 +39,7 @@ function fillPrompt(template: string, input: ClassifyInput): string {
     .replace("{lead_json}", JSON.stringify(input.leadContext.lead, null, 2))
     .replace("{top_weakness}", input.leadContext.top_weakness ?? "Unknown")
     .replace("{conversation_history}", JSON.stringify(input.conversationHistory, null, 2))
+    .replace("{price_aud}", offerPriceDisplay())
     .replace("{inbound_body}", input.inboundBody);
 }
 
