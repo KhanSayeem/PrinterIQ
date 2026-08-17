@@ -30,6 +30,7 @@ class PlaywrightAuditor:
     """Playwright-backed website auditor. Browser lifecycle is fully managed inside."""
 
     async def audit(self, url: str) -> dict[str, object]:
+        from playwright.async_api import Error as _PlaywrightError  # type: ignore[import-untyped]
         from playwright.async_api import TimeoutError as _Timeout  # type: ignore[import-untyped]
         from playwright.async_api import async_playwright  # type: ignore[import-untyped]
 
@@ -97,6 +98,28 @@ class PlaywrightAuditor:
 
                 except _Timeout:
                     logger.warning("Playwright 30s timeout for %s", url)
+                    return _unreachable()
+                except _PlaywrightError as exc:
+                    # A site that will not load is a finding, not a crash.
+                    # Only _Timeout was caught before, so a dead domain, a
+                    # refused connection or a certificate that does not match
+                    # the domain escaped the auditor and dead-lettered the
+                    # enrich job, leaving the lead with no enrichment row at
+                    # all. Re-enriching production hit this on 15 of the first
+                    # hundred leads.
+                    #
+                    # Deliberately does not record a weakness. A bad
+                    # certificate is tempting to log as no_ssl, but the page
+                    # never loaded and nothing was measured; asserting
+                    # otherwise is the fabricated-weakness problem the
+                    # grounding work exists to prevent. is_reachable = False
+                    # is the honest signal, and the empty weaknesses array
+                    # archives the lead on the derived gate.
+                    logger.warning(
+                        "Playwright navigation failed for %s: %s",
+                        url,
+                        str(exc).splitlines()[0],
+                    )
                     return _unreachable()
                 finally:
                     await page.close()
