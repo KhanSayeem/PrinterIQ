@@ -161,6 +161,74 @@ redis-cli
 > LLEN bull:replies:wait     # jobs waiting in replies queue
 ```
 
+## Check the Instantly webhooks are alive
+
+Replies, bounces and unsubscribes all arrive by webhook. There is no polling,
+so if the webhook is not delivering, the dashboard simply shows nothing and
+looks idle rather than broken. This failed silently for two months (#122).
+
+Verify auth end to end. A correct secret returns `invalid webhook payload`
+(auth passed, the empty payload is what is rejected); a wrong secret returns
+`invalid webhook secret`:
+
+```bash
+ssh -o BatchMode=yes root@170.64.143.200 'cd /root/printeriq && export $(grep -E "^INSTANTLY_WEBHOOK_ID_REPLY=" .env | xargs) && curl -s -X POST -H "Content-Type: application/json" -d "[]" https://webhooks.presciaiq.com/instantly/reply/$INSTANTLY_WEBHOOK_ID_REPLY'
+```
+
+Confirm the registered webhooks still point at this host and are active:
+
+```bash
+ssh -o BatchMode=yes root@170.64.143.200 'cd /root/printeriq && export $(grep -E "^INSTANTLY_API_KEY=" .env | xargs) && curl -s -H "Authorization: Bearer $INSTANTLY_API_KEY" https://api.instantly.ai/api/v2/webhooks'
+```
+
+Rejections now log to the reply-agent log, so a delivery problem is visible:
+
+```bash
+ssh -o BatchMode=yes root@170.64.143.200 "grep 'instantly webhook rejected' /root/.pm2/logs/reply-agent-*.log | tail"
+```
+
+**Do not "harden" the `/instantly/<event>/<id>` path form away.** Instantly
+cannot send custom headers, so the trailing path segment is the only credential
+it can present. `nginx.conf` sets `access_log off` on `location ^~ /instantly/`
+specifically to keep that secret out of the access log. Removing either the
+path route or that directive breaks or exposes the integration.
+
+## Change the offer price
+
+The price lives in one place, `OFFER_PRICE_AUD` (defaults to 1499), read by
+`services/pipeline/src/offer.py` and `services/reply-agent/src/offer.ts`. It
+feeds the Stripe checkout amount and both prompts.
+
+**The Instantly email templates are not covered by it** and must be edited by
+hand in the Instantly UI, because they are static copy in a third-party
+system. Changing the price is therefore two steps:
+
+1. Set `OFFER_PRICE_AUD` in `/root/printeriq/.env` and restart, or change the
+   default in both `offer` modules.
+2. Edit the Instantly campaign: Step 1 body, both variants, and both
+   follow-ups.
+
+Missing step 2 is what caused #124, where the emails quoted $1,499 while
+checkout charged $1,500 against a live Stripe key.
+
+## Enrichment data quality
+
+`tech_source = 'apollo'` enrichment rows were never actually measured. They
+have `load_ms` and `has_h1` NULL, and almost all are flagged `has_ssl = FALSE`
+despite an `https://` URL. Their `weaknesses` arrays are fabricated, and they
+will pass both the actionable-weakness gate and the grounding check because
+the wrong label genuinely is in the stored array.
+
+Check before trusting any enrichment row:
+
+```bash
+ssh -o BatchMode=yes root@170.64.143.200 "cd /root/printeriq && export \$(grep -E '^DATABASE_URL=' .env | xargs) && psql \"\$DATABASE_URL\" -c \"SELECT tech_source, count(*), count(load_ms) AS measured FROM enrichments GROUP BY 1;\""
+```
+
+Only `playwright` and `playwright+apollo` rows reflect a real audit. Every
+lead imported since 2026-08-12 gets one; older rows need re-enriching before
+they are used for outreach. See #120.
+
 ## Prospect shadow discovery operations
 
 Use this section only for the Outscraper/Apollo shadow pilot. Shadow prospect
