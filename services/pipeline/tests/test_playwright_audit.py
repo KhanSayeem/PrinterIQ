@@ -12,6 +12,14 @@ from clients.playwright_audit import PlaywrightAuditor
 from weaknesses import Weakness
 
 
+class FakePlaywrightError(Exception):
+    """Stand-in for playwright.async_api.Error, the base navigation error.
+
+    Real examples seen in production: net::ERR_NAME_NOT_RESOLVED,
+    net::ERR_CERT_COMMON_NAME_INVALID, net::ERR_CONNECTION_REFUSED.
+    """
+
+
 class FakeTimeoutError(Exception):
     """Stand-in for playwright.async_api.TimeoutError."""
 
@@ -32,6 +40,7 @@ class _FakePage:
         has_h1: bool = True,
         html: str = "<html></html>",
         raise_timeout: bool = False,
+        raise_nav_error: str | None = None,
     ) -> None:
         self._status = status
         self._eval_answers = {
@@ -42,6 +51,7 @@ class _FakePage:
         }
         self._html = html
         self._raise_timeout = raise_timeout
+        self._raise_nav_error = raise_nav_error
         self.goto_calls: list[dict[str, Any]] = []
         self.closed = False
 
@@ -49,6 +59,8 @@ class _FakePage:
         self.goto_calls.append({"url": url, "timeout": timeout, "wait_until": wait_until})
         if self._raise_timeout:
             raise FakeTimeoutError("timed out")
+        if self._raise_nav_error:
+            raise FakePlaywrightError(self._raise_nav_error)
         return _FakeResponse(self._status)
 
     async def evaluate(self, script: str) -> bool:
@@ -121,6 +133,7 @@ def _install_fake_playwright_module(monkeypatch: pytest.MonkeyPatch, browser: _F
         return _FakePlaywrightContext(browser)
 
     fake_async_api = types.SimpleNamespace(
+        Error=FakePlaywrightError,
         TimeoutError=FakeTimeoutError,
         async_playwright=async_playwright,
     )
@@ -280,3 +293,53 @@ def test_timeout_returns_unreachable_shape(monkeypatch: pytest.MonkeyPatch) -> N
     assert result["weaknesses"] == []
     assert result["has_h1"] is None
     assert result["load_ms"] is None
+
+
+# ---------------------------------------------------------------------------
+# Navigation failures
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "nav_error",
+    [
+        "Page.goto: net::ERR_NAME_NOT_RESOLVED at https://example.com/",
+        "Page.goto: net::ERR_CERT_COMMON_NAME_INVALID at https://example.com/",
+        "Page.goto: net::ERR_CONNECTION_REFUSED at https://example.com/",
+        "Page.goto: net::ERR_CONNECTION_CLOSED at https://example.com/",
+    ],
+)
+def test_navigation_failure_reports_unreachable_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch, nav_error: str
+) -> None:
+    """A site that will not load is a finding, not a crash.
+
+    Only TimeoutError was caught, so any other navigation error escaped the
+    auditor and dead-lettered the enrich job. Re-enriching production hit this
+    on 15 of the first ~100 leads: dead domains, refused connections, and
+    certificates that do not match the domain. Those leads produced no
+    enrichment row at all, so they could never be assessed or re-run cleanly.
+    """
+    browser = _FakeBrowser(_FakePage(raise_nav_error=nav_error))
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0])
+
+    assert result["is_reachable"] is False
+    assert result["weaknesses"] == []
+    assert result["load_ms"] is None
+
+
+def test_navigation_failure_does_not_claim_a_weakness_it_could_not_measure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad certificate is tempting to record as no_ssl, but the page never
+    loaded, so nothing was measured. Claiming otherwise is exactly the
+    fabricated-weakness problem the grounding work exists to prevent."""
+    browser = _FakeBrowser(
+        _FakePage(raise_nav_error="Page.goto: net::ERR_CERT_COMMON_NAME_INVALID")
+    )
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0])
+
+    assert result["weaknesses"] == []
+    assert result["has_ssl"] is None
