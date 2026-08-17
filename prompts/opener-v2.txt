@@ -54,14 +54,14 @@ That's quietly costing you leads every week.
 
 I went ahead and put together what your site could look like: [Check it out]({preview_url})
 
-If you want it, it's $$1,500 flat. Domain, hosting, mobile-ready, local SEO basics.
+If you want it, it's $${price_aud} flat. Domain, hosting, mobile-ready, local SEO basics.
 Delivered in 2 weeks. If you hate it, tell me why and I'll fix it before you pay anything.
 
 Macauley
 
 Use this Follow-up 1 structure:
 Hey [first name], just checking you got a chance to look at the preview.
-Happy to tweak anything to match your branding or services. Still $$1,500 all in.
+Happy to tweak anything to match your branding or services. Still $${price_aud} all in.
 
 Use this Follow-up 2 structure:
 Last nudge from me. Offer's open if the timing works. No pressure.
@@ -75,7 +75,7 @@ Rules:
 - Casual Aussie tone.
 - Ground every claim about the website in the enrichment data above; never
   state a problem that is not evidenced there.
-- State the price upfront as $$1,500 flat in the opener.
+- State the price upfront as $${price_aud} flat in the opener.
 - The opener must include [Check it out]({preview_url}) exactly as a Markdown hyperlink.
 - The opener value must contain the literal substring [Check it out]({preview_url}).
 - Do not rewrite, remove, or replace {preview_url}; keep the braces exactly.
