@@ -36,7 +36,16 @@ def test_playwright_audit_imports_shared_weakness_vocabulary() -> None:
 
 def test_qualify_worker_haiku_schema_enum_matches_canonical_labels() -> None:
     """The Haiku weakness_label JSON Schema enum must be sourced from the
-    same canonical set, not a hand-copied list that can drift."""
-    from workers.qualify import _HAIKU_SCHEMA
+    same canonical set, not a hand-copied list that can drift.
 
-    assert set(_HAIKU_SCHEMA["properties"]["weakness_label"]["enum"]) == WEAKNESS_LABELS
+    The one permitted addition is the "none" sentinel, which Haiku returns
+    when the enrichment measured no weakness. It is not a measurable label, so
+    it stays out of WEAKNESS_LABELS, and asserting the enum is exactly the
+    canonical set plus that sentinel keeps the anti-drift guarantee.
+    """
+    from workers.qualify import _HAIKU_SCHEMA, _NO_WEAKNESS_LABEL
+
+    assert set(_HAIKU_SCHEMA["properties"]["weakness_label"]["enum"]) == (
+        WEAKNESS_LABELS | {_NO_WEAKNESS_LABEL}
+    )
+    assert _NO_WEAKNESS_LABEL not in WEAKNESS_LABELS

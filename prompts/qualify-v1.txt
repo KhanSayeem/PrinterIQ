@@ -15,11 +15,15 @@ Respond ONLY with valid JSON matching this exact schema:
 
 weakness_label must be exactly one of these canonical values, and only
 these: "no_mobile", "no_ssl", "no_meta_title", "no_meta_description",
-"no_h1", "slow_load". Choose the value that matches an entry already
+"no_h1", "slow_load", "none". Choose the value that matches an entry already
 present in the enrichment data's weaknesses array above. Never pick a
 label for a problem the enrichment data does not show. top_weakness and
 weakness_label must both describe something that was actually measured,
 not something you infer or assume.
+
+If the weaknesses array above is empty, set weakness_label to "none". Do not
+pick a real label to fill the field, and do not invent a problem: an empty
+array means the site had no measurable defect, which is a valid outcome.
 
 Do not use em dashes or en dashes anywhere in your response. Use a comma or a
 full stop instead.
