@@ -34,18 +34,29 @@ def test_playwright_audit_imports_shared_weakness_vocabulary() -> None:
     assert playwright_audit.Weakness is Weakness
 
 
-def test_qualify_worker_haiku_schema_enum_matches_canonical_labels() -> None:
-    """The Haiku weakness_label JSON Schema enum must be sourced from the
-    same canonical set, not a hand-copied list that can drift.
+def test_qualify_worker_does_not_constrain_weakness_label_by_enum() -> None:
+    """Grounding, not an enum, is the authority on weakness_label.
 
-    The one permitted addition is the "none" sentinel, which Haiku returns
-    when the enrichment measured no weakness. It is not a measurable label, so
-    it stays out of WEAKNESS_LABELS, and asserting the enum is exactly the
-    canonical set plus that sentinel keeps the anti-drift guarantee.
+    Replaces test_qualify_worker_haiku_schema_enum_matches_canonical_labels.
+    An enum here was redundant and harmful: the worker checks the label against
+    *this lead's* measured weaknesses array, which rejects a valid canonical
+    label the lead never measured, while the enum dead-lettered clean sites
+    whose label was simply Haiku's word for "nothing".
     """
-    from workers.qualify import _HAIKU_SCHEMA, _NO_WEAKNESS_LABEL
+    from workers.qualify import _HAIKU_SCHEMA
 
-    assert set(_HAIKU_SCHEMA["properties"]["weakness_label"]["enum"]) == (
-        WEAKNESS_LABELS | {_NO_WEAKNESS_LABEL}
-    )
-    assert _NO_WEAKNESS_LABEL not in WEAKNESS_LABELS
+    assert _HAIKU_SCHEMA["properties"]["weakness_label"] == {"type": "string"}
+    assert "enum" not in _HAIKU_SCHEMA["properties"]["weakness_label"]
+
+
+def test_canonical_vocabulary_is_still_the_producer_contract() -> None:
+    """Dropping the schema enum must not dilute the measured vocabulary."""
+    assert WEAKNESS_LABELS == {
+        "no_mobile",
+        "no_ssl",
+        "no_meta_title",
+        "no_meta_description",
+        "no_h1",
+        "slow_load",
+    }
+    assert "none" not in WEAKNESS_LABELS
