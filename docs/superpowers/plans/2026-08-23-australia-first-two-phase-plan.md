@@ -114,12 +114,55 @@ Not needed for Australia. All needed before a large or overseas launch.
 - The leads page does paginate server-side. The older handoff claim that it loads
   everything is stale and no longer true.
 
+### Verified after the audit
+
+**Supabase: Pro plan, Micro compute, ap-southeast-2.** Storage is not the
+problem: Pro includes 8GB and the full file needs ~4GB. Memory is. Micro gives
+`shared_buffers` 256MB and `effective_cache_size` 768MB, measured on the live
+database. Australia at ~90MB sits entirely in cache. The full file at ~4GB is
+five times the cache, so nearly every query would read from disk. Phase 2 needs
+a bigger compute size, not a bigger plan.
+
+**Instantly: Hyper Growth, $97/month. 25,000 total contacts, 125,000 emails per
+month.** See the sending ladder below.
+
 ### Could not verify
 
-- Supabase plan and storage limit. Full file needs ~4GB; free tier is 500MB.
-- Instantly account limits, campaign caps, daily sending limits. Likely the real
-  ceiling on the outreach side.
 - Email deliverability. No network calls were made against the list.
+
+## The sending ladder
+
+Four limits stack. Only the tightest one matters, and it is not the one people
+assume.
+
+| Limit | Per day | Per month | Source |
+| --- | --- | --- | --- |
+| **Campaign daily_limit (current)** | **30** | ~900 | Instantly campaign setting |
+| 8 active Prescia mailboxes | 155 | ~4,650 | Sum of per-account daily limits |
+| Instantly plan | ~4,100 | 125,000 | Hyper Growth |
+| Instantly contact ceiling | n/a | 25,000 total | Hyper Growth |
+
+**The Instantly plan is not the constraint.** It is roughly 27 times larger than
+the mailboxes can use. Upgrading the plan changes nothing. Only more domains and
+mailboxes increase sending.
+
+The binding limit today is the campaign setting of 30 per day, left low so the
+eight mailboxes ramp gently. Raising it once they have sent cleanly for a week or
+two is the single biggest lever on how fast Australia pays back.
+
+### What this means per phase
+
+**Australia.** We import 28,270 records into our own database and push only
+qualified leads into Instantly, roughly 4,000. That is well inside the 25,000
+contact ceiling. At 30 per day it is about 4.4 months of sending; at 155 per day
+about 26 days.
+
+**International.** The 25,000 contact ceiling is a wall. The full file would
+produce roughly 130,000 email-ready leads. The next plan up, Light Speed at $358
+per month, allows 100,000 contacts and is still short. It also would not help,
+because mailboxes are the bottleneck, not the plan. An international launch needs
+a materially larger sending estate: many more domains and mailboxes, with the
+warm-up time and cost that implies. That belongs in the Phase 2 budget.
 
 ## Batching to sending capacity
 
@@ -194,12 +237,15 @@ were unsigned, now carry a signature. Follow-up timing corrected from 1 day and
 
 ## Decisions needed from the team
 
-1. Confirm the Supabase plan. Full file needs ~4GB; free tier is 500MB.
-   Australia fits comfortably either way.
-2. Confirm Instantly account and campaign sending limits. This is the real
-   ceiling on the business.
-3. Agree the Australia-first sequence.
-4. Decide who takes legal advice on GDPR before Phase 2 is planned.
+1. Agree the Australia-first sequence.
+2. Decide who takes legal advice on GDPR before Phase 2 is planned.
+3. Decide when to raise the campaign daily limit from 30. This controls how fast
+   Australia pays back, and is worth revisiting after a week of clean sending.
+4. Note for Phase 2 planning: the sending estate, not the Instantly plan, is the
+   cost line. Budget for domains, mailboxes and warm-up time.
+
+Both open checks from the first draft are now answered: Supabase is Pro with
+Micro compute, and Instantly is Hyper Growth with a 25,000 contact ceiling.
 
 ## What the Australian run should prove
 
