@@ -238,6 +238,133 @@ export async function updateConversationClassification(
   );
 }
 
+/** Mark a conversation escalated without touching the classifier's own verdict.
+ *
+ * `updateConversationClassification` rewrites `agent_action`, which is the
+ * audit record of what Claude decided and the input to `hasCheckoutAction`.
+ * When the worker overrides a delivery decision it must not rewrite that
+ * verdict, so this sets only the escalation fields. `escalation_reason` is
+ * COALESCEd for the same reason: an earlier, more specific reason such as
+ * `low_confidence` is the truthful record and must not be overwritten, and it
+ * keeps the write idempotent across retries.
+ *
+ * The inbound body is returned in the same round trip because the escalation
+ * SMS quotes the lead's own words, and a `send_reply` job carries only the
+ * drafted outbound copy. `direction = 'inbound'` enforces that: an outbound
+ * conversation id would otherwise quote our own copy back at the operator.
+ */
+export async function markConversationEscalated(
+  tenantId: string,
+  conversationId: string,
+  reason: string,
+  client?: Queryable,
+): Promise<{ body: string }> {
+  const result = await db(client).query<{ body: string }>(
+    `
+      UPDATE conversations
+      SET
+        escalated = TRUE,
+        escalation_reason = COALESCE(escalation_reason, $3)
+      WHERE tenant_id = $1
+        AND id = $2
+        AND direction = 'inbound'
+      RETURNING body
+    `,
+    [tenantId, conversationId, reason],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("conversation not found for tenant");
+  }
+
+  return row;
+}
+
+/** Return the checkout session already minted for this lead, if any.
+ *
+ * Scoped to the lead rather than a single conversation so that a second
+ * conversation cannot mint a second Stripe session for the same lead.
+ *
+ * The `leads.status = 'replied'` join is not redundant. It is the same
+ * eligibility gate `fetchCheckoutLead` applies, and without it a cached
+ * session would be handed back for a lead the suppression flow has since
+ * archived, or one that has already paid, since the cache hit returns before
+ * `fetchCheckoutLead` is ever reached. Reusing a link must not be a way around
+ * "unsubscribe means no further message".
+ */
+export async function fetchCheckoutSession(
+  tenantId: string,
+  leadId: string,
+  client?: Queryable,
+): Promise<{ id: string; url: string } | null> {
+  const result = await db(client).query<{ id: string; url: string }>(
+    `
+      SELECT
+        conversations.stripe_session_id AS id,
+        conversations.stripe_session_url AS url
+      FROM conversations
+      JOIN leads
+        ON leads.tenant_id = conversations.tenant_id
+       AND leads.id = conversations.lead_id
+      WHERE conversations.tenant_id = $1
+        AND conversations.lead_id = $2
+        AND leads.status = 'replied'
+        AND conversations.stripe_session_id IS NOT NULL
+        AND conversations.stripe_session_url IS NOT NULL
+      ORDER BY conversations.created_at DESC
+      LIMIT 1
+    `,
+    [tenantId, leadId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+/** Persist a checkout session, and hand back whichever session actually won.
+ *
+ * COALESCE makes the write first-writer-wins *within one conversation row*.
+ * Across two conversations for the same lead that is not enough on its own, so
+ * migration 0012 carries a partial UNIQUE index on `(tenant_id, lead_id) WHERE
+ * stripe_session_id IS NOT NULL`. The second writer gets a unique violation,
+ * its job fails and retries, and the retry's `fetchCheckoutSession` returns the
+ * winner. The DB, not this statement, is what makes "one live payment link per
+ * lead" true.
+ *
+ * `lead_id` is in the WHERE clause because a conversation id alone does not
+ * prove the row belongs to the lead the session was minted for: stamping lead
+ * B's conversation with lead A's session would credit B's payment to A.
+ */
+export async function recordCheckoutSession(
+  tenantId: string,
+  leadId: string,
+  conversationId: string,
+  sessionId: string,
+  sessionUrl: string,
+  client?: Queryable,
+): Promise<{ id: string; url: string }> {
+  const result = await db(client).query<{ id: string; url: string }>(
+    `
+      UPDATE conversations
+      SET
+        stripe_session_id = COALESCE(stripe_session_id, $4),
+        stripe_session_url = COALESCE(stripe_session_url, $5)
+      WHERE tenant_id = $1
+        AND lead_id = $2
+        AND id = $3
+      RETURNING stripe_session_id AS id, stripe_session_url AS url
+    `,
+    [tenantId, leadId, conversationId, sessionId, sessionUrl],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("conversation not found for tenant and lead");
+  }
+
+  return row;
+}
+
 export async function advanceLeadToReplied(
   tenantId: string,
   leadId: string,
@@ -561,6 +688,9 @@ export const queries = {
   countInboundReplies,
   hasCheckoutAction,
   updateConversationClassification,
+  markConversationEscalated,
+  fetchCheckoutSession,
+  recordCheckoutSession,
   advanceLeadToReplied,
   archiveLeadForSuppression,
   recordInstantlyBounce,

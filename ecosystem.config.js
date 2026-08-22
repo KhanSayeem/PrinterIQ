@@ -65,6 +65,20 @@ module.exports = {
       },
     },
     {
+      // Drains the `replies` BullMQ queue that reply-agent produces onto.
+      // No PORT: this process listens on Redis, not HTTP.
+      name: 'reply-worker',
+      script: 'dist/worker.js',
+      cwd: '/root/printeriq/services/reply-agent',
+      watch: false,
+      autorestart: true,
+      max_restarts: 10,
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
       name: 'dashboard',
       script: 'node_modules/next/dist/bin/next',
       args: 'start',

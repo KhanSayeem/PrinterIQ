@@ -399,6 +399,7 @@ describe("send_reply handler", () => {
     expect(stripe.createCheckoutSession).toHaveBeenCalledWith({
       tenant_id: tenantId,
       lead_id: leadId,
+      conversation_id: conversationId,
     });
     expect(result).toEqual({
       action: "noop",

@@ -169,8 +169,18 @@ CREATE TABLE conversations (
   -- Override
   operator_override   BOOLEAN NOT NULL DEFAULT FALSE,
   sent_at             TIMESTAMPTZ,
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- Checkout idempotency: reuse the session already minted for this lead
+  stripe_session_id   TEXT,
+  stripe_session_url  TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT conversations_stripe_session_complete
+    CHECK ((stripe_session_id IS NULL) = (stripe_session_url IS NULL))
 );
+
+-- One live checkout session per lead, enforced by the database.
+CREATE UNIQUE INDEX idx_conversations_checkout_session_per_lead
+  ON conversations (tenant_id, lead_id)
+  WHERE stripe_session_id IS NOT NULL;
 
 CREATE TABLE payments (
   id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),

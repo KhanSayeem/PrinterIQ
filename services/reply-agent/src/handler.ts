@@ -66,7 +66,11 @@ type HandlerDeps = {
   queue?: ReplyQueue;
   escalation?: EscalationService;
   stripe?: {
-    createCheckoutSession(input: { tenant_id: string; lead_id: string }): Promise<{ id: string; url: string }>;
+    createCheckoutSession(input: {
+      tenant_id: string;
+      lead_id: string;
+      conversation_id: string;
+    }): Promise<{ id: string; url: string }>;
   };
 };
 
@@ -246,6 +250,7 @@ export async function handleSendReply(
     const session = await stripe.createCheckoutSession({
       tenant_id: job.tenant_id,
       lead_id: job.lead_id,
+      conversation_id: job.conversation_id,
     });
 
     return {
