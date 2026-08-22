@@ -27,15 +27,17 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import logging
-from argparse import ArgumentParser, Namespace
+import os
+from argparse import ArgumentParser, ArgumentTypeError, Namespace
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID
 
 from clients.claude_client import _MODEL_MAP
@@ -48,6 +50,9 @@ logger = logging.getLogger(__name__)
 _SHADOW_PROMPT = _HAIKU_PROMPT
 _HAIKU_MODEL = "claude-haiku-4-5-20251001"
 _DEFAULT_LIMIT = 300
+# One Haiku call per row, so an unbounded limit is both a bill and the whole
+# tenant pulled into memory to produce it.
+_MAX_LIMIT = 5_000
 
 _CSV_COLUMNS = [
     "lead_id",
@@ -55,6 +60,11 @@ _CSV_COLUMNS = [
     "industry",
     "keywords",
     "state",
+    # The sample is the most recently imported leads, and it deliberately
+    # includes leads that already went through the old gate so v1 and v2 can
+    # be compared on the same businesses. That is only useful if the operator
+    # can tell an already-archived lead from a fresh one in the CSV.
+    "lead_status",
     "email_status",
     "has_phone",
     "has_website",
@@ -130,6 +140,7 @@ async def shadow_qualify(
             "industry": str(lead.get("industry", "")),
             "keywords": str(lead.get("keywords", "")),
             "state": str(lead.get("state", "")),
+            "lead_status": str(lead.get("status", "")),
             "email_status": str(lead.get("email_status", "")),
             "has_phone": str(bool(str(lead.get("phone") or "").strip())),
             "has_website": str(lead.get("has_site")),
@@ -219,12 +230,99 @@ def _enrichment_view(lead: dict[str, object]) -> dict[str, object]:
     }
 
 
+class ShadowLeadStore:
+    """The one adapter between the CLI and db.queries.
+
+    Deliberately a single forwarding method. This is the place a raw SELECT
+    would get inlined into a worker the next time somebody needs one more
+    column, and a class with exactly one method makes that obvious rather
+    than convenient.
+    """
+
+    def __init__(self, connection: object) -> None:
+        self._connection = connection
+
+    async def list_leads_for_shadow_scoring(
+        self, *, tenant_id: UUID, limit: int
+    ) -> list[dict[str, object]]:
+        from db.queries import DatabaseConnection, list_leads_for_shadow_scoring
+
+        return await list_leads_for_shadow_scoring(
+            cast("DatabaseConnection", self._connection), tenant_id=tenant_id, limit=limit
+        )
+
+
+def _positive_limit(raw: str) -> int:
+    value = int(raw)
+    if value <= 0:
+        raise ArgumentTypeError("--limit must be greater than zero")
+    if value > _MAX_LIMIT:
+        raise ArgumentTypeError(
+            f"--limit must be {_MAX_LIMIT} or fewer; this makes one Haiku call per lead"
+        )
+    return value
+
+
 def parse_shadow_qualify_args(argv: Sequence[str] | None = None) -> Namespace:
     parser = ArgumentParser(
         description="Score a sample of enriched leads with the live scoring prompt. "
         "Writes a CSV. Sends nothing, writes nothing to the database."
     )
     parser.add_argument("--tenant-id", required=True, type=UUID)
-    parser.add_argument("--limit", type=int, default=_DEFAULT_LIMIT)
+    parser.add_argument("--limit", type=_positive_limit, default=_DEFAULT_LIMIT)
     parser.add_argument("--output", required=True, type=Path)
     return parser.parse_args(argv)
+
+
+async def _run(args: Namespace) -> ShadowQualifySummary:
+    import importlib
+
+    from clients.claude_client import RealClaudeClient
+    from env import load_pipeline_env
+
+    load_pipeline_env()
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise ShadowQualifyError("Missing env var: DATABASE_URL")
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    if not anthropic_key:
+        raise ShadowQualifyError("Missing env var: ANTHROPIC_API_KEY")
+
+    asyncpg = importlib.import_module("asyncpg")
+    connection = await asyncpg.connect(database_url)
+    try:
+        return await shadow_qualify(
+            tenant_id=args.tenant_id,
+            lead_reader=ShadowLeadStore(connection),
+            # RealClaudeClient returns clients.claude_client.ClaudeResponse,
+            # which is field-for-field identical to the dataclass declared
+            # here but nominally distinct, so mypy will not match it against
+            # the local Protocol. Every worker in this package carries the
+            # same duplicate declaration and the orchestrator casts for the
+            # same reason.
+            claude_client=cast(
+                "ClaudeClient",
+                RealClaudeClient(
+                    api_key=anthropic_key,
+                    prompts_dir=Path(__file__).resolve().parents[4] / "prompts",
+                ),
+            ),
+            output_path=args.output,
+            limit=args.limit,
+        )
+    finally:
+        await connection.close()
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    args = parse_shadow_qualify_args()
+    summary = asyncio.run(_run(args))
+    print(
+        f"scored={summary.scored} failed={summary.failed} "
+        f"cost_usd={summary.cost_usd} output={args.output}"
+    )
+
+
+if __name__ == "__main__":
+    main()

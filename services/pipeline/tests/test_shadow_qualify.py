@@ -26,7 +26,12 @@ from uuid import UUID
 import pytest
 
 from db.queries import list_leads_for_shadow_scoring
-from workers.shadow_qualify import ShadowQualifyError, shadow_qualify
+from workers.shadow_qualify import (
+    ShadowLeadStore,
+    ShadowQualifyError,
+    parse_shadow_qualify_args,
+    shadow_qualify,
+)
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -314,7 +319,9 @@ def test_list_leads_for_shadow_scoring_is_tenant_scoped() -> None:
         await list_leads_for_shadow_scoring(connection, tenant_id=TENANT_ID, limit=300)
 
         query = connection.queries[0]
-        assert "tenant_id = $1" in query
+        # "l." is load-bearing. A bare "tenant_id = $1" would also be
+        # satisfied by filtering only the enrichments side of the join.
+        assert "l.tenant_id = $1" in query
         assert "l.tenant_id = e.tenant_id" in query
         assert "is_deleted = FALSE" in query
         assert connection.args[0] == (TENANT_ID, 300)
@@ -349,5 +356,137 @@ def test_list_leads_for_shadow_scoring_decodes_the_weaknesses_jsonb() -> None:
         rows = await list_leads_for_shadow_scoring(connection, tenant_id=TENANT_ID, limit=10)
 
         assert rows[0]["weaknesses"] == ["no_h1"]
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# The command line the runbook tells the operator to type
+# ---------------------------------------------------------------------------
+
+
+def test_the_module_is_runnable_as_documented() -> None:
+    """A documented command that is a no-op is worse than no command.
+
+    parse_shadow_qualify_args existed and nothing called it, so
+    `python -m workers.shadow_qualify ...` would have parsed nothing, run
+    nothing, and exited 0. That is precisely the shape of failure this repo
+    keeps producing: a clean exit that did no work.
+    """
+    from workers import shadow_qualify as module
+
+    source = Path(module.__file__ or "").read_text(encoding="utf-8")
+
+    assert callable(module.main)
+    assert 'if __name__ == "__main__":' in source
+    assert "main()" in source.rsplit('if __name__ == "__main__":', 1)[1]
+
+
+def test_cli_rejects_a_non_positive_limit() -> None:
+    """--limit 0 scores nothing and reports success; a negative raises from
+    asyncpg partway through. Both are caught before a connection is opened."""
+    for bad in ("0", "-5"):
+        with pytest.raises(SystemExit):
+            parse_shadow_qualify_args(
+                ["--tenant-id", str(TENANT_ID), "--limit", bad, "--output", "out.csv"]
+            )
+
+
+def test_cli_rejects_a_limit_above_the_cap() -> None:
+    """One Haiku call per row. An unbounded limit turns a calibration run
+    into a bill, and pulls the whole tenant into memory to do it."""
+    with pytest.raises(SystemExit):
+        parse_shadow_qualify_args(
+            ["--tenant-id", str(TENANT_ID), "--limit", "100000", "--output", "out.csv"]
+        )
+
+
+def test_cli_accepts_a_sensible_limit() -> None:
+    args = parse_shadow_qualify_args(
+        ["--tenant-id", str(TENANT_ID), "--limit", "300", "--output", "out.csv"]
+    )
+
+    assert args.tenant_id == TENANT_ID
+    assert args.limit == 300
+    assert args.output == Path("out.csv")
+
+
+def test_shadow_lead_store_exposes_only_the_read() -> None:
+    """The adapter the CLI hands to shadow_qualify is the one place a raw
+    SELECT could be inlined into a worker. Keeping it to a single forwarding
+    method is what makes that obvious rather than tempting."""
+    public = {name for name in vars(ShadowLeadStore) if not name.startswith("_")}
+
+    assert public == {"list_leads_for_shadow_scoring"}
+
+
+def test_shadow_lead_store_forwards_the_tenant_and_limit() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection(rows=[])
+        store = ShadowLeadStore(connection)
+
+        await store.list_leads_for_shadow_scoring(tenant_id=TENANT_ID, limit=7)
+
+        assert connection.args[0] == (TENANT_ID, 7)
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# What the sample actually is
+# ---------------------------------------------------------------------------
+
+
+def test_list_leads_for_shadow_scoring_orders_deterministically() -> None:
+    """Two runs over unchanged data must return the same rows.
+
+    imported_at alone ties on any bulk import, and Postgres breaks ties
+    arbitrarily, so a calibration artifact could differ run to run for no
+    reason anybody could see.
+    """
+
+    async def scenario() -> None:
+        connection = RecordingConnection(rows=[])
+
+        await list_leads_for_shadow_scoring(connection, tenant_id=TENANT_ID, limit=10)
+
+        assert "ORDER BY l.imported_at DESC, l.id DESC" in connection.queries[0]
+
+    asyncio.run(scenario())
+
+
+def test_shadow_output_records_lead_status_for_filtering(tmp_path: Path) -> None:
+    """The sample is the most recently imported leads, not a stratified draw,
+    and it deliberately includes leads that already went through the old
+    gate, so v1 and v2 can be compared on the same businesses. That only
+    works if the operator can tell them apart in the CSV.
+    """
+
+    async def scenario() -> None:
+        output_path = tmp_path / "shadow.csv"
+        rows = [{**_row(), "status": "archived"}]
+
+        await shadow_qualify(
+            tenant_id=TENANT_ID,
+            lead_reader=FakeLeadReader(rows=rows),
+            claude_client=FakeClaudeClient(),
+            output_path=output_path,
+        )
+
+        with output_path.open(newline="", encoding="utf-8") as handle:
+            written = list(csv.DictReader(handle))
+
+        assert written[0]["lead_status"] == "archived"
+
+    asyncio.run(scenario())
+
+
+def test_list_leads_for_shadow_scoring_selects_lead_status() -> None:
+    async def scenario() -> None:
+        connection = RecordingConnection(rows=[])
+
+        await list_leads_for_shadow_scoring(connection, tenant_id=TENANT_ID, limit=10)
+
+        assert "l.status" in connection.queries[0]
 
     asyncio.run(scenario())

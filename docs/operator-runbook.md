@@ -399,7 +399,15 @@ cd /root/printeriq/services/pipeline
 python -m workers.shadow_qualify --tenant-id <tenant-uuid> --limit 300     --output /root/shadow-scores.csv
 ```
 
+- [ ] Note what the sample is: the most recently imported enriched leads for that
+      tenant, ordered `imported_at DESC, id DESC`, capped at 5,000. It is not a
+      stratified draw, so in practice it is one import batch. If you need the
+      cohorts compared separately, run it once per import.
 - [ ] Open the CSV and plot the score distribution.
+- [ ] Use the `lead_status` column to separate leads that already went through
+      the old gate from fresh ones. Both are included on purpose, so v1 and v2
+      can be compared on the same businesses, but mixing them in one
+      distribution will mislead you.
 - [ ] Hand-label roughly 60 rows with a yes/no on "would I want to sell to this business".
 - [ ] Check where the no-website rows (`has_website` is `False`) land relative to the rest.
 - [ ] Pick the threshold that gives acceptable precision **at the volume the mailboxes can actually send**. A threshold that qualifies 40,000 leads is not a generous threshold, it is an unused one.

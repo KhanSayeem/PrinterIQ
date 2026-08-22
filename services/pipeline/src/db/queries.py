@@ -1692,17 +1692,24 @@ async def list_leads_for_shadow_scoring(
     """
     rows = await connection.fetch(
         """
-        SELECT l.id AS lead_id, l.tenant_id,
+        SELECT l.id AS lead_id, l.tenant_id, l.status,
                l.business_name, l.email, l.email_status, l.phone,
                l.city, l.state, l.website_url, l.industry, l.keywords,
                e.has_site, e.is_reachable, e.weaknesses
         FROM leads l
         JOIN enrichments e
           ON e.lead_id = l.id
+        -- enrichments.lead_id references leads(id) alone, not the composite
+        -- (tenant_id, id), so a mismatched enrichment row is physically
+        -- insertable. This predicate is what stops one pairing with another
+        -- tenant's lead.
          AND l.tenant_id = e.tenant_id
         WHERE l.tenant_id = $1
           AND l.is_deleted = FALSE
-        ORDER BY l.imported_at DESC
+        -- imported_at alone ties across a bulk import and Postgres breaks
+        -- ties arbitrarily, so two runs over unchanged data could return
+        -- different rows and nobody would be able to see why.
+        ORDER BY l.imported_at DESC, l.id DESC
         LIMIT $2
         """,
         tenant_id,
@@ -1711,8 +1718,9 @@ async def list_leads_for_shadow_scoring(
     decoded: list[dict[str, object]] = []
     for raw_row in rows:
         row = dict(cast(Mapping[str, object], raw_row))
-        if "weaknesses" in row:
-            row["weaknesses"] = _decode_jsonb(row["weaknesses"])
+        for column in _ENRICHMENT_JSONB_COLUMNS:
+            if column in row:
+                row[column] = _decode_jsonb(row[column])
         decoded.append(row)
     return decoded
 
