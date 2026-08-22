@@ -12,7 +12,7 @@ import pytest
 
 from db.queries import LeadInsert, insert_lead, lead_email_exists
 from pipeline_queue.definitions import JobType
-from workers.ingest import ingest_csv_file, parse_ingest_args
+from workers.ingest import ingest_csv_file, normalise_industry, parse_ingest_args
 
 TENANT_ID = UUID("10000000-0000-0000-0000-000000000001")
 
@@ -24,6 +24,7 @@ class RecordedLead:
     status: str
     source_file: str
     vertical: str
+    fields: dict[str, object]
 
 
 class FakeLeadRepository:
@@ -44,6 +45,7 @@ class FakeLeadRepository:
                 status=cast(str, lead["status"]),
                 source_file=cast(str, lead["source_file"]),
                 vertical=cast(str, lead["vertical"]),
+                fields=dict(lead),
             )
         )
         return UUID(f"20000000-0000-0000-0000-{len(self.inserted):012d}")
@@ -256,6 +258,400 @@ def test_dry_run_reports_valid_rows_without_db_writes_or_jobs(tmp_path: Path) ->
         assert summary.rejected_rows == 0
         assert repository.inserted == []
         assert queue.jobs == []
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Column-name aliases
+#
+# The Apollo export uses spaced headers ("Company Name", "Mobile Phone"). The
+# 900k Australian consolidated export uses underscores and different names
+# ("Company_Name", "Phone", "Mobile"). Header lookup is normalised so a third
+# naming style does not break this a third time.
+# ---------------------------------------------------------------------------
+
+UNDERSCORE_FIELDNAMES = [
+    "First_Name",
+    "Last_Name",
+    "Email",
+    "Email_Status",
+    "Phone",
+    "Mobile",
+    "Company_Name",
+    "Website",
+    "City",
+    "State",
+    "Keywords",
+    "Industry",
+]
+
+
+def _underscore_row(index: int, **overrides: str) -> dict[str, str]:
+    row: dict[str, str] = {
+        "First_Name": f"First{index}",
+        "Last_Name": f"Last{index}",
+        "Email": f"lead{index}@example.com",
+        "Email_Status": "Verified",
+        "Phone": f"+61290000{index:03d}",
+        "Mobile": f"+61400000{index:03d}",
+        "Company_Name": f"Aussie Co {index}",
+        "Website": f"https://aussie{index}.example.com",
+        "City": "Brisbane",
+        "State": "QLD",
+        "Keywords": "cafe",
+        "Industry": "Hospitality & Food",
+    }
+    row.update(overrides)
+    return row
+
+
+def _write_csv(
+    tmp_path: Path,
+    *,
+    fieldnames: list[str],
+    rows: list[dict[str, str]],
+    name: str = "leads.csv",
+) -> Path:
+    path = tmp_path / name
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+    return path
+
+
+async def _ingest(
+    csv_path: Path,
+    *,
+    repository: FakeLeadRepository | None = None,
+    queue: FakeQueue | None = None,
+):
+    repository = repository or FakeLeadRepository()
+    queue = queue or FakeQueue()
+    summary = await ingest_csv_file(
+        csv_path,
+        tenant_id=TENANT_ID,
+        source_file="leads.csv",
+        vertical="general",
+        score_threshold=35,
+        lead_repository=repository,
+        queue=queue,
+    )
+    return summary, repository, queue
+
+
+def test_underscore_headers_are_accepted(tmp_path: Path) -> None:
+    """Every row of the 900k Australian export would be rejected against the
+    spaced Apollo headers, and the failure would look like bad data."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path, fieldnames=UNDERSCORE_FIELDNAMES, rows=[_underscore_row(0)]
+        )
+
+        summary, repository, queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        assert summary.inserted_rows == 1
+        assert len(queue.jobs) == 1
+        fields = repository.inserted[0].fields
+        assert fields["business_name"] == "Aussie Co 0"
+        assert fields["first_name"] == "First0"
+        assert fields["last_name"] == "Last0"
+        assert fields["email"] == "lead0@example.com"
+        assert fields["email_status"] == "Verified"
+        assert fields["city"] == "Brisbane"
+        assert fields["state"] == "QLD"
+        assert fields["website_url"] == "https://aussie0.example.com"
+        assert fields["keywords"] == "cafe"
+
+    asyncio.run(scenario())
+
+
+def test_spaced_apollo_headers_still_map_to_the_same_fields(tmp_path: Path) -> None:
+    """Regression guard: the alias map must not be a swap to underscores."""
+
+    async def scenario() -> None:
+        csv_path = _write_apollo_csv(tmp_path, row_count=1)
+
+        summary, repository, _queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        fields = repository.inserted[0].fields
+        assert fields["business_name"] == "Trade Co 0"
+        assert fields["website_url"] == "https://trade0.example.com"
+        assert fields["phone"] == "+61400000000"
+        assert fields["technologies"] == "WordPress, Mobile Friendly"
+        assert fields["apollo_contact_id"] == "contact-0"
+        assert fields["apollo_account_id"] == "account-0"
+
+    asyncio.run(scenario())
+
+
+def test_header_lookup_ignores_case_and_separator_style(tmp_path: Path) -> None:
+    """A third naming variant must not break this again."""
+
+    async def scenario() -> None:
+        fieldnames = ["EMAIL", "company-name", "  State  ", "industry", "MOBILE PHONE"]
+        rows = [
+            {
+                "EMAIL": "odd@example.com",
+                "company-name": "Odd Caps Co",
+                "  State  ": "VIC",
+                "industry": "Retail",
+                "MOBILE PHONE": "+61400111222",
+            }
+        ]
+        csv_path = _write_csv(tmp_path, fieldnames=fieldnames, rows=rows)
+
+        summary, repository, _queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        fields = repository.inserted[0].fields
+        assert fields["business_name"] == "Odd Caps Co"
+        assert fields["state"] == "VIC"
+        assert fields["phone"] == "+61400111222"
+
+    asyncio.run(scenario())
+
+
+def test_phone_prefers_mobile_over_landline_across_both_naming_styles(
+    tmp_path: Path,
+) -> None:
+    """The old code preferred "Mobile Phone" over "Corporate Phone". The new
+    file's equivalents are "Mobile" and "Phone", and the preference is the
+    same: a mobile reaches a tradesperson, a landline reaches an office."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path, fieldnames=UNDERSCORE_FIELDNAMES, rows=[_underscore_row(0)]
+        )
+        _summary, repository, _queue = await _ingest(csv_path)
+        assert repository.inserted[0].fields["phone"] == "+61400000000"
+
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, Mobile="")],
+            name="landline.csv",
+        )
+        _summary, repository, _queue = await _ingest(csv_path)
+        assert repository.inserted[0].fields["phone"] == "+61290000000"
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Phone is no longer required
+# ---------------------------------------------------------------------------
+
+
+def test_row_without_any_phone_is_accepted(tmp_path: Path) -> None:
+    """54.2% of the Australian list has no phone number of any kind, and a
+    lead's phone is never used to send anything."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, Phone="", Mobile="")],
+        )
+
+        summary, repository, queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        assert summary.inserted_rows == 1
+        assert len(queue.jobs) == 1
+        assert repository.inserted[0].fields["phone"] == ""
+
+    asyncio.run(scenario())
+
+
+def test_apollo_row_without_any_phone_is_accepted(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        csv_path = _write_apollo_csv(
+            tmp_path,
+            row_count=1,
+            row_overrides={0: {"Mobile Phone": "", "Corporate Phone": ""}},
+        )
+
+        summary, _repository, _queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        assert summary.inserted_rows == 1
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# A blank website is a signal, not a rejection
+# ---------------------------------------------------------------------------
+
+
+def test_row_without_website_is_accepted_and_stores_an_empty_url(tmp_path: Path) -> None:
+    """6,011 Australian rows have no website. The empty string is the exact
+    value workers.enrich keys its no-site path on, so the contract between
+    ingest and enrich gets its own assertion."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path, fieldnames=UNDERSCORE_FIELDNAMES, rows=[_underscore_row(0, Website="")]
+        )
+
+        summary, repository, queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        assert summary.inserted_rows == 1
+        assert repository.inserted[0].fields["website_url"] == ""
+        assert len(queue.jobs) == 1
+        assert queue.jobs[0]["job_type"] == JobType.ENRICH_LEAD.value
+        assert queue.jobs[0]["score_threshold"] == 35
+
+    asyncio.run(scenario())
+
+
+def test_row_without_email_is_still_rejected(tmp_path: Path) -> None:
+    """Loosening two required fields must not loosen the rest. Email is the
+    send channel; without it the lead cannot be contacted at all."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path, fieldnames=UNDERSCORE_FIELDNAMES, rows=[_underscore_row(0, Email="")]
+        )
+
+        summary, repository, queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 1
+        assert summary.inserted_rows == 0
+        assert repository.inserted == []
+        assert queue.jobs == []
+
+    asyncio.run(scenario())
+
+
+def test_row_without_company_name_or_state_is_still_rejected(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        for field_name in ("Company_Name", "State"):
+            csv_path = _write_csv(
+                tmp_path,
+                fieldnames=UNDERSCORE_FIELDNAMES,
+                rows=[_underscore_row(0, **{field_name: ""})],
+                name=f"missing-{field_name}.csv",
+            )
+
+            summary, _repository, _queue = await _ingest(csv_path)
+
+            assert summary.rejected_rows == 1, field_name
+
+    asyncio.run(scenario())
+
+
+def test_rejection_reasons_are_counted_per_field(tmp_path: Path) -> None:
+    """A lump `rejected_rows` count cannot tell an operator whether a column
+    is missing from the file or genuinely sparse in the data. On the real
+    Australian slice these counts are the difference between "the import
+    worked" and "half the list silently vanished"."""
+
+    async def scenario() -> None:
+        rows = [
+            _underscore_row(0, Email=""),
+            _underscore_row(1, State=""),
+            _underscore_row(2, State="", Industry=""),
+            _underscore_row(3),
+        ]
+        csv_path = _write_csv(tmp_path, fieldnames=UNDERSCORE_FIELDNAMES, rows=rows)
+
+        summary, _repository, _queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 3
+        assert summary.inserted_rows == 1
+        assert summary.rejected_by_field == {"Email": 1, "State": 2, "Industry": 1}
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Industry normalisation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Raw OpenStreetMap tags. "amenity=school" alone appears 2,641 times
+        # in the Australian slice and goes straight into the scoring prompt.
+        ("amenity=school", "School"),
+        ("amenity=place_of_worship", "Place Of Worship"),
+        ("amenity=kindergarten", "Kindergarten"),
+        ("tourism=hotel", "Hotel"),
+        ("shop=hairdresser", "Hairdresser"),
+        # Colon-separated form, as used by the Category column.
+        ("amenity:restaurant", "Restaurant"),
+        ("office:company", "Company"),
+        # Namespaced OSM key.
+        ("healthcare:speciality=physiotherapist", "Physiotherapist"),
+        # Compound tags: the first tag is the primary one.
+        ("amenity=doctors; healthcare=doctor", "Doctors"),
+        # Curated labels are left exactly as they are. Title-casing these
+        # would turn "PR & Communications" into "Pr & Communications".
+        ("Finance & Accounting", "Finance & Accounting"),
+        ("Construction", "Construction"),
+        ("Food, Hospitality & Travel", "Food, Hospitality & Travel"),
+        ("PR & Communications", "PR & Communications"),
+        # Absent values.
+        ("", ""),
+        ("   ", ""),
+        ("None", ""),
+        ("none", ""),
+        ("NONE", ""),
+        # An OSM tag with an empty value carries no information either.
+        ("amenity=", ""),
+        # Whitespace around a real value is not information.
+        ("  Retail  ", "Retail"),
+    ],
+)
+def test_industry_is_normalised(raw: str, expected: str) -> None:
+    assert normalise_industry(raw) == expected
+
+
+def test_osm_industry_tag_is_normalised_on_the_stored_lead(tmp_path: Path) -> None:
+    """The normaliser has to actually be wired into the row mapping, not just
+    exist as a tested function nothing calls."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, Industry="amenity=school")],
+        )
+
+        _summary, repository, _queue = await _ingest(csv_path)
+
+        assert repository.inserted[0].fields["industry"] == "School"
+
+    asyncio.run(scenario())
+
+
+def test_industry_of_literal_none_is_rejected_like_an_empty_industry(
+    tmp_path: Path,
+) -> None:
+    """"None" is a missing value wearing a string costume. Storing "" while
+    letting the row through would mean an empty Industry rejects a row and a
+    "None" Industry does not, which is two rules for one condition."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, Industry="None")],
+        )
+
+        summary, _repository, _queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 1
+        assert summary.rejected_by_field == {"Industry": 1}
 
     asyncio.run(scenario())
 

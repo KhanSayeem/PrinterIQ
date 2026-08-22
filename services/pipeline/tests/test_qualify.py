@@ -261,7 +261,7 @@ def test_below_threshold_archives_lead_without_sonnet_call() -> None:
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
         assert queue.jobs == []
         assert len(client.calls) == 1
-        assert client.calls[0][0] == "qualify-v1"
+        assert client.calls[0][0] == "qualify-v2"
 
     asyncio.run(scenario())
 
@@ -329,7 +329,7 @@ def test_above_threshold_without_actionable_weakness_archives_lead_single_claude
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
         assert queue.jobs == []
         assert len(client.calls) == 1
-        assert client.calls[0][0] == "qualify-v1"
+        assert client.calls[0][0] == "qualify-v2"
 
     asyncio.run(scenario())
 
@@ -501,8 +501,8 @@ def test_haiku_weakness_label_not_grounded_in_enrichment_weaknesses_dead_letters
         assert repo.inserted == []
         assert queue.jobs == []
         assert len(client.calls) == 2
-        assert client.calls[0][0] == "qualify-v1"
-        assert client.calls[1][0] == "qualify-v1"
+        assert client.calls[0][0] == "qualify-v2"
+        assert client.calls[1][0] == "qualify-v2"
 
     asyncio.run(scenario())
 
@@ -538,8 +538,8 @@ def test_haiku_weakness_label_grounded_on_retry_proceeds_to_sonnet() -> None:
         )
 
         assert len(client.calls) == 3
-        assert client.calls[0][0] == "qualify-v1"
-        assert client.calls[1][0] == "qualify-v1"
+        assert client.calls[0][0] == "qualify-v2"
+        assert client.calls[1][0] == "qualify-v2"
         assert client.calls[2][0] == "opener-v2"
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
         assert len(queue.jobs) == 1
@@ -611,7 +611,7 @@ def test_sonnet_call_receives_enrichment_json() -> None:
 
         haiku_call = client.calls[0]
         sonnet_call = client.calls[1]
-        assert haiku_call[0] == "qualify-v1"
+        assert haiku_call[0] == "qualify-v2"
         assert "enrichment_json" in haiku_call[1]
         assert sonnet_call[0] == "opener-v2"
         assert "enrichment_json" in sonnet_call[1]
@@ -1631,7 +1631,7 @@ def test_grounding_retry_returning_below_threshold_score_archives_without_sonnet
         )
 
         assert len(client.calls) == 2
-        assert all(call[0] == "qualify-v1" for call in client.calls)
+        assert all(call[0] == "qualify-v2" for call in client.calls)
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
         assert repo.inserted[0]["personalised_opener"] is None
         assert queue.jobs == []
@@ -1710,5 +1710,367 @@ def test_grounding_retry_persists_derived_gate_not_a_model_claim() -> None:
 
         assert repo.inserted[0]["has_actionable_weakness"] is True
         assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Leads with no website
+#
+# Before this change these leads died three times over: rejected at ingest for
+# a blank Website column; recorded by the auditor as a business that has a site
+# which happens to be unreachable; and archived in qualify because their
+# weaknesses array was empty. 6,011 rows of the Australian list are in this
+# state.
+# ---------------------------------------------------------------------------
+
+
+def _make_no_site_lead() -> dict[str, object]:
+    lead = _make_lead()
+    lead["website_url"] = ""
+    return lead
+
+
+def _make_no_site_enrichment() -> dict[str, object]:
+    """Exactly what workers.enrich._enrich_without_a_site produces."""
+    return {
+        "id": ENRICHMENT_ID,
+        "lead_id": LEAD_ID,
+        "tenant_id": TENANT_ID,
+        "has_site": False,
+        "is_reachable": False,
+        "is_mobile_friendly": None,
+        "has_ssl": None,
+        "has_meta_title": None,
+        "has_meta_description": None,
+        "has_h1": None,
+        "load_ms": None,
+        "cms_detected": None,
+        "tech_source": "no_site",
+        "weaknesses": ["no_website"],
+        "raw_audit": {},
+    }
+
+
+def _no_site_sonnet_response() -> ClaudeResponse:
+    content = json.dumps(
+        {
+            "subject_line": "Stone Builders, nothing online yet?",
+            "opener": "Brett, went looking for Stone Builders and found nothing.",
+            "followup_1": "Still happy to walk you through it.",
+            "followup_2": "Last nudge from me.",
+            "weakness_sentence": (
+                "there's no website for Stone Builders anywhere I could find, so anyone "
+                "searching lands on a competitor"
+            ),
+        }
+    )
+    return ClaudeResponse(text=content, cost_usd=SONNET_COST, model=SONNET_MODEL)
+
+
+async def _qualify_no_site_lead(
+    *,
+    payload: dict[str, object] | None = None,
+    haiku: ClaudeResponse | None = None,
+) -> tuple[FakeQualificationRepository, FakeOutreachQueue, FakeClaudeClient]:
+    repo = FakeQualificationRepository()
+    queue = FakeOutreachQueue()
+    client = FakeClaudeClient(
+        responses=[
+            haiku or _haiku_response(score=75, top_weakness="no website at all",
+                                     weakness_label="no_website"),
+            _no_site_sonnet_response(),
+        ]
+    )
+
+    await qualify_lead(
+        payload or _payload(score_threshold=40),
+        lead_fetcher=FakeLeadFetcher(lead=_make_no_site_lead()),
+        enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_no_site_enrichment()),
+        qualification_repo=repo,
+        outreach_queue=queue,
+        claude_client=client,
+    )
+    return repo, queue, client
+
+
+def test_no_website_lead_is_not_archived(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole point of adding no_website to the vocabulary.
+
+    `has_actionable_weakness = bool(grounded_weaknesses)` archived every one of
+    these leads while the array was empty. A single measured label makes them
+    pass with no special casing anywhere in this worker.
+    """
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        repo, queue, _client = await _qualify_no_site_lead()
+
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "qualified")]
+        assert repo.inserted[0]["has_actionable_weakness"] is True
+        assert len(queue.jobs) == 1
+
+    asyncio.run(scenario())
+
+
+def test_no_website_label_passes_the_grounding_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """"no_website" in ["no_website"] passes the existing check with no
+    special case, which is the payoff for adding the label rather than
+    widening the gate."""
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        _repo, _queue, client = await _qualify_no_site_lead()
+
+        # Two calls only: no grounding retry, no dead letter.
+        assert len(client.calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_no_website_lead_uses_the_no_site_opener_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        _repo, _queue, client = await _qualify_no_site_lead()
+
+        assert client.calls[0][0] == "qualify-v2"
+        assert client.calls[1][0] == "opener-nosite-v1"
+
+    asyncio.run(scenario())
+
+
+def test_no_website_lead_records_the_no_site_prompt_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qualifications.prompt_version is how the two copy paths get compared
+    in the dashboard. Recording the site version for a no-site lead would
+    make that comparison silently wrong rather than merely absent."""
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        repo, _queue, _client = await _qualify_no_site_lead()
+
+        assert repo.inserted[0]["prompt_version"] == "opener-nosite-v1"
+
+    asyncio.run(scenario())
+
+
+def test_site_lead_still_uses_the_standard_opener_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard on the working path."""
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        repo = FakeQualificationRepository()
+        client = FakeClaudeClient(responses=[_haiku_response(score=75), _sonnet_response()])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=repo,
+            outreach_queue=FakeOutreachQueue(),
+            claude_client=client,
+        )
+
+        assert client.calls[1][0] == "opener-v2"
+        assert repo.inserted[0]["prompt_version"] == "opener-v2"
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Campaign routing
+# ---------------------------------------------------------------------------
+
+
+def test_no_website_lead_routes_to_the_no_website_campaign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Instantly Step 1 template for the normal campaign opens with
+    "spotted {{company_name}}'s site and noticed". Those words live in
+    Instantly, not in this repo, so no prompt change can make them true for a
+    business with no site. A separate campaign is the only fix."""
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        monkeypatch.setenv("INSTANTLY_NO_WEBSITE_CAMPAIGN_ID", "campaign-nosite")
+        _repo, queue, _client = await _qualify_no_site_lead()
+
+        assert queue.jobs[0]["campaign_id"] == "campaign-nosite"
+
+    asyncio.run(scenario())
+
+
+def test_site_lead_still_routes_to_the_default_campaign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        monkeypatch.setenv("INSTANTLY_NO_WEBSITE_CAMPAIGN_ID", "campaign-nosite")
+        queue = FakeOutreachQueue()
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=FakeQualificationRepository(),
+            outreach_queue=queue,
+            claude_client=FakeClaudeClient(
+                responses=[_haiku_response(score=75), _sonnet_response()]
+            ),
+        )
+
+        assert queue.jobs[0]["campaign_id"] == "campaign-default"
+
+    asyncio.run(scenario())
+
+
+def test_no_website_campaign_falls_back_to_the_default_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operator's call, recorded here so it is a decision and not an accident.
+
+    Failing loudly would be safer for copy, but it would break every send the
+    moment this branch merges and before the second Instantly campaign exists.
+    The fallback is logged as a warning; the residual risk is that these leads
+    receive the site campaign's opening line until the campaign is created.
+    """
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        monkeypatch.delenv("INSTANTLY_NO_WEBSITE_CAMPAIGN_ID", raising=False)
+        _repo, queue, _client = await _qualify_no_site_lead()
+
+        assert queue.jobs[0]["campaign_id"] == "campaign-default"
+
+    asyncio.run(scenario())
+
+
+def test_blank_no_website_campaign_env_falls_back_to_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An env var set to the empty string is the shape a half-filled .env
+    takes, and it must behave as unset rather than as a campaign id of ""."""
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        monkeypatch.setenv("INSTANTLY_NO_WEBSITE_CAMPAIGN_ID", "   ")
+        _repo, queue, _client = await _qualify_no_site_lead()
+
+        assert queue.jobs[0]["campaign_id"] == "campaign-default"
+
+    asyncio.run(scenario())
+
+
+def test_explicit_payload_campaign_id_still_wins_for_a_no_website_lead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        monkeypatch.setenv("INSTANTLY_NO_WEBSITE_CAMPAIGN_ID", "campaign-nosite")
+        _repo, queue, _client = await _qualify_no_site_lead(
+            payload=_payload(score_threshold=40, campaign_id="campaign-explicit")
+        )
+
+        assert queue.jobs[0]["campaign_id"] == "campaign-explicit"
+
+    asyncio.run(scenario())
+
+
+def test_campaign_routing_ignores_the_model_supplied_weakness_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Which campaign a lead lands in is decided by the enrichment row, which
+    this worker owns, not by the label Haiku returned.
+
+    A lead whose site was measured and found slow must not reach the no-site
+    campaign because a model wrote "no_website" in a field. Here the label is
+    grounded and correct for the enrichment, so the only thing that can send
+    this lead to the no-site campaign is the enrichment itself.
+    """
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        monkeypatch.setenv("INSTANTLY_NO_WEBSITE_CAMPAIGN_ID", "campaign-nosite")
+        enrichment = _make_enrichment()
+        enrichment["weaknesses"] = ["slow_load"]
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(
+            responses=[
+                _haiku_response(score=75, top_weakness="slow", weakness_label="slow_load"),
+                _sonnet_response(),
+            ]
+        )
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=enrichment),
+            qualification_repo=FakeQualificationRepository(),
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert queue.jobs[0]["campaign_id"] == "campaign-default"
+        assert client.calls[1][0] == "opener-v2"
+
+    asyncio.run(scenario())
+
+
+def test_no_website_lead_below_threshold_still_archives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The score gate is unchanged. Letting these leads in must not turn into
+    letting them past the threshold."""
+
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        repo = FakeQualificationRepository()
+        queue = FakeOutreachQueue()
+        client = FakeClaudeClient(
+            responses=[
+                _haiku_response(score=20, top_weakness="no website", weakness_label="no_website")
+            ]
+        )
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_no_site_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_no_site_enrichment()),
+            qualification_repo=repo,
+            outreach_queue=queue,
+            claude_client=client,
+        )
+
+        assert repo.status_updates == [(TENANT_ID, LEAD_ID, "archived")]
+        assert queue.jobs == []
+        assert len(client.calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_qualify_worker_calls_the_v2_scoring_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        monkeypatch.setenv("INSTANTLY_CAMPAIGN_ID", "campaign-default")
+        client = FakeClaudeClient(responses=[_haiku_response(score=75), _sonnet_response()])
+
+        await qualify_lead(
+            _payload(score_threshold=40),
+            lead_fetcher=FakeLeadFetcher(lead=_make_lead()),
+            enrichment_fetcher=FakeEnrichmentFetcher(enrichment=_make_enrichment()),
+            qualification_repo=FakeQualificationRepository(),
+            outreach_queue=FakeOutreachQueue(),
+            claude_client=client,
+        )
+
+        assert client.calls[0][0] == "qualify-v2"
 
     asyncio.run(scenario())

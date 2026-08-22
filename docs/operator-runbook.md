@@ -348,6 +348,63 @@ Last nudge from me. Offer's open if the timing works. No pressure.
 - [ ] Confirm the campaign still uses the correct sending account and a paused dev/test campaign before any live smoke.
 - [ ] Save the sequence but leave the campaign paused until all checks below pass.
 
+### 1b. Second Instantly campaign, for leads with no website
+
+Needed because of one sentence. Step 1 above opens with `spotted
+{{company_name}}'s site and noticed {{weakness}}`. Those words live in
+Instantly, not in this repo, so no prompt change can make them true for a
+business that has no website at all. 6,011 rows of the Australian list are in
+that state.
+
+Until this campaign exists and `INSTANTLY_NO_WEBSITE_CAMPAIGN_ID` is set,
+`qualify.py` falls back to the campaign above and logs a warning, which means
+those leads receive an email about a site they do not have.
+
+- [ ] Create a second campaign in Instantly, paused.
+- [ ] In Step 1, use this final email body:
+
+```text
+Hey {{firstName|there}}, I went looking for {{company_name}} online and couldn't
+find a website anywhere. Anyone who hears about you and goes to check is landing
+on a competitor instead.
+
+I went ahead and put together what a site for you could look like: Check it out
+
+If you want it, it's $1,499 flat. Domain, hosting, mobile-ready, local SEO basics.
+Delivered in 2 weeks. If you hate it, tell me why and I'll fix it before you pay anything.
+
+Macauley
+```
+
+- [ ] In the Step 1 editor, select only the words `Check it out` and set the link URL to `{{website_preview_url}}`.
+- [ ] Do not mention Google Maps, reviews, rankings, social media or ad spend anywhere in this sequence. None of those are measured by the pipeline, and a business that does have a Google listing will read the claim as proof the email was machine-written.
+- [ ] Copy the campaign id into `INSTANTLY_NO_WEBSITE_CAMPAIGN_ID` in the VPS `.env`.
+- [ ] Restart the pipeline workers so the new variable is read.
+- [ ] Confirm the pipeline logs no longer contain `INSTANTLY_NO_WEBSITE_CAMPAIGN_ID is unset`.
+
+### 1c. Recalibrate the score threshold before the first live send
+
+`QUALIFICATION_SCORE_THRESHOLD` is 35 on the VPS. That number was chosen
+against `prompts/qualify-v1.txt`, whose rubric rewarded "construction/trades
+industry" and penalised "not a tradie business". The live prompt is now
+`qualify-v2`, which scores four different components. The same integer no
+longer means the same thing, so carrying 35 forward is not keeping the
+setting, it is changing it to a value nobody has measured.
+
+- [ ] Run a shadow scoring pass. It calls Haiku only, writes nothing to the
+      database, and sends nothing:
+
+```bash
+cd /root/printeriq/services/pipeline
+python -m workers.shadow_qualify --tenant-id <tenant-uuid> --limit 300     --output /root/shadow-scores.csv
+```
+
+- [ ] Open the CSV and plot the score distribution.
+- [ ] Hand-label roughly 60 rows with a yes/no on "would I want to sell to this business".
+- [ ] Check where the no-website rows (`has_website` is `False`) land relative to the rest.
+- [ ] Pick the threshold that gives acceptable precision **at the volume the mailboxes can actually send**. A threshold that qualifies 40,000 leads is not a generous threshold, it is an unused one.
+- [ ] `score_threshold` travels per ingest job, not as a global constant, so the no-website import and the has-website import can run at different thresholds with no code change.
+
 ### 2. Email rendering QA
 
 - [ ] Add or choose a test lead that has a known `website_preview_url` value.
@@ -427,6 +484,23 @@ ls -lh /var/www/previews/assets/previews/concreting/hero.jpg
 ls -lh /var/www/previews/assets/previews/landscaping/hero.jpg
 ls -lh /var/www/previews/assets/previews/general/hero.jpg
 ```
+
+- [ ] Confirm the neutral business template's images exist. This template is the
+      fallback for every industry no trade template claims, so a missing image
+      here breaks the demo for the majority of the Australian list:
+
+```bash
+ls -lh /var/www/previews/assets/previews/business/hero.jpg
+ls -lh /var/www/previews/assets/previews/business/fullbleed-1.jpg
+ls -lh /var/www/previews/assets/previews/business/project-1.jpg
+```
+
+- [ ] If they are missing, download every path in `image-download-manifest.json`
+      to `/var/www/previews`, then re-run
+      `python scripts/verify-preview-assets.py --base-url https://preview.presciaiq.com`.
+- [ ] The eight `business/` images are neutral placeholders reused from photos
+      already in the manifest. Replace them with real photography before this
+      template carries volume.
 
 - [ ] Confirm each hero image is under 200KB.
 - [ ] Confirm the shared image folder exists:

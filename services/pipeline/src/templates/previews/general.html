@@ -835,7 +835,7 @@ nav.scrolled .nav-logo { color: #1a1208; }
     <div class="footer-col">
       <h4>Contact</h4>
       <ul>
-        <li><a href="tel:{{PHONE}}">{{PHONE}}</a></li>
+        {{#IF_PHONE}}<li><a href="tel:{{PHONE}}">{{PHONE}}</a></li>{{/IF_PHONE}}
         <li><a href="mailto:{{EMAIL}}">{{EMAIL}}</a></li>
         <li><a href="#">{{CITY}}, {{STATE}}</a></li>
       </ul>

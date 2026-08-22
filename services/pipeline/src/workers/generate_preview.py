@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from contextlib import suppress
 from dataclasses import dataclass
@@ -26,6 +27,59 @@ TRADE_KEYWORDS: dict[str, list[str]] = {
     "concreting": ["concreting", "concrete", "driveways", "paths", "slabs", "footings"],
     "landscaping": ["landscaping", "lawn", "gardens", "turf", "retaining walls", "mowing"],
 }
+
+# Trades that have no template of their own. general.html is named "general"
+# but is a trades site throughout ("Local Trades & Services", "Fully
+# Licensed", "Free Quotes"), so it belongs to these leads and to nobody else.
+# Checked only after every entry in TRADE_KEYWORDS, so a plumber whose
+# Industry cell reads "Construction" still gets the plumbing template.
+GENERAL_TRADE_KEYWORDS: list[str] = [
+    "builder",
+    "building",
+    "carpenter",
+    "carpentry",
+    "construction",
+    "trades",
+    "tradie",
+    "renovation",
+    "roofing",
+    "roofer",
+    "painter",
+    "painting",
+    "plastering",
+    "tiler",
+    "tiling",
+    "fencing",
+    "handyman",
+    "excavation",
+    "scaffolding",
+]
+
+# Every lead no trade keyword claims. business.html makes no claim a cafe, an
+# accountant or a school could not make. Adding a niche template later means
+# adding one entry to TRADE_KEYWORDS (or a sibling mapping) and one HTML file
+# named after the key; nothing else in this module needs to change.
+FALLBACK_TEMPLATE_KEY = "business"
+
+# Lead fields searched for template keywords, in priority order.
+_TEMPLATE_MATCH_FIELDS = ("industry", "vertical", "keywords")
+
+# `vertical` is deliberately absent here. It is a per-import campaign label,
+# not a description of the business, and `leads.vertical` defaults to
+# 'tradies' for every row in the database. Scanning it for "tradie" would
+# route every lead in the system to the trades template and make the neutral
+# fallback unreachable. It stays in the specific-trade scan above, where no
+# keyword can match it, purely to leave that behaviour untouched.
+_GENERAL_TRADE_MATCH_FIELDS = ("industry", "keywords")
+
+# A conditional block, so a template can omit a whole row when the field
+# behind it is empty rather than render an empty one. 54.2% of the Australian
+# list has no phone number, so "render it anyway" is the common case.
+_CONDITIONAL_BLOCK_RE = re.compile(
+    r"\{\{#IF_(?P<name>[A-Z0-9_]+)\}\}(?P<body>.*?)\{\{/IF_(?P=name)\}\}",
+    re.DOTALL,
+)
+_CONDITIONAL_MARKER_RE = re.compile(r"\{\{[#/]IF_[A-Z0-9_]+\}\}")
 
 _PERSONALISATION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -219,12 +273,25 @@ def _pending_output_path(output_dir: Path, *, preview_slug: str) -> Path:
 
 
 def select_template_key(lead: dict[str, object]) -> str:
-    for field_name in ("industry", "vertical", "keywords"):
+    """Pick the preview template this lead's demo page is built from.
+
+    Order matters. A specific trade wins over the generic trades template,
+    which wins over the neutral fallback. To add a niche template later, add
+    its keywords to TRADE_KEYWORDS and drop a matching `<key>.html` into
+    templates/previews; no other code changes.
+    """
+    for field_name in _TEMPLATE_MATCH_FIELDS:
         haystack = str(lead.get(field_name) or "").lower()
         for template_key, keywords in TRADE_KEYWORDS.items():
             if any(keyword in haystack for keyword in keywords):
                 return template_key
-    return "general"
+
+    for field_name in _GENERAL_TRADE_MATCH_FIELDS:
+        haystack = str(lead.get(field_name) or "").lower()
+        if any(keyword in haystack for keyword in GENERAL_TRADE_KEYWORDS):
+            return "general"
+
+    return FALLBACK_TEMPLATE_KEY
 
 
 def parse_personalisation_json(text: str) -> dict[str, object]:
@@ -284,9 +351,36 @@ def render_preview_html(
             str(service["description"])
         )
 
-    rendered = template_source
+    rendered = _apply_conditional_blocks(template_source, token_map)
     for token, value in token_map.items():
         rendered = rendered.replace(token, value)
+    return rendered
+
+
+def _apply_conditional_blocks(template_source: str, token_map: dict[str, str]) -> str:
+    """Keep or drop `{{#IF_X}}...{{/IF_X}}` blocks by whether {{X}} has a value.
+
+    A lead with no phone must not render `<a href="tel:"></a>`: an empty row
+    in the contact list of the page the prospect is being asked to judge is
+    worse than no row. Only 45.8% of the Australian list has a phone number,
+    so this is the common case.
+
+    Both failure modes dead-letter rather than render. A misspelt conditional
+    that silently kept its block would publish a claim about a field nobody
+    supplied; one that silently dropped it would remove a section nobody
+    noticed was missing. Neither is visible from a log line.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        token = "{{" + match.group("name") + "}}"
+        if token not in token_map:
+            raise DeadLetterError(f"unknown conditional token {token} in preview template")
+        return match.group("body") if token_map[token].strip() else ""
+
+    rendered = _CONDITIONAL_BLOCK_RE.sub(replace, template_source)
+    leftover = _CONDITIONAL_MARKER_RE.findall(rendered)
+    if leftover:
+        raise DeadLetterError(f"unbalanced conditional block in preview template: {leftover[0]}")
     return rendered
 
 

@@ -18,7 +18,15 @@ LEAD_ID = UUID("20000000-0000-0000-0000-000000000002")
 PREVIEW_SLUG = "preview-token-1234567890abcdef"
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 HAIKU_COST = Decimal("0.000100")
-TEMPLATE_KEYS = ["plumbing", "electrical", "hvac", "concreting", "landscaping", "general"]
+TEMPLATE_KEYS = [
+    "plumbing",
+    "electrical",
+    "hvac",
+    "concreting",
+    "landscaping",
+    "general",
+    "business",
+]
 
 
 def _generate_preview_module() -> object:
@@ -633,3 +641,163 @@ def test_generate_preview_db_insert_failure_does_not_enqueue(
         assert queue.jobs == []
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Template routing for non-trade businesses
+#
+# general.html is named "general" but is a trades site start to finish: its
+# <title> says "Local Trades & Services" and its body promises "Fully
+# Licensed", "Licensed & Insured" and "Free Quotes". Falling back to it for
+# every non-trade lead meant a cafe was emailed a licensed-tradesman website
+# as its personalised demo.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "lead",
+    [
+        _lead(industry="Cafe", keywords="coffee"),
+        _lead(industry="Finance & Accounting", keywords="accountant"),
+        _lead(industry="Legal Services", keywords="solicitor"),
+        _lead(industry="School", keywords=""),
+        _lead(industry="Retail", keywords="gift shop"),
+        _lead(industry="", keywords=""),
+    ],
+)
+def test_non_trade_leads_fall_back_to_the_neutral_business_template(
+    lead: dict[str, object],
+) -> None:
+    module = _generate_preview_module()
+
+    assert module.select_template_key(lead) == "business"
+
+
+@pytest.mark.parametrize(
+    ("lead", "expected"),
+    [
+        (_lead(industry="Plumbing"), "plumbing"),
+        (_lead(industry="Electrical Contractors"), "electrical"),
+        (_lead(industry="Air Conditioning"), "hvac"),
+        (_lead(industry="Concrete Driveways"), "concreting"),
+        (_lead(industry="Landscaping"), "landscaping"),
+        (_lead(industry="Builder", keywords="renovations"), "general"),
+        (_lead(industry="Construction & Trades", keywords=""), "general"),
+        (_lead(industry="Carpentry", keywords="carpenter"), "general"),
+        (_lead(industry="Roofing", keywords="roof restoration"), "general"),
+    ],
+)
+def test_trade_leads_still_reach_a_trade_template(
+    lead: dict[str, object], expected: str
+) -> None:
+    """Regression guard. Making `business` the fallback must not take the
+    trades templates away from actual trades."""
+    module = _generate_preview_module()
+
+    assert module.select_template_key(lead) == expected
+
+
+def test_default_tradies_vertical_does_not_force_the_trades_template() -> None:
+    """leads.vertical defaults to 'tradies' for every row in the database.
+
+    It is a per-import campaign label, not a description of the business.
+    Scanning it for the generic trades keywords would route every lead in the
+    system to general.html and make the neutral fallback unreachable, which
+    is exactly the bug this whole change exists to fix.
+    """
+    module = _generate_preview_module()
+    lead = _lead(industry="Cafe", keywords="coffee")
+    lead["vertical"] = "tradies"
+
+    assert module.select_template_key(lead) == "business"
+
+
+def test_a_specific_trade_beats_the_generic_trades_template() -> None:
+    """A plumber whose Industry cell reads "Construction" is still a plumber.
+
+    The generic trades keyword set is checked only after the five specific
+    trades, in every field, so adding "construction" to it cannot steal a
+    lead that a specific template matches.
+    """
+    module = _generate_preview_module()
+
+    assert module.select_template_key(_lead(industry="Construction", keywords="plumber")) == (
+        "plumbing"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Conditional blocks: an empty field must not leave an empty row on the page
+# ---------------------------------------------------------------------------
+
+
+def test_phone_block_is_removed_when_the_lead_has_no_phone() -> None:
+    """54.2% of the Australian list has no phone number. Rendering the block
+    anyway produces a contact list with an empty clickable "tel:" row on the
+    page the prospect is being asked to judge."""
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        '<ul>{{#IF_PHONE}}<li><a href="tel:{{PHONE}}">{{PHONE}}</a></li>{{/IF_PHONE}}'
+        '<li>{{EMAIL}}</li></ul>',
+        lead=_lead(phone=""),
+        personalisation=_personalisation(),
+    )
+
+    assert "tel:" not in html
+    assert "<li>" in html
+    assert "{{" not in html
+
+
+def test_phone_block_is_kept_when_the_lead_has_a_phone() -> None:
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        '<ul>{{#IF_PHONE}}<li><a href="tel:{{PHONE}}">{{PHONE}}</a></li>{{/IF_PHONE}}</ul>',
+        lead=_lead(phone="+61400000001"),
+        personalisation=_personalisation(),
+    )
+
+    assert 'href="tel:+61400000001"' in html
+    assert ">+61400000001<" in html
+    assert "{{" not in html
+
+
+def test_whitespace_only_phone_removes_the_block() -> None:
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{#IF_PHONE}}<li>{{PHONE}}</li>{{/IF_PHONE}}",
+        lead=_lead(phone="   "),
+        personalisation=_personalisation(),
+    )
+
+    assert html.strip() == ""
+
+
+def test_unknown_conditional_token_dead_letters_instead_of_rendering() -> None:
+    """A typo in a conditional name must not silently keep or drop a block.
+
+    Silently keeping it would ship a page asserting something about a field
+    nobody supplied; silently dropping it would remove a section nobody
+    noticed was gone.
+    """
+    module = _generate_preview_module()
+
+    with pytest.raises(module.DeadLetterError, match="unknown conditional"):
+        module.render_preview_html(
+            "{{#IF_FAX}}<li>{{PHONE}}</li>{{/IF_FAX}}",
+            lead=_lead(),
+            personalisation=_personalisation(),
+        )
+
+
+def test_unclosed_conditional_block_dead_letters() -> None:
+    module = _generate_preview_module()
+
+    with pytest.raises(module.DeadLetterError, match="unbalanced conditional"):
+        module.render_preview_html(
+            "{{#IF_PHONE}}<li>{{PHONE}}</li>",
+            lead=_lead(phone="+61400000001"),
+            personalisation=_personalisation(),
+        )

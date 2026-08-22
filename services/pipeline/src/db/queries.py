@@ -1677,6 +1677,46 @@ async def get_enrichment_by_lead_id(
     return row
 
 
+async def list_leads_for_shadow_scoring(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+    limit: int,
+) -> list[dict[str, object]]:
+    """Read enriched leads for an offline scoring run. Read-only by design.
+
+    Used by workers.shadow_qualify to measure what the rewritten scoring
+    prompt does to the score distribution, before the threshold that was
+    calibrated against the old prompt is trusted with the new one. Nothing
+    here writes, and the caller is handed no way to write either.
+    """
+    rows = await connection.fetch(
+        """
+        SELECT l.id AS lead_id, l.tenant_id,
+               l.business_name, l.email, l.email_status, l.phone,
+               l.city, l.state, l.website_url, l.industry, l.keywords,
+               e.has_site, e.is_reachable, e.weaknesses
+        FROM leads l
+        JOIN enrichments e
+          ON e.lead_id = l.id
+         AND l.tenant_id = e.tenant_id
+        WHERE l.tenant_id = $1
+          AND l.is_deleted = FALSE
+        ORDER BY l.imported_at DESC
+        LIMIT $2
+        """,
+        tenant_id,
+        limit,
+    )
+    decoded: list[dict[str, object]] = []
+    for raw_row in rows:
+        row = dict(cast(Mapping[str, object], raw_row))
+        if "weaknesses" in row:
+            row["weaknesses"] = _decode_jsonb(row["weaknesses"])
+        decoded.append(row)
+    return decoded
+
+
 async def insert_qualification(
     connection: DatabaseConnection,
     q: QualificationInsert,

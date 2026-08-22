@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow, noarchive">
-<title>{{BUSINESS_NAME}} — Local Trades & Services, {{CITY}}</title>
+<title>{{BUSINESS_NAME}}, {{CITY}}</title>
 <style>
 /* ─── RESET & BASE ─────────────────────────────────────────── */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; font-size: 16px; }
 body {
   font-family: 'Georgia', 'Times New Roman', serif;
-  background: #f5f8fc;
-  color: #0d1e35;
+  background: #f7f6f4;
+  color: #1a1208;
   overflow-x: hidden;
   cursor: none;
 }
@@ -28,40 +28,40 @@ body::before {
   content: '';
   position: fixed; inset: 0;
   background:
-    radial-gradient(ellipse 80% 60% at 15% 10%, rgba(27,79,138,0.04) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 50% at 85% 90%, rgba(74,130,196,0.03) 0%, transparent 55%);
+    radial-gradient(ellipse 80% 60% at 15% 10%, rgba(212,130,10,0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 85% 90%, rgba(232,168,48,0.03) 0%, transparent 55%);
   pointer-events: none; z-index: 0;
 }
 
 /* ─── CUSTOM CURSOR ─────────────────────────────────────────── */
 .cursor {
-  width: 10px; height: 10px; background: #1b4f8a;
+  width: 10px; height: 10px; background: #d4820a;
   border-radius: 50%; position: fixed; top: 0; left: 0;
   pointer-events: none; z-index: 9999;
   transition: transform 0.15s ease, opacity 0.2s ease;
   transform: translate(-50%, -50%);
 }
 .cursor-ring {
-  width: 36px; height: 36px; border: 1px solid rgba(27,79,138,0.45);
+  width: 36px; height: 36px; border: 1px solid rgba(212,130,10,0.45);
   border-radius: 50%; position: fixed; top: 0; left: 0;
   pointer-events: none; z-index: 9998; transform: translate(-50%, -50%);
   transition: transform 0.4s cubic-bezier(0.23,1,0.32,1), width 0.3s, height 0.3s, border-color 0.3s;
 }
 body:has(a:hover) .cursor-ring, body:has(button:hover) .cursor-ring {
-  width: 60px; height: 60px; border-color: rgba(27,79,138,0.85);
+  width: 60px; height: 60px; border-color: rgba(212,130,10,0.85);
 }
 
 /* ─── CSS VARIABLES ─────────────────────────────────────────── */
 :root {
-  --accent:       #1b4f8a;
-  --accent-light: #4a82c4;
-  --dark:         #0d1e35;
-  --dark-2:       #f5f8fc;
-  --dark-3:       #eaf0f8;
-  --stone:        #c8d8ea;
-  --text:         #0d1e35;
-  --text-muted:   #3d5470;
-  --text-dim:     #8aa0b8;
+  --accent:       #d4820a;
+  --accent-light: #e8a830;
+  --dark:         #1a1208;
+  --dark-2:       #f7f6f4;
+  --dark-3:       #f0ede8;
+  --stone:        #e0d5c2;
+  --text:         #1a1208;
+  --text-muted:   #5a4a2e;
+  --text-dim:     #9a8060;
   --white:        #ffffff;
   --easing:       cubic-bezier(0.23, 1, 0.32, 1);
 }
@@ -91,18 +91,18 @@ p { line-height: 1.75; }
 
 /* ─── LOADER ────────────────────────────────────────────────── */
 #loader {
-  position: fixed; inset: 0; background: #f5f8fc; z-index: 10000;
+  position: fixed; inset: 0; background: #f7f6f4; z-index: 10000;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2rem;
   transition: opacity 0.8s var(--easing), visibility 0.8s;
 }
 #loader.hidden { opacity: 0; visibility: hidden; }
 .loader-logo {
   font-size: 1.5rem; letter-spacing: 0.35em; text-transform: uppercase;
-  color: #3d5470; font-family: 'Helvetica Neue', sans-serif; font-weight: 300;
+  color: #5a4a2e; font-family: 'Helvetica Neue', sans-serif; font-weight: 300;
   animation: loaderPulse 1.5s ease-in-out infinite;
 }
 @keyframes loaderPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
-.loader-bar { width: 200px; height: 1px; background: #c8d8ea; position: relative; overflow: hidden; }
+.loader-bar { width: 200px; height: 1px; background: #e0d5c2; position: relative; overflow: hidden; }
 .loader-bar::after {
   content: ''; position: absolute; inset: 0; background: var(--accent);
   transform: translateX(-100%); animation: loaderFill 2s var(--easing) forwards;
@@ -117,8 +117,8 @@ nav {
   transition: background 0.5s ease, padding 0.5s ease;
 }
 nav.scrolled {
-  background: rgba(245,248,252,0.95); backdrop-filter: blur(20px);
-  padding: 1.2rem 4rem; border-bottom: 1px solid rgba(27,79,138,0.12);
+  background: rgba(247,246,244,0.95); backdrop-filter: blur(20px);
+  padding: 1.2rem 4rem; border-bottom: 1px solid rgba(212,130,10,0.1);
 }
 .nav-logo { font-family: 'Helvetica Neue', sans-serif; font-size: 0.8rem; letter-spacing: 0.3em; text-transform: uppercase; color: var(--dark); text-decoration: none; font-weight: 300; }
 .nav-logo span { color: var(--accent-light); }
@@ -140,8 +140,8 @@ nav.scrolled {
 .hero-bg {
   position: absolute; inset: 0;
   background:
-    linear-gradient(to bottom, rgba(8,12,20,0.5) 0%, rgba(8,12,20,0.15) 40%, rgba(8,12,20,0.82) 100%),
-    url('/assets/previews/plumbing/hero.jpg') center/cover no-repeat;
+    linear-gradient(to bottom, rgba(8,5,2,0.5) 0%, rgba(8,5,2,0.12) 40%, rgba(8,5,2,0.84) 100%),
+    url('/assets/previews/business/hero.jpg') center/cover no-repeat;
   transform: scale(1.05); animation: heroScale 12s var(--easing) forwards;
 }
 @keyframes heroScale { to { transform: scale(1); } }
@@ -156,7 +156,7 @@ nav.scrolled {
 .hero-arrow:hover { gap: 1.2rem; border-color: rgba(255,255,255,0.9); color: #ffffff; }
 
 .hero-scroll-indicator { position: absolute; right: 4rem; bottom: 6rem; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; opacity: 0; animation: fadeIn 1s ease 1.5s forwards; }
-.hero-scroll-indicator span { font-family: 'Helvetica Neue', sans-serif; font-size: 0.6rem; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(160,195,230,0.6); writing-mode: vertical-rl; }
+.hero-scroll-indicator span { font-family: 'Helvetica Neue', sans-serif; font-size: 0.6rem; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(180,200,220,0.7); writing-mode: vertical-rl; }
 .scroll-line { width: 1px; height: 60px; background: linear-gradient(to bottom, var(--accent-light), transparent); animation: scrollPulse 2s ease-in-out infinite; }
 @keyframes scrollPulse { 0%, 100% { opacity: 0.3; transform: scaleY(0.8); } 50% { opacity: 1; transform: scaleY(1); } }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
@@ -164,31 +164,31 @@ nav.scrolled {
 
 /* ─── MARQUEE STRIP ─────────────────────────────────────────── */
 .marquee-strip {
-  background: linear-gradient(90deg, #0f2450 0%, #1a3a6e 50%, #0f2450 100%);
-  border-top: 1px solid rgba(74,143,232,0.2); border-bottom: 1px solid rgba(74,143,232,0.2);
+  background: linear-gradient(90deg, #1a1005 0%, #2e1e08 50%, #1a1005 100%);
+  border-top: 1px solid rgba(232,168,48,0.2); border-bottom: 1px solid rgba(232,168,48,0.2);
   padding: 0.85rem 0; overflow: hidden; white-space: nowrap;
 }
 .marquee-track { display: inline-flex; animation: marquee 30s linear infinite; }
-.marquee-track span { font-family: 'Helvetica Neue', sans-serif; font-size: 0.65rem; letter-spacing: 0.25em; text-transform: uppercase; color: rgba(200,220,240,0.9); padding: 0 2.5rem; font-weight: 400; }
+.marquee-track span { font-family: 'Helvetica Neue', sans-serif; font-size: 0.65rem; letter-spacing: 0.25em; text-transform: uppercase; color: rgba(220,195,155,0.9); padding: 0 2.5rem; font-weight: 400; }
 .marquee-track .dot { color: rgba(232,168,48,0.35); padding: 0; }
 @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
 /* ─── SECTION: ABOUT ────────────────────────────────────────── */
 #about {
   padding: 9rem 4rem; display: grid; grid-template-columns: 1fr 1fr; gap: 6rem;
-  align-items: center; max-width: 1300px; margin: 0 auto; background: #f5f8fc;
+  align-items: center; max-width: 1300px; margin: 0 auto; background: #f7f6f4;
 }
 .about-left h2 { font-size: clamp(2rem, 4vw, 3.8rem); color: var(--dark); margin-bottom: 2rem; }
 .about-left h2 span { color: var(--accent); }
 .about-left p { font-family: 'Helvetica Neue', sans-serif; color: var(--text-muted); font-size: 0.9rem; font-weight: 300; line-height: 1.9; max-width: 440px; }
 .about-links { display: flex; gap: 2rem; margin-top: 2.5rem; }
-.btn-outline { display: inline-flex; align-items: center; gap: 0.6rem; font-family: 'Helvetica Neue', sans-serif; font-size: 0.72rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); text-decoration: none; border: 1px solid rgba(27,79,138,0.1); padding: 0.7rem 1.4rem; font-weight: 400; transition: background 0.3s, border-color 0.3s, color 0.3s; }
+.btn-outline { display: inline-flex; align-items: center; gap: 0.6rem; font-family: 'Helvetica Neue', sans-serif; font-size: 0.72rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); text-decoration: none; border: 1px solid rgba(212,130,10,0.3); padding: 0.7rem 1.4rem; font-weight: 400; transition: background 0.3s, border-color 0.3s, color 0.3s; }
 .btn-outline:hover { background: var(--accent); color: #ffffff; border-color: var(--accent); }
 .about-right { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
-.stat-card { background: #ffffff; border: 1px solid rgba(27,79,138,0.12); padding: 2rem 1.5rem; position: relative; overflow: hidden; transition: border-color 0.4s; }
+.stat-card { background: #ffffff; border: 1px solid rgba(212,130,10,0.1); padding: 2rem 1.5rem; position: relative; overflow: hidden; transition: border-color 0.4s; }
 .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform 0.5s var(--easing); }
 .stat-card:hover::before { transform: scaleX(1); }
-.stat-card:hover { border-color: rgba(27,79,138,0.3); }
+.stat-card:hover { border-color: rgba(212,130,10,0.25); }
 .stat-number { font-size: clamp(2rem, 3.5vw, 3rem); color: var(--accent); letter-spacing: -0.04em; display: block; margin-bottom: 0.3rem; }
 .stat-label { font-family: 'Helvetica Neue', sans-serif; font-size: 0.72rem; letter-spacing: 0.1em; color: var(--text-dim); text-transform: uppercase; font-weight: 300; }
 
@@ -205,12 +205,12 @@ nav.scrolled {
 .section-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 4rem; flex-wrap: wrap; gap: 1.5rem; }
 .section-header h2 { font-size: clamp(2rem, 4vw, 3.5rem); color: var(--dark); max-width: 500px; }
 .section-header p { font-family: 'Helvetica Neue', sans-serif; color: var(--text-muted); font-size: 0.85rem; font-weight: 300; max-width: 380px; line-height: 1.8; }
-.services-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid rgba(27,79,138,0.1); }
-.service-card { padding: 3rem 2.5rem; border-right: 1px solid rgba(74,143,232,0.1); border-bottom: 1px solid rgba(27,79,138,0.12); position: relative; overflow: hidden; transition: background 0.4s; cursor: default; background: #ffffff; }
+.services-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid rgba(212,130,10,0.1); }
+.service-card { padding: 3rem 2.5rem; border-right: 1px solid rgba(212,130,10,0.08); border-bottom: 1px solid rgba(212,130,10,0.1); position: relative; overflow: hidden; transition: background 0.4s; cursor: default; background: #ffffff; }
 .service-card:nth-child(3n) { border-right: none; }
 .service-card:nth-last-child(-n+3) { border-bottom: none; }
-.service-card::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(27,79,138,0.05) 0%, transparent 60%); opacity: 0; transition: opacity 0.4s; }
-.service-card:hover { background: rgba(27,79,138,0.04); }
+.service-card::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(212,130,10,0.04) 0%, transparent 60%); opacity: 0; transition: opacity 0.4s; }
+.service-card:hover { background: rgba(212,130,10,0.025); }
 .service-card:hover::after { opacity: 1; }
 .service-num { font-family: 'Helvetica Neue', sans-serif; font-size: 0.65rem; letter-spacing: 0.2em; color: var(--accent); display: block; margin-bottom: 2rem; opacity: 0.7; }
 .service-icon { width: 36px; height: 36px; margin-bottom: 1.5rem; opacity: 0.65; transition: opacity 0.3s; }
@@ -225,7 +225,7 @@ nav.scrolled {
 .projects-header { padding: 0 4rem; display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 4rem; flex-wrap: wrap; gap: 1.5rem; }
 .projects-header h2 { font-size: clamp(2rem, 4vw, 3.5rem); color: var(--dark); }
 .proj-controls { display: flex; gap: 0.75rem; align-items: center; }
-.proj-btn { width: 48px; height: 48px; border: 1px solid rgba(27,79,138,0.3); background: none; color: var(--accent); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.3s, border-color 0.3s; font-size: 1.1rem; }
+.proj-btn { width: 48px; height: 48px; border: 1px solid rgba(212,130,10,0.25); background: none; color: var(--accent); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.3s, border-color 0.3s; font-size: 1.1rem; }
 .proj-btn:hover { background: var(--accent); color: #ffffff; border-color: var(--accent); }
 .projects-track-wrap { overflow: hidden; }
 .projects-track { display: flex; gap: 1.5rem; padding: 0 4rem; transition: transform 0.7s var(--easing); will-change: transform; }
@@ -241,14 +241,14 @@ nav.scrolled {
 
 /* ─── SECTION: QUOTE ─────────────────────────────────────────── */
 #quote { padding: 9rem 4rem; background: var(--dark); text-align: center; position: relative; overflow: hidden; }
-#quote::before { content: '"'; position: absolute; top: -4rem; left: 50%; transform: translateX(-50%); font-size: 25rem; color: rgba(74,130,196,0.12); line-height: 1; pointer-events: none; font-family: Georgia, serif; }
+#quote::before { content: '"'; position: absolute; top: -4rem; left: 50%; transform: translateX(-50%); font-size: 25rem; color: rgba(232,168,48,0.08); line-height: 1; pointer-events: none; font-family: Georgia, serif; }
 .quote-text { font-size: clamp(1.6rem, 3.5vw, 3rem); color: #ffffff; max-width: 900px; margin: 0 auto; line-height: 1.25; letter-spacing: -0.02em; position: relative; }
 .quote-text em { color: var(--accent-light); font-style: italic; }
 .quote-author { margin-top: 2.5rem; font-family: 'Helvetica Neue', sans-serif; font-size: 0.72rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-dim); font-weight: 300; }
 .quote-line { width: 40px; height: 1px; background: var(--accent-light); margin: 1.5rem auto 0; opacity: 0.5; }
 
 /* ─── SECTION: SECTORS ──────────────────────────────────────── */
-#sectors { padding: 9rem 4rem; background: #f5f8fc; }
+#sectors { padding: 9rem 4rem; background: #f7f6f4; }
 .sectors-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-top: 4rem; }
 .sector-card { position: relative; overflow: hidden; aspect-ratio: 3/4; cursor: pointer; }
 .sector-card img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.7s var(--easing), filter 0.5s; filter: brightness(0.5) saturate(0.65); }
@@ -256,27 +256,27 @@ nav.scrolled {
 .sector-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(8,5,2,0.92) 0%, transparent 55%); }
 .sector-content { position: absolute; bottom: 0; left: 0; right: 0; padding: 2rem 1.5rem; }
 .sector-content h3 { font-size: 1.2rem; color: var(--white); margin-bottom: 0.4rem; }
-.sector-content p { font-family: 'Helvetica Neue', sans-serif; font-size: 0.75rem; color: rgba(200,200,200,0.85); font-weight: 300; opacity: 0; transform: translateY(10px); transition: opacity 0.4s, transform 0.4s; }
+.sector-content p { font-family: 'Helvetica Neue', sans-serif; font-size: 0.75rem; color: rgba(220,195,155,0.85); font-weight: 300; opacity: 0; transform: translateY(10px); transition: opacity 0.4s, transform 0.4s; }
 .sector-card:hover .sector-content p { opacity: 1; transform: translateY(0); }
 
 /* ─── SECTION: PROCESS ──────────────────────────────────────── */
 #process { padding: 9rem 4rem; background: #ffffff; }
-.process-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 4rem; border-top: 1px solid rgba(27,79,138,0.12); }
-.process-step { padding: 3rem 2rem 3rem 0; border-right: 1px solid rgba(27,79,138,0.08); position: relative; }
+.process-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 4rem; border-top: 1px solid rgba(212,130,10,0.1); }
+.process-step { padding: 3rem 2rem 3rem 0; border-right: 1px solid rgba(212,130,10,0.07); position: relative; }
 .process-step:last-child { border-right: none; padding-right: 0; }
-.step-num { font-size: 4rem; color: rgba(27,79,138,0.1); letter-spacing: -0.04em; display: block; line-height: 1; margin-bottom: 1.5rem; }
+.step-num { font-size: 4rem; color: rgba(212,130,10,0.08); letter-spacing: -0.04em; display: block; line-height: 1; margin-bottom: 1.5rem; }
 .process-step h3 { font-size: 1.1rem; color: var(--dark); margin-bottom: 0.75rem; }
 .process-step p { font-family: 'Helvetica Neue', sans-serif; font-size: 0.8rem; color: var(--text-muted); font-weight: 300; line-height: 1.8; }
 
 /* ─── SECTION: TESTIMONIALS ─────────────────────────────────── */
-#testimonials { padding: 9rem 4rem; background: #eaf0f8; }
+#testimonials { padding: 9rem 4rem; background: #f0ede8; }
 .testimonials-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; margin-top: 4rem; }
-.testimonial-card { padding: 2.5rem; background: #ffffff; border: 1px solid rgba(27,79,138,0.1); position: relative; transition: border-color 0.4s, transform 0.4s; }
-.testimonial-card:hover { border-color: rgba(27,79,138,0.3); transform: translateY(-4px); }
-.testimonial-card::before { content: '"'; position: absolute; top: 1.5rem; right: 2rem; font-size: 5rem; color: rgba(27,79,138,0.08); line-height: 1; font-family: Georgia, serif; }
+.testimonial-card { padding: 2.5rem; background: #ffffff; border: 1px solid rgba(212,130,10,0.08); position: relative; transition: border-color 0.4s, transform 0.4s; }
+.testimonial-card:hover { border-color: rgba(212,130,10,0.25); transform: translateY(-4px); }
+.testimonial-card::before { content: '"'; position: absolute; top: 1.5rem; right: 2rem; font-size: 5rem; color: rgba(212,130,10,0.07); line-height: 1; font-family: Georgia, serif; }
 .testimonial-card p { font-size: 0.9rem; color: var(--dark); line-height: 1.8; margin-bottom: 2rem; font-style: italic; }
 .testimonial-author { display: flex; align-items: center; gap: 1rem; }
-.author-avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--stone); border: 1px solid rgba(74,143,232,0.2); overflow: hidden; flex-shrink: 0; }
+.author-avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--stone); border: 1px solid rgba(212,130,10,0.15); overflow: hidden; flex-shrink: 0; }
 .author-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .author-name { font-family: 'Helvetica Neue', sans-serif; font-size: 0.78rem; color: var(--dark); letter-spacing: 0.05em; display: block; }
 .author-role { font-family: 'Helvetica Neue', sans-serif; font-size: 0.68rem; color: var(--text-dim); letter-spacing: 0.08em; font-weight: 300; display: block; }
@@ -284,30 +284,30 @@ nav.scrolled {
 /* ─── CTA BAND ──────────────────────────────────────────────── */
 #cta-band {
   padding: 7rem 4rem;
-  background: linear-gradient(135deg, #1a3a6e 0%, #0f2450 40%, #0a1a3e 100%);
-  border-top: 1px solid rgba(74,143,232,0.25); border-bottom: 1px solid rgba(74,143,232,0.15);
+  background: linear-gradient(135deg, #2e1e08 0%, #1a1208 40%, #080c16 100%);
+  border-top: 1px solid rgba(232,168,48,0.2); border-bottom: 1px solid rgba(232,168,48,0.12);
   position: relative; overflow: hidden;
   display: flex; align-items: center; justify-content: space-between; gap: 3rem; flex-wrap: wrap;
 }
-.cta-letter { position: absolute; right: -2rem; font-size: 28rem; color: rgba(74,143,232,0.06); font-family: Georgia, serif; line-height: 1; top: 50%; transform: translateY(-50%); pointer-events: none; user-select: none; }
+.cta-letter { position: absolute; right: -2rem; font-size: 28rem; color: rgba(232,168,48,0.05); font-family: Georgia, serif; line-height: 1; top: 50%; transform: translateY(-50%); pointer-events: none; user-select: none; }
 .cta-band-text h2 { font-size: clamp(2rem, 4vw, 3.5rem); color: #eef2f8; letter-spacing: -0.03em; max-width: 600px; }
-.cta-band-text p { font-family: 'Helvetica Neue', sans-serif; font-size: 0.85rem; color: rgba(138,184,245,0.75); font-weight: 300; margin-top: 0.75rem; max-width: 400px; line-height: 1.7; }
+.cta-band-text p { font-family: 'Helvetica Neue', sans-serif; font-size: 0.85rem; color: rgba(200,165,100,0.75); font-weight: 300; margin-top: 0.75rem; max-width: 400px; line-height: 1.7; }
 .btn-dark { display: inline-flex; align-items: center; gap: 0.75rem; font-family: 'Helvetica Neue', sans-serif; font-size: 0.75rem; letter-spacing: 0.2em; text-transform: uppercase; color: #ffffff; background: var(--accent); text-decoration: none; padding: 1.1rem 2.5rem; font-weight: 400; white-space: nowrap; transition: background 0.3s; }
 .btn-dark:hover { background: var(--accent-light); }
 
 /* ─── FOOTER ────────────────────────────────────────────────── */
-footer { background: #0d1e35; border-top: 1px solid rgba(74,130,196,0.12); padding: 5rem 4rem 3rem; }
+footer { background: #1a1208; border-top: 1px solid rgba(232,168,48,0.1); padding: 5rem 4rem 3rem; }
 .footer-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 4rem; margin-bottom: 4rem; }
 .footer-brand .nav-logo { font-size: 0.9rem; display: block; margin-bottom: 1.25rem; color: #ffffff !important; }
-.footer-brand p { font-family: 'Helvetica Neue', sans-serif; font-size: 0.8rem; color: rgba(138,168,200,0.75); font-weight: 300; line-height: 1.8; max-width: 280px; }
+.footer-brand p { font-family: 'Helvetica Neue', sans-serif; font-size: 0.8rem; color: rgba(180,150,100,0.75); font-weight: 300; line-height: 1.8; max-width: 280px; }
 .footer-socials { display: flex; gap: 1rem; margin-top: 1.75rem; }
-.social-link { width: 38px; height: 38px; border: 1px solid rgba(74,130,196,0.25); border-radius: 2px; display: flex; align-items: center; justify-content: center; color: rgba(138,168,200,0.65); text-decoration: none; transition: border-color 0.3s, color 0.3s, background 0.3s; }
-.social-link:hover { border-color: rgba(74,130,196,0.7); color: rgba(200,220,240,0.9); background: rgba(74,130,196,0.08); }
+.social-link { width: 38px; height: 38px; border: 1px solid rgba(232,168,48,0.22); border-radius: 2px; display: flex; align-items: center; justify-content: center; color: rgba(180,150,100,0.6); text-decoration: none; transition: border-color 0.3s, color 0.3s, background 0.3s; }
+.social-link:hover { border-color: rgba(232,168,48,0.65); color: rgba(232,168,48,0.9); background: rgba(232,168,48,0.08); }
 .footer-col h4 { font-family: 'Helvetica Neue', sans-serif; font-size: 0.65rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--accent-light); margin-bottom: 1.5rem; font-weight: 400; }
 .footer-col ul { list-style: none; display: flex; flex-direction: column; gap: 0.75rem; }
-.footer-col ul a { font-family: 'Helvetica Neue', sans-serif; font-size: 0.8rem; color: rgba(138,168,200,0.8); text-decoration: none; font-weight: 300; transition: color 0.3s; }
+.footer-col ul a { font-family: 'Helvetica Neue', sans-serif; font-size: 0.8rem; color: rgba(180,150,100,0.8); text-decoration: none; font-weight: 300; transition: color 0.3s; }
 .footer-col ul a:hover { color: var(--accent-light); }
-.footer-bottom { border-top: 1px solid rgba(74,130,196,0.1); padding-top: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+.footer-bottom { border-top: 1px solid rgba(232,168,48,0.08); padding-top: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
 .footer-bottom p { font-family: 'Helvetica Neue', sans-serif; font-size: 0.68rem; color: rgba(180,150,100,0.45); font-weight: 300; letter-spacing: 0.08em; }
 
 /* ─── RESPONSIVE ────────────────────────────────────────────── */
@@ -317,8 +317,8 @@ footer { background: #0d1e35; border-top: 1px solid rgba(74,130,196,0.12); paddi
   #about { grid-template-columns: 1fr; gap: 4rem; padding: 7rem 2rem; }
   .services-grid { grid-template-columns: repeat(2, 1fr); }
   .service-card:nth-child(2n) { border-right: none; }
-  .service-card:nth-child(3n) { border-right: 1px solid rgba(74,143,232,0.1); }
-  .service-card:nth-last-child(-n+3) { border-bottom: 1px solid rgba(27,79,138,0.12); }
+  .service-card:nth-child(3n) { border-right: 1px solid rgba(212,130,10,0.08); }
+  .service-card:nth-last-child(-n+3) { border-bottom: 1px solid rgba(212,130,10,0.1); }
   .service-card:nth-last-child(-n+2) { border-bottom: none; }
   .sectors-grid { grid-template-columns: repeat(2, 1fr); }
   .process-steps { grid-template-columns: repeat(2, 1fr); }
@@ -338,7 +338,7 @@ footer { background: #0d1e35; border-top: 1px solid rgba(74,130,196,0.12); paddi
   .service-card { border-right: none !important; } .service-card:last-child { border-bottom: none; }
   .sectors-grid { grid-template-columns: 1fr 1fr; }
   .process-steps { grid-template-columns: 1fr; }
-  .process-step { border-right: none; padding: 2rem 0; border-bottom: 1px solid rgba(27,79,138,0.08); }
+  .process-step { border-right: none; padding: 2rem 0; border-bottom: 1px solid rgba(212,130,10,0.07); }
   .process-step:last-child { border-bottom: none; }
   #cta-band { padding: 5rem 2rem; flex-direction: column; align-items: flex-start; }
   footer { padding: 4rem 2rem 2.5rem; }
@@ -375,7 +375,7 @@ nav.scrolled .nav-logo { color: #1a1208; }
   <a href="#about">About</a>
   <a href="#services">Services</a>
   <a href="#projects">Projects</a>
-  <a href="#sectors">Sectors</a>
+  <a href="#sectors">Who We Help</a>
   <a href="#cta-band">Contact</a>
 </div>
 
@@ -385,9 +385,9 @@ nav.scrolled .nav-logo { color: #1a1208; }
     <li><a href="#about">About</a></li>
     <li><a href="#services">Services</a></li>
     <li><a href="#projects">Projects</a></li>
-    <li><a href="#sectors">Sectors</a></li>
+    <li><a href="#sectors">Who We Help</a></li>
   </ul>
-  <a href="#cta-band" class="nav-cta">Get a Free Quote</a>
+  <a href="#cta-band" class="nav-cta">Get in Touch</a>
   <div class="hamburger" id="hamburger" onclick="toggleMenu()">
     <span></span><span></span><span></span>
   </div>
@@ -398,13 +398,13 @@ nav.scrolled .nav-logo { color: #1a1208; }
   <div class="hero-bg"></div>
   <div class="hero-content">
     <div class="hero-eyebrow">
-      <span class="label">Licensed Plumbers — {{CITY}}, {{STATE}}</span>
+      <span class="label">{{BUSINESS_NAME}} · {{CITY}}, {{STATE}}</span>
     </div>
     <h1 class="hero-h1">
-      Where craft meets<br><em>flow</em>
+      Built on doing it<br><em>properly</em>
     </h1>
     <div class="hero-sub sans">
-      <a href="#about" class="hero-arrow">Discover our work <span>→</span></a>
+      <a href="#about" class="hero-arrow">See what we do <span>→</span></a>
       <span style="color:rgba(200,175,130,0.6)">{{CITY}} · {{STATE}} · Surrounds</span>
     </div>
   </div>
@@ -417,19 +417,19 @@ nav.scrolled .nav-logo { color: #1a1208; }
 <!-- MARQUEE -->
 <div class="marquee-strip">
   <div class="marquee-track">
-    <span>Licensed Plumber</span><span class="dot">·</span>
-    <span>Bathroom Renovations</span><span class="dot">·</span>
-    <span>Hot Water Systems</span><span class="dot">·</span>
-    <span>Drainage Solutions</span><span class="dot">·</span>
-    <span>Heritage Restoration</span><span class="dot">·</span>
-    <span>Licensed &amp; Insured</span><span class="dot">·</span>
+    <span>Locally Run</span><span class="dot">·</span>
+    <span>Locally Owned</span><span class="dot">·</span>
+    <span>Quality Guaranteed</span><span class="dot">·</span>
+    <span>Straight Answers</span><span class="dot">·</span>
+    <span>Quick to Respond</span><span class="dot">·</span>
+    <span>Here When You Need Us</span><span class="dot">·</span>
     <span>Serving {{CITY}} &amp; Surrounds</span><span class="dot">·</span>
-    <span>Licensed Plumber</span><span class="dot">·</span>
-    <span>Bathroom Renovations</span><span class="dot">·</span>
-    <span>Hot Water Systems</span><span class="dot">·</span>
-    <span>Drainage Solutions</span><span class="dot">·</span>
-    <span>Heritage Restoration</span><span class="dot">·</span>
-    <span>Licensed &amp; Insured</span><span class="dot">·</span>
+    <span>Locally Run</span><span class="dot">·</span>
+    <span>Locally Owned</span><span class="dot">·</span>
+    <span>Quality Guaranteed</span><span class="dot">·</span>
+    <span>Straight Answers</span><span class="dot">·</span>
+    <span>Quick to Respond</span><span class="dot">·</span>
+    <span>Here When You Need Us</span><span class="dot">·</span>
     <span>Serving {{CITY}} &amp; Surrounds</span><span class="dot">·</span>
   </div>
 </div>
@@ -438,14 +438,14 @@ nav.scrolled .nav-logo { color: #1a1208; }
 <section id="about">
   <div class="about-left reveal">
     <span class="label" style="display:block;margin-bottom:1.25rem;">About {{BUSINESS_NAME}}</span>
-    <h2>Your Local Plumbing Experts<br>in <span>{{CITY}}</span></h2>
+    <h2>Looking After<br><span>{{CITY}}</span></h2>
     <p style="margin-top:1.5rem;">{{ABOUT_BLURB}}</p>
     <p style="margin-top:1rem;">
-      Founded in {{CITY}} in {{YEAR_FOUNDED}}, we have built a reputation for quality workmanship, honest pricing and reliable service — trusted by architects and homeowners across the region.
+      Founded in {{CITY}} in {{YEAR_FOUNDED}}, we have built our reputation on doing good work, charging fairly and being easy to deal with, whatever the size of the job.
     </p>
     <div class="about-links">
       <a href="#" class="btn-outline">Our Story →</a>
-      <a href="#cta-band" class="btn-outline">Get a Free Quote →</a>
+      <a href="#cta-band" class="btn-outline">Get in Touch →</a>
     </div>
   </div>
   <div class="about-right">
@@ -455,26 +455,26 @@ nav.scrolled .nav-logo { color: #1a1208; }
     </div>
     <div class="stat-card reveal delay-2">
       <span class="stat-number">500+</span>
-      <span class="stat-label">Jobs Completed</span>
+      <span class="stat-label">Happy Clients</span>
     </div>
     <div class="stat-card reveal delay-3">
       <span class="stat-number">100%</span>
-      <span class="stat-label">Licensed &amp; Insured</span>
+      <span class="stat-label">Locally Owned</span>
     </div>
     <div class="stat-card reveal delay-4">
       <span class="stat-number">3</span>
-      <span class="stat-label">Service Areas</span>
+      <span class="stat-label">Locations</span>
     </div>
   </div>
 </section>
 
 <!-- FULL BLEED IMAGE 1 -->
 <div class="full-bleed reveal">
-  <img src="/assets/previews/plumbing/fullbleed-1.jpg" alt="Quality workmanship" loading="lazy">
+  <img src="/assets/previews/business/fullbleed-1.jpg" alt="Our team at work" loading="lazy">
   <div class="full-bleed-overlay"></div>
   <div class="full-bleed-caption">
-    <span class="label" style="display:block;margin-bottom:0.75rem;">Delivering quality workmanship</span>
-    <p>in partnership with builders<br>and homeowners across {{CITY}}</p>
+    <span class="label" style="display:block;margin-bottom:0.75rem;">Doing it properly, every time</span>
+    <p>trusted by people and<br>businesses across {{CITY}}</p>
   </div>
 </div>
 
@@ -483,9 +483,9 @@ nav.scrolled .nav-logo { color: #1a1208; }
   <div class="section-header reveal">
     <div>
       <span class="label" style="display:block;margin-bottom:1rem;">What we do</span>
-      <h2>Our Plumbing<br>Services</h2>
+      <h2>Our Services</h2>
     </div>
-    <p class="sans">We offer the full spectrum of premium plumbing services — from initial design consultation through to final commission — delivering a seamless experience for every client in {{CITY}}.</p>
+    <p class="sans">Everything we do for clients in {{CITY}} and the surrounding area, delivered on time and done to a standard we are happy to put our name to.</p>
   </div>
   <div class="services-grid">
 
@@ -562,8 +562,8 @@ nav.scrolled .nav-logo { color: #1a1208; }
 <section id="projects">
   <div class="projects-header reveal">
     <div>
-      <span class="label" style="display:block;margin-bottom:1rem;">Featured Projects</span>
-      <h2>Where our<br>work speaks</h2>
+      <span class="label" style="display:block;margin-bottom:1rem;">Recent Work</span>
+      <h2>A few things<br>we are proud of</h2>
     </div>
     <div class="proj-controls">
       <button class="proj-btn" id="projPrev">←</button>
@@ -575,59 +575,64 @@ nav.scrolled .nav-logo { color: #1a1208; }
 
       <div class="project-slide">
         <div class="project-img-wrap">
-          <img src="/assets/previews/plumbing/project-1.jpg" alt="Luxury ensuite" loading="lazy">
+          <img src="/assets/previews/business/project-1.jpg" alt="Project" loading="lazy">
           <div class="project-img-overlay"></div>
         </div>
         <div class="project-info">
-          <span class="project-tag">Residential · {{CITY}}</span>
-          <h3>Master Ensuite — {{CITY}} Residence</h3>
-          <p>Full bathroom fitout with premium tapware and freestanding stone bath</p>
+          <span class="project-tag">Local · {{CITY}}</span>
+          <h3>A long-standing {{CITY}} client</h3>
+          <p>Everything agreed up front, delivered on time, with no surprises along the way</p>
         </div>
       </div>
+
       <div class="project-slide">
         <div class="project-img-wrap">
-          <img src="/assets/previews/plumbing/project-2.jpg" alt="Modern kitchen" loading="lazy">
+          <img src="/assets/previews/business/project-2.jpg" alt="Project" loading="lazy">
           <div class="project-img-overlay"></div>
         </div>
         <div class="project-info">
-          <span class="project-tag">New Build · {{CITY}}</span>
-          <h3>Luxury Home — Full Plumbing Package</h3>
-          <p>Multi-bathroom luxury home with hydronic underfloor heating throughout all living spaces</p>
+          <span class="project-tag">Commercial · {{CITY}}</span>
+          <h3>Growing with a {{CITY}} business</h3>
+          <p>A bigger piece of work finished ahead of schedule, with everything signed off cleanly</p>
         </div>
       </div>
+
       <div class="project-slide">
         <div class="project-img-wrap">
-          <img src="/assets/previews/plumbing/project-3.jpg" alt="Hotel bathroom" loading="lazy">
+          <img src="/assets/previews/business/project-3.jpg" alt="Project" loading="lazy">
+          <div class="project-img-overlay"></div>
+        </div>
+        <div class="project-info">
+          <span class="project-tag">Repeat client · {{CITY}}</span>
+          <h3>Detail work in the {{CITY}} suburbs</h3>
+          <p>The kind of job where the detail is the whole point, and it shows in the result</p>
+        </div>
+      </div>
+
+      <div class="project-slide">
+        <div class="project-img-wrap">
+          <img src="/assets/previews/business/project-4.jpg" alt="Project" loading="lazy">
+          <div class="project-img-overlay"></div>
+        </div>
+        <div class="project-info">
+          <span class="project-tag">Community · {{CITY}}</span>
+          <h3>Working with {{CITY}} Council</h3>
+          <p>Publicly funded work delivered to a tight budget and exactly to specification</p>
+        </div>
+      </div>
+
+      <div class="project-slide">
+        <div class="project-img-wrap">
+          <img src="/assets/previews/business/project-5.jpg" alt="Project" loading="lazy">
           <div class="project-img-overlay"></div>
         </div>
         <div class="project-info">
           <span class="project-tag">Hospitality · {{CITY}}</span>
-          <h3>Boutique Hotel — Bathroom Fitout</h3>
-          <p>Multi-suite hotel fitout delivering a consistent five-star bathroom experience across all levels</p>
+          <h3>A busy venue in {{CITY}}</h3>
+          <p>Everything handled end to end, with as little disruption to trading as possible</p>
         </div>
       </div>
-      <div class="project-slide">
-        <div class="project-img-wrap">
-          <img src="/assets/previews/plumbing/project-4.jpg" alt="Outdoor pool" loading="lazy">
-          <div class="project-img-overlay"></div>
-        </div>
-        <div class="project-info">
-          <span class="project-tag">Pool &amp; Outdoor · {{CITY}}</span>
-          <h3>{{CITY}} Estate — Pool &amp; Spa Complex</h3>
-          <p>Integrated infinity pool, spa, outdoor shower and cabana amenities with automated controls</p>
-        </div>
-      </div>
-      <div class="project-slide">
-        <div class="project-img-wrap">
-          <img src="/assets/previews/plumbing/project-5.jpg" alt="Heritage building" loading="lazy">
-          <div class="project-img-overlay"></div>
-        </div>
-        <div class="project-info">
-          <span class="project-tag">Heritage · {{CITY}}</span>
-          <h3>Heritage Terrace — Full Replumb</h3>
-          <p>Sensitive whole-home replumb preserving heritage fabric with all modern performance expectations</p>
-        </div>
-      </div>
+
     </div>
   </div>
 </section>
@@ -635,7 +640,7 @@ nav.scrolled .nav-logo { color: #1a1208; }
 <!-- QUOTE -->
 <section id="quote">
   <p class="quote-text reveal">
-    "The finest plumbing is the kind you never notice — until the moment it <em>moves</em> you."
+    "The best businesses in {{CITY}} are not the biggest. They are the ones that show up, do the work, and <em>stand behind it</em>."
   </p>
   <p class="quote-author reveal delay-2 sans">{{FOUNDER_NAME}}, Founder</p>
   <div class="quote-line reveal delay-3"></div>
@@ -645,19 +650,19 @@ nav.scrolled .nav-logo { color: #1a1208; }
 <section id="sectors">
   <div class="section-header reveal">
     <div>
-      <span class="label" style="display:block;margin-bottom:1rem;">Our Sectors</span>
-      <h2>Expertise across<br>every scale</h2>
+      <span class="label" style="display:block;margin-bottom:1rem;">Who We Help</span>
+      <h2>People we<br>work with</h2>
     </div>
-    <p class="sans">From private homes to large-scale commercial projects, {{BUSINESS_NAME}} brings the same standard of precision and care to every engagement in {{CITY}} and surrounds.</p>
+    <p class="sans">From individual customers to organisations, {{BUSINESS_NAME}} brings the same care to everyone we work with in {{CITY}} and the surrounding area.</p>
   </div>
   <div class="sectors-grid">
     <div class="sector-card reveal delay-1">
-      <img src="/assets/previews/shared/sector-residential.jpg" alt="Residential" loading="lazy">
+      <img src="/assets/previews/shared/sector-residential.jpg" alt="Individuals" loading="lazy">
       <div class="sector-overlay"></div>
       <div class="sector-content">
         <span class="label" style="margin-bottom:0.5rem;display:block;">01</span>
-        <h3>Residential</h3>
-        <p>Luxury homes, penthouses and private estates</p>
+        <h3>Individuals</h3>
+        <p>Everyday customers and households</p>
       </div>
     </div>
     <div class="sector-card reveal delay-2">
@@ -665,8 +670,8 @@ nav.scrolled .nav-logo { color: #1a1208; }
       <div class="sector-overlay"></div>
       <div class="sector-content">
         <span class="label" style="margin-bottom:0.5rem;display:block;">02</span>
-        <h3>Commercial</h3>
-        <p>Premium offices, retail and mixed-use</p>
+        <h3>Business</h3>
+        <p>Offices, shops and local operators</p>
       </div>
     </div>
     <div class="sector-card reveal delay-3">
@@ -675,16 +680,16 @@ nav.scrolled .nav-logo { color: #1a1208; }
       <div class="sector-content">
         <span class="label" style="margin-bottom:0.5rem;display:block;">03</span>
         <h3>Hospitality</h3>
-        <p>Hotels, resorts and fine dining venues</p>
+        <p>Restaurants, hotels and venues</p>
       </div>
     </div>
     <div class="sector-card reveal delay-4">
-      <img src="/assets/previews/shared/sector-civic.jpg" alt="Education &amp; Civic" loading="lazy">
+      <img src="/assets/previews/shared/sector-civic.jpg" alt="Community" loading="lazy">
       <div class="sector-overlay"></div>
       <div class="sector-content">
         <span class="label" style="margin-bottom:0.5rem;display:block;">04</span>
-        <h3>Education &amp; Civic</h3>
-        <p>Institutions, galleries and civic buildings</p>
+        <h3>Community</h3>
+        <p>Councils, schools and community groups</p>
       </div>
     </div>
   </div>
@@ -692,11 +697,11 @@ nav.scrolled .nav-logo { color: #1a1208; }
 
 <!-- FULL BLEED 2 -->
 <div class="full-bleed reveal">
-  <img src="/assets/previews/plumbing/fullbleed-2.jpg" alt="Craftsmanship" loading="lazy">
+  <img src="/assets/previews/business/fullbleed-2.jpg" alt="Our work" loading="lazy">
   <div class="full-bleed-overlay"></div>
   <div class="full-bleed-caption">
-    <span class="label" style="display:block;margin-bottom:0.75rem;">Precision above all</span>
-    <p>Every joint, every fitting,<br>every detail — considered.</p>
+    <span class="label" style="display:block;margin-bottom:0.75rem;">Built to last</span>
+    <p>Every job, every detail,<br>every time, done right.</p>
   </div>
 </div>
 
@@ -710,22 +715,22 @@ nav.scrolled .nav-logo { color: #1a1208; }
     <div class="process-step reveal delay-1">
       <span class="step-num">01</span>
       <h3>Consultation</h3>
-      <p>We meet with you to fully understand the brief — scope, materials, timeline and budget — before a single line is drawn.</p>
+      <p>We talk it through, understand exactly what you need, and give you a straight price. No hidden costs, no surprises.</p>
     </div>
     <div class="process-step reveal delay-2">
       <span class="step-num">02</span>
-      <h3>Design &amp; Specification</h3>
-      <p>Our team produces detailed plumbing plans and fixture specifications, coordinating with your wider project team to eliminate clashes before works begin.</p>
+      <h3>Planning</h3>
+      <p>We plan around your schedule, confirm every detail and timeline, and keep you informed before anything starts.</p>
     </div>
     <div class="process-step reveal delay-3">
       <span class="step-num">03</span>
-      <h3>Installation</h3>
-      <p>Our licensed plumbers install with meticulous care — clean, quiet, and always respectful of your property and neighbours.</p>
+      <h3>Delivery</h3>
+      <p>Our team turns up when we said we would, works tidily, and keeps you updated until it is finished.</p>
     </div>
     <div class="process-step reveal delay-4">
       <span class="step-num">04</span>
-      <h3>Commission &amp; Care</h3>
-      <p>We commission every system personally and remain available after handover. All work is fully guaranteed and backed by our workmanship warranty.</p>
+      <h3>Handover</h3>
+      <p>We are not finished until you are happy with it, and we stand behind everything we do.</p>
     </div>
   </div>
 </section>
@@ -740,38 +745,38 @@ nav.scrolled .nav-logo { color: #1a1208; }
   </div>
   <div class="testimonials-grid">
     <div class="testimonial-card reveal delay-1">
-      <p>"{{BUSINESS_NAME}}'s attention to detail is extraordinary. They identified a clash in our hydronic layout that would have cost us weeks — and resolved it before we even knew there was a problem."</p>
+      <p>"{{BUSINESS_NAME}}'s attention to detail is extraordinary. They spotted a problem before we did, and sorted it without being asked. Invaluable."</p>
       <div class="testimonial-author">
         <div class="author-avatar">
           <img src="/assets/previews/shared/avatar-1.jpg" alt="Catherine B." loading="lazy">
         </div>
         <div>
           <span class="author-name">Catherine B.</span>
-          <span class="author-role">Architect, {{CITY}}</span>
+          <span class="author-role">Client, {{CITY}}</span>
         </div>
       </div>
     </div>
     <div class="testimonial-card reveal delay-2">
-      <p>"We've used {{BUSINESS_NAME}} across three of our premium residential developments. Their reliability and finish quality are simply unmatched in {{CITY}}. They make every project look better."</p>
+      <p>"We have used {{BUSINESS_NAME}} three times now. Reliable, easy to deal with, and the quality is simply unmatched in {{CITY}}."</p>
       <div class="testimonial-author">
         <div class="author-avatar">
           <img src="/assets/previews/shared/avatar-2.jpg" alt="James T." loading="lazy">
         </div>
         <div>
           <span class="author-name">James T.</span>
-          <span class="author-role">Developer, {{CITY}}</span>
+          <span class="author-role">Operations Manager, {{CITY}}</span>
         </div>
       </div>
     </div>
     <div class="testimonial-card reveal delay-3">
-      <p>"Our heritage terrace required extraordinary sensitivity. {{BUSINESS_NAME}} treated it like their own home — every decision discussed, every disruption minimised. The result is genuinely beautiful."</p>
+      <p>"Ours was a job that needed real care. {{BUSINESS_NAME}} treated it as if it were their own, discussed every decision with us, and the result is genuinely excellent."</p>
       <div class="testimonial-author">
         <div class="author-avatar">
           <img src="/assets/previews/shared/avatar-3.jpg" alt="Amelia R." loading="lazy">
         </div>
         <div>
           <span class="author-name">Amelia R.</span>
-          <span class="author-role">Homeowner, {{CITY}}</span>
+          <span class="author-role">Business Owner, {{CITY}}</span>
         </div>
       </div>
     </div>
@@ -782,8 +787,8 @@ nav.scrolled .nav-logo { color: #1a1208; }
 <section id="cta-band">
   <span class="cta-letter" id="ctaLetter"></span>
   <div class="cta-band-text reveal">
-    <h2>Ready to begin your project?</h2>
-    <p class="sans">Speak with our team about your upcoming build, renovation or fitout in {{CITY}}. We respond to all enquiries within one business day.</p>
+    <h2>Ready to get started?</h2>
+    <p class="sans">Tell us what you need in {{CITY}}. We reply to every enquiry within one business day, and there is no obligation either way.</p>
   </div>
   <a href="mailto:{{EMAIL}}" class="btn-dark reveal delay-2">Begin a Conversation →</a>
 </section>
@@ -792,8 +797,8 @@ nav.scrolled .nav-logo { color: #1a1208; }
 <footer>
   <div class="footer-grid">
     <div class="footer-brand">
-      <a href="#" class="nav-logo" style="font-size:0.9rem;">{{BUSINESS_NAME}}<span style="color:#4a82c4;">.</span></a>
-      <p>Licensed plumbers proudly serving {{CITY}}, {{STATE}} and surrounding areas since {{YEAR_FOUNDED}}.</p>
+      <a href="#" class="nav-logo" style="font-size:0.9rem;">{{BUSINESS_NAME}}<span style="color:#e8a830;">.</span></a>
+      <p>Proudly serving {{CITY}}, {{STATE}} and surrounding areas since {{YEAR_FOUNDED}}.</p>
       <div class="footer-socials">
         <a href="#" class="social-link" aria-label="LinkedIn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
@@ -822,7 +827,7 @@ nav.scrolled .nav-logo { color: #1a1208; }
       <ul>
         <li><a href="#">About Us</a></li>
         <li><a href="#">Projects</a></li>
-        <li><a href="#">Sectors</a></li>
+        <li><a href="#">Who We Help</a></li>
         <li><a href="#">Careers</a></li>
         <li><a href="#">Contact</a></li>
       </ul>

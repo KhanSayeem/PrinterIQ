@@ -11,7 +11,18 @@ NGINX_PREVIEW_CONFIG_PATH = REPO_ROOT / "nginx" / "preview.presciaiq.com.conf"
 
 EXPECTED_TOKEN_COUNT = 20
 EXPECTED_TEMPLATE_IMAGE_REFS = 15
-TEMPLATE_NAMES = ["concreting", "electrical", "general", "hvac", "landscaping", "plumbing"]
+TEMPLATE_NAMES = [
+    "business",
+    "concreting",
+    "electrical",
+    "general",
+    "hvac",
+    "landscaping",
+    "plumbing",
+]
+# The one template that must work for a business of any kind, and is the
+# fallback for every industry no trade template claims.
+NEUTRAL_TEMPLATE_NAME = "business"
 EXPECTED_TOKENS = {
     "{{ABOUT_BLURB}}",
     "{{BUSINESS_NAME}}",
@@ -68,7 +79,7 @@ def _expected_image_paths(template_name: str) -> set[str]:
 def test_preview_templates_use_only_manifested_local_images() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     manifest_paths = set(manifest)
-    assert len(manifest_paths) == 56
+    assert len(manifest_paths) == 64
 
     template_paths = sorted(PREVIEW_TEMPLATE_DIR.glob("*.html"))
     assert [path.name for path in template_paths] == [f"{name}.html" for name in TEMPLATE_NAMES]
@@ -147,3 +158,185 @@ def test_preview_nginx_config_blocks_search_indexing() -> None:
     assert "location /assets/" in config
     assert "location / {\n        return 404;" in config
     assert "try_files $uri $uri/ $uri.html =404;" in config
+
+
+# ---------------------------------------------------------------------------
+# The neutral fallback template
+# ---------------------------------------------------------------------------
+
+# Claims a cafe, an accountant or a school cannot make, and which the
+# "general" template makes on every page.
+TRADE_SPECIFIC_PHRASES = [
+    "licensed",
+    "insured",
+    "free quote",
+    "trades",
+    "tradie",
+    "workmanship",
+    "craftsman",
+    "job site",
+    "on the tools",
+    # Property-sector framing, found by rendering the page and reading it
+    # rather than by any assertion. "Trusted by homeowners" and a project
+    # tagged "Residential" are nonsense on a cafe's demo page, and the earlier
+    # phrase list said nothing about either.
+    "homeowner",
+    "residential",
+]
+
+
+SCRIPT_OR_STYLE_RE = re.compile(r"<(script|style)\b.*?</\1>", re.DOTALL | re.IGNORECASE)
+URL_ATTRIBUTE_RE = re.compile(r'\b(?:src|href)\s*=\s*"[^"]*"', re.IGNORECASE)
+
+
+def _customer_visible_copy(template_name: str) -> str:
+    """Everything a prospect reads, and nothing they do not.
+
+    Scoped deliberately. Asset paths are excluded because
+    `shared/sector-residential.jpg` is a filename, not a claim, and a phrase
+    list that trips on it either blocks a correct template or gets weakened
+    until it stops catching real copy. CSS and scripts are excluded for the
+    same reason. Alt text stays in: a screen reader hears it.
+    """
+    html = (PREVIEW_TEMPLATE_DIR / f"{template_name}.html").read_text(encoding="utf-8")
+    html = SCRIPT_OR_STYLE_RE.sub(" ", html)
+    html = URL_ATTRIBUTE_RE.sub(" ", html)
+    return html.lower()
+
+
+def test_neutral_template_contains_no_trade_specific_claims() -> None:
+    copy = _customer_visible_copy(NEUTRAL_TEMPLATE_NAME)
+
+    found = [phrase for phrase in TRADE_SPECIFIC_PHRASES if phrase in copy]
+
+    assert found == [], f"neutral template still claims: {found}"
+
+
+def test_general_template_is_still_the_trades_template() -> None:
+    """Proves the test above is testing something.
+
+    If the phrase list were wrong, or _customer_visible_copy stripped too
+    much, this would fail too, because general.html demonstrably makes these
+    claims in its visible copy.
+    """
+    copy = _customer_visible_copy("general")
+
+    found = [phrase for phrase in TRADE_SPECIFIC_PHRASES if phrase in copy]
+
+    assert "licensed" in found
+    assert "free quote" in found
+    assert "homeowner" in found
+    assert "residential" in found
+
+
+def test_no_template_contains_a_dash_substitute() -> None:
+    """Em and en dashes are banned in customer-facing copy repo-wide, and a
+    preview page is as customer-facing as it gets."""
+    failures: list[str] = []
+    for template_path in sorted(PREVIEW_TEMPLATE_DIR.glob("*.html")):
+        html = template_path.read_text(encoding="utf-8")
+        if template_path.stem != NEUTRAL_TEMPLATE_NAME:
+            # The trade templates predate this rule and are out of scope here.
+            continue
+        for dash in ("\u2014", "\u2013"):
+            if dash in html:
+                failures.append(f"{template_path.name}: contains {dash!r}")
+    assert failures == []
+
+
+def test_every_template_wraps_its_phone_row_in_a_conditional_block() -> None:
+    """A lead with no phone must not render an empty clickable tel: row.
+
+    Only 45.8% of the Australian list has a phone number of any kind, so this
+    is the common case, not the edge case.
+    """
+    failures: list[str] = []
+    for template_path in sorted(PREVIEW_TEMPLATE_DIR.glob("*.html")):
+        html = template_path.read_text(encoding="utf-8")
+        if "{{PHONE}}" not in html:
+            continue
+        if "{{#IF_PHONE}}" not in html or "{{/IF_PHONE}}" not in html:
+            failures.append(f"{template_path.name}: {{{{PHONE}}}} is not inside a conditional")
+            continue
+        before = html.split("{{#IF_PHONE}}")[0]
+        after = html.split("{{/IF_PHONE}}")[-1]
+        if "{{PHONE}}" in before or "{{PHONE}}" in after:
+            failures.append(f"{template_path.name}: a {{{{PHONE}}}} sits outside the conditional")
+    assert failures == []
+
+
+def test_every_template_renders_with_no_tokens_left_behind() -> None:
+    """Runs across the whole template directory, so a template added later is
+    covered without anybody remembering to add it here."""
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "services" / "pipeline" / "src"))
+    from workers.generate_preview import render_preview_html
+
+    lead = {
+        "business_name": "Sample Co",
+        "city": "Brisbane",
+        "state": "QLD",
+        "phone": "+61400000001",
+        "email": "sample@example.com",
+    }
+    personalisation = {
+        "about_blurb": "A sample blurb.",
+        "founder_name": "Sam Sample",
+        "year_founded": 2004,
+        "services": [
+            {"title": f"Service {index}", "description": f"Description {index}"}
+            for index in range(1, 7)
+        ],
+    }
+
+    failures: list[str] = []
+    for template_path in sorted(PREVIEW_TEMPLATE_DIR.glob("*.html")):
+        rendered = render_preview_html(
+            template_path.read_text(encoding="utf-8"),
+            lead=lead,
+            personalisation=personalisation,
+        )
+        leftovers = sorted(set(TOKEN_RE.findall(rendered)))
+        if leftovers:
+            failures.append(f"{template_path.name}: unrendered {leftovers}")
+        if "{{#IF_" in rendered or "{{/IF_" in rendered:
+            failures.append(f"{template_path.name}: conditional markers survived rendering")
+    assert failures == []
+
+
+def test_every_template_renders_without_a_phone() -> None:
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "services" / "pipeline" / "src"))
+    from workers.generate_preview import render_preview_html
+
+    lead = {
+        "business_name": "Sample Co",
+        "city": "Brisbane",
+        "state": "QLD",
+        "phone": "",
+        "email": "sample@example.com",
+    }
+    personalisation = {
+        "about_blurb": "A sample blurb.",
+        "founder_name": "Sam Sample",
+        "year_founded": 2004,
+        "services": [
+            {"title": f"Service {index}", "description": f"Description {index}"}
+            for index in range(1, 7)
+        ],
+    }
+
+    failures: list[str] = []
+    for template_path in sorted(PREVIEW_TEMPLATE_DIR.glob("*.html")):
+        rendered = render_preview_html(
+            template_path.read_text(encoding="utf-8"),
+            lead=lead,
+            personalisation=personalisation,
+        )
+        if "tel:" in rendered:
+            failures.append(f"{template_path.name}: empty tel: link rendered")
+        if TOKEN_RE.findall(rendered):
+            failures.append(f"{template_path.name}: unrendered tokens")
+    assert failures == []

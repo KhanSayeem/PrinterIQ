@@ -11,10 +11,18 @@ from string import Template
 logger = logging.getLogger(__name__)
 
 _MODEL_MAP: dict[str, str] = {
+    # qualify-v1 is superseded by qualify-v2 but stays wired: prompt_version
+    # is written to every qualifications row, and rolling back should be one
+    # constant rather than a file restore.
     "qualify-v1": "claude-haiku-4-5-20251001",
+    "qualify-v2": "claude-haiku-4-5-20251001",
     "preview-personalise-v1": "claude-haiku-4-5-20251001",
     "opener-v1": "claude-sonnet-4-6",
     "opener-v2": "claude-sonnet-4-6",
+    # Copy for a lead with no website. A separate file, not a branch inside
+    # opener-v2, because opener-v2 hard-codes "spotted [business]'s site and
+    # noticed" and no wording of that sentence is true for these leads.
+    "opener-nosite-v1": "claude-sonnet-4-6",
 }
 
 # USD per million tokens (input / output)

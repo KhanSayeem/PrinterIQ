@@ -343,3 +343,59 @@ def test_navigation_failure_does_not_claim_a_weakness_it_could_not_measure(
 
     assert result["weaknesses"] == []
     assert result["has_ssl"] is None
+
+
+# ---------------------------------------------------------------------------
+# Blank URL: no site, no browser
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("blank_url", ["", "   ", "\t\n "])
+def test_blank_url_returns_no_site_without_launching_a_browser(
+    blank_url: str,
+) -> None:
+    """Safety net for any caller that hands the auditor an empty URL.
+
+    workers.enrich no longer does, but page.goto("") raises, is caught as a
+    navigation error, and returns _unreachable(), which asserts has_site True
+    for a business that has no site at all. No playwright module is installed
+    in this test on purpose: if the short-circuit is removed, the import of
+    playwright.async_api is what fails, which is the proof that no browser
+    was launched.
+    """
+
+    async def scenario() -> dict[str, object]:
+        return await PlaywrightAuditor().audit(blank_url)
+
+    result = asyncio.run(scenario())
+
+    assert result["has_site"] is False
+    assert result["is_reachable"] is False
+    assert result["weaknesses"] == [Weakness.NO_WEBSITE]
+    for field_name in (
+        "is_mobile_friendly",
+        "has_ssl",
+        "has_meta_title",
+        "has_meta_description",
+        "has_h1",
+        "load_ms",
+        "cms_detected",
+        "lighthouse_mobile_score",
+    ):
+        assert result[field_name] is None, field_name
+
+
+def test_unreachable_still_reports_has_site_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit regression guard so nobody tidies the two paths into one.
+
+    A URL that exists but fails to load is evidence of a broken site, not
+    evidence of no site. Merging no-site and unreachable would replace one
+    wrong record with a different wrong record.
+    """
+    browser = _FakeBrowser(_FakePage(raise_nav_error="Page.goto: net::ERR_NAME_NOT_RESOLVED"))
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0])
+
+    assert result["has_site"] is True
+    assert result["is_reachable"] is False
+    assert result["weaknesses"] == []
