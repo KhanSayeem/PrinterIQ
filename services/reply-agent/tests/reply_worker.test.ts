@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { processReplyJob, shouldStartReplyWorker, type ReplyWorkerDeps } from "../src/worker.js";
 import { REPLIES_QUEUE_NAME, REPLY_JOB_OPTIONS } from "../src/queue.js";
 import type { ProcessReplyJob, SendReplyJob } from "../src/types.js";
@@ -239,15 +241,24 @@ describe("replies queue policy", () => {
 });
 
 describe("reply worker bootstrap", () => {
+  // Build the expected URL with pathToFileURL rather than hardcoding one.
+  // A literal "file:///C:/app/dist/worker.js" only matches on Windows: on
+  // Linux, pathToFileURL treats "C:/app/..." as a relative path and resolves
+  // it against cwd, so the comparison never matches and CI fails while the
+  // same test passes locally. Production runs on Linux.
+  const workerEntry = path.join(path.sep, "app", "dist", "worker.js");
+  const workerUrl = pathToFileURL(workerEntry).href;
+  const otherEntry = path.join(path.sep, "app", "dist", "webhook.js");
+
   it("starts when run as its own entrypoint", () => {
-    expect(shouldStartReplyWorker("C:/app/dist/worker.js", undefined, "file:///C:/app/dist/worker.js")).toBe(true);
+    expect(shouldStartReplyWorker(workerEntry, undefined, workerUrl)).toBe(true);
   });
 
   it("starts under PM2", () => {
-    expect(shouldStartReplyWorker(undefined, "3", "file:///C:/app/dist/worker.js")).toBe(true);
+    expect(shouldStartReplyWorker(undefined, "3", workerUrl)).toBe(true);
   });
 
   it("does not start when merely imported by a test or another module", () => {
-    expect(shouldStartReplyWorker("C:/app/dist/webhook.js", undefined, "file:///C:/app/dist/worker.js")).toBe(false);
+    expect(shouldStartReplyWorker(otherEntry, undefined, workerUrl)).toBe(false);
   });
 });
