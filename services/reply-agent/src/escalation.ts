@@ -1,7 +1,7 @@
 import { queries as defaultQueries } from "./db/queries.js";
 import type { EscalationContext } from "./types.js";
 
-const OPERATOR_ESCALATION_PHONE = "+61400457006";
+const DEFAULT_OPERATOR_ESCALATION_PHONE = "+61400457006";
 const DEFAULT_DASHBOARD_URL = "http://localhost:3000";
 const TWILIO_BASE_URL = "https://api.twilio.com";
 const INSTANTLY_BASE_URL = "https://api.instantly.ai";
@@ -39,6 +39,19 @@ type EscalationDeps = {
 };
 
 class MissingEnvError extends Error {}
+
+/** The number the operator escalation SMS is sent to.
+ *
+ * ESCALATION_PHONE was already present in the deployed environment while this
+ * module ignored it in favour of a hardcoded constant, so changing the number
+ * in .env had no effect and nothing said so. Read at call time, not at module
+ * load, so a PM2 restart picks up a change. The constant remains as a fallback
+ * so an unset or blank variable cannot page an empty number.
+ */
+function operatorEscalationPhone(): string {
+  const configured = process.env.ESCALATION_PHONE?.trim();
+  return configured ? configured : DEFAULT_OPERATOR_ESCALATION_PHONE;
+}
 
 export class TwilioSmsClient implements SmsClient {
   constructor(
@@ -125,7 +138,7 @@ export async function escalate(input: EscalationInput, deps: EscalationDeps = {}
   const body = formatEscalationSms(context, input.reason, input.inbound_body, dashboardUrl);
 
   await sms.sendSms({
-    to: OPERATOR_ESCALATION_PHONE,
+    to: operatorEscalationPhone(),
     body,
   });
 
@@ -166,7 +179,12 @@ function maskLeadName(firstName: string | null, lastName: string | null): string
   return masked.length > 0 ? masked.join(" ") : "Unknown lead";
 }
 
-function maskSnippetPii(snippet: string): string {
+/** Replace obvious emails and phone numbers in free text before it is logged.
+ *
+ * Exported so every path that logs third-party text uses the same masking
+ * rather than each one reinventing it.
+ */
+export function maskSnippetPii(snippet: string): string {
   return snippet
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
     .replace(/(?:\+?\d[\s().-]*){8,}\d/g, "[phone]");

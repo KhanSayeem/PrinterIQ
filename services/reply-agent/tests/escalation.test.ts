@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   escalate,
   InstantlyHttpClient,
@@ -41,6 +41,10 @@ function createInstantly(): InstantlyClient {
   };
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("escalation", () => {
   it("sends an operator SMS with masked lead details, reason, truncated body, and dashboard URL before pausing Instantly", async () => {
     const sms = createSms();
@@ -79,7 +83,8 @@ describe("escalation", () => {
     expect(instantly.pauseLead).toHaveBeenCalledWith("instantly-lead-123", "campaign-456");
   });
 
-  it("uses the fixed operator escalation number", async () => {
+  it("falls back to the built-in operator number when ESCALATION_PHONE is unset", async () => {
+    vi.stubEnv("ESCALATION_PHONE", undefined);
     const sms = createSms();
 
     await escalate(
@@ -88,6 +93,46 @@ describe("escalation", () => {
         lead_id: leadId,
         conversation_id: conversationId,
         reason: "hardcoded_escalation_phrase",
+        inbound_body: "Can you call me?",
+      },
+      { queries: createQueries(), sms, instantly: createInstantly() },
+    );
+
+    expect(sms.sendSms).toHaveBeenCalledWith(expect.objectContaining({ to: "+61400457006" }));
+  });
+
+  // ESCALATION_PHONE was already in the environment while the code ignored it
+  // in favour of a hardcoded constant. That is the class of silent config trap
+  // that hid a two-month outage on this project, so it is asserted directly.
+  it("sends the operator SMS to ESCALATION_PHONE when it is set", async () => {
+    vi.stubEnv("ESCALATION_PHONE", "+61411222333");
+    const sms = createSms();
+
+    await escalate(
+      {
+        tenant_id: tenantId,
+        lead_id: leadId,
+        conversation_id: conversationId,
+        reason: "low_confidence",
+        inbound_body: "Can you call me?",
+      },
+      { queries: createQueries(), sms, instantly: createInstantly() },
+    );
+
+    expect(sms.sendSms).toHaveBeenCalledWith(expect.objectContaining({ to: "+61411222333" }));
+    expect(vi.mocked(sms.sendSms).mock.calls[0]![0].to).not.toBe("+61400457006");
+  });
+
+  it("ignores a blank ESCALATION_PHONE rather than paging an empty number", async () => {
+    vi.stubEnv("ESCALATION_PHONE", "   ");
+    const sms = createSms();
+
+    await escalate(
+      {
+        tenant_id: tenantId,
+        lead_id: leadId,
+        conversation_id: conversationId,
+        reason: "low_confidence",
         inbound_body: "Can you call me?",
       },
       { queries: createQueries(), sms, instantly: createInstantly() },

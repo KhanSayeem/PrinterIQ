@@ -2,13 +2,143 @@ import { describe, expect, it, vi } from "vitest";
 import {
   advanceLeadToReplied,
   archiveLeadForSuppression,
+  fetchCheckoutSession,
   fetchEscalationContext,
   hasCompletedPayment,
   insertInboundConversation,
+  markConversationEscalated,
+  recordCheckoutSession,
   recordInstantlyBounce,
   recordInstantlyUnsubscribe,
   recordCompletedPayment,
 } from "../src/db/queries.js";
+
+describe("worker escalation and checkout-session queries", () => {
+  it("marks a conversation escalated without rewriting the classifier's agent_action", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ body: "Yep send me the link" }] });
+
+    const result = await markConversationEscalated("tenant-id", "conversation-id", "send_checkout_requires_operator", {
+      query,
+    });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("UPDATE conversations");
+    expect(sql).toContain("escalated = TRUE");
+    expect(sql).not.toContain("agent_action");
+    expect(sql).toContain("WHERE tenant_id = $1");
+    expect(sql).toContain("RETURNING body");
+    expect(params).toEqual(["tenant-id", "conversation-id", "send_checkout_requires_operator"]);
+    expect(result).toEqual({ body: "Yep send me the link" });
+  });
+
+  // An earlier reason such as low_confidence is the truthful record of why the
+  // lead was escalated. Overwriting it would destroy the audit trail the rest
+  // of this function's design goes out of its way to protect.
+  it("keeps an existing escalation_reason instead of overwriting it", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ body: "Yep" }] });
+
+    await markConversationEscalated("tenant-id", "conversation-id", "send_checkout_requires_operator", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toContain("escalation_reason = COALESCE(escalation_reason, $3)");
+  });
+
+  // The escalation SMS quotes this row's body back to the operator as the
+  // lead's own words, so it must never be one of our outbound drafts.
+  it("only reads the body of an inbound conversation", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ body: "Yep" }] });
+
+    await markConversationEscalated("tenant-id", "conversation-id", "reason", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toContain("direction = 'inbound'");
+  });
+
+  it("refuses to report an escalation it did not write", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    await expect(
+      markConversationEscalated("tenant-id", "conversation-id", "send_checkout_requires_operator", { query }),
+    ).rejects.toThrow("conversation not found for tenant");
+  });
+
+  it("looks up an existing checkout session per lead, scoped by tenant", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: "cs_1", url: "https://checkout" }] });
+
+    const result = await fetchCheckoutSession("tenant-id", "lead-id", { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("FROM conversations");
+    expect(sql).toContain("WHERE conversations.tenant_id = $1");
+    expect(sql).toContain("AND conversations.lead_id = $2");
+    expect(sql).toContain("stripe_session_id IS NOT NULL");
+    expect(params).toEqual(["tenant-id", "lead-id"]);
+    expect(result).toEqual({ id: "cs_1", url: "https://checkout" });
+  });
+
+  // Reusing a stored link must not become a way past the suppression flow.
+  // The cache hit returns before fetchCheckoutLead, which holds the only other
+  // copy of this gate, so an archived or already-paid lead would otherwise get
+  // a live payment link back.
+  it("will not hand back a session for a lead that is no longer eligible", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    await fetchCheckoutSession("tenant-id", "lead-id", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toContain("JOIN leads");
+    expect(sql).toContain("leads.status = 'replied'");
+    expect(sql).toContain("leads.tenant_id = conversations.tenant_id");
+  });
+
+  it("reports no existing checkout session rather than throwing", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    await expect(fetchCheckoutSession("tenant-id", "lead-id", { query })).resolves.toBeNull();
+  });
+
+  it("stores a checkout session first-writer-wins and returns the stored one", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: "cs_winner", url: "https://checkout/winner" }] });
+
+    const result = await recordCheckoutSession(
+      "tenant-id",
+      "lead-id",
+      "conversation-id",
+      "cs_loser",
+      "https://checkout/loser",
+      { query },
+    );
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("UPDATE conversations");
+    expect(sql).toContain("stripe_session_id = COALESCE(stripe_session_id, $4)");
+    expect(sql).toContain("stripe_session_url = COALESCE(stripe_session_url, $5)");
+    expect(sql).toContain("WHERE tenant_id = $1");
+    expect(params).toEqual(["tenant-id", "lead-id", "conversation-id", "cs_loser", "https://checkout/loser"]);
+    expect(result).toEqual({ id: "cs_winner", url: "https://checkout/winner" });
+  });
+
+  // A conversation id alone does not prove the row belongs to this lead.
+  // Stamping lead B's conversation with lead A's session would credit B's
+  // payment to A, because the Stripe metadata carries A's lead_id.
+  it("binds the session write to the lead, not just the conversation", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: "cs_1", url: "https://checkout" }] });
+
+    await recordCheckoutSession("tenant-id", "lead-id", "conversation-id", "cs_1", "https://checkout", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toContain("AND lead_id = $2");
+    expect(sql).toContain("AND id = $3");
+  });
+
+  it("refuses to report a session it did not write", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    await expect(
+      recordCheckoutSession("tenant-id", "lead-id", "conversation-id", "cs_1", "https://checkout", { query }),
+    ).rejects.toThrow("conversation not found for tenant and lead");
+  });
+});
 
 describe("reply-agent DB queries", () => {
   it("inserts inbound conversations only through a tenant-scoped lead lookup", async () => {

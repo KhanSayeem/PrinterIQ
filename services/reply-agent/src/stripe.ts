@@ -8,6 +8,14 @@ import { offerPriceCents } from "./offer.js";
 export type PaymentQueries = {
   fetchCheckoutLead(tenantId: string, leadId: string): Promise<CheckoutLead>;
   recordCompletedPayment(input: CompletedPaymentInput): Promise<CompletedPaymentResult>;
+  fetchCheckoutSession(tenantId: string, leadId: string): Promise<{ id: string; url: string } | null>;
+  recordCheckoutSession(
+    tenantId: string,
+    leadId: string,
+    conversationId: string,
+    sessionId: string,
+    sessionUrl: string,
+  ): Promise<{ id: string; url: string }>;
 };
 
 export type StripeCheckoutClient = {
@@ -62,12 +70,34 @@ function checkoutUrlEnv(name: string): string {
   return process.env[name] ?? "https://presciaiq.com/checkout";
 }
 
+/** Create the lead's checkout session, or hand back the one they already have.
+ *
+ * Idempotency guard. The BullMQ jobId dedupes *enqueues*, but a job that fails
+ * after Stripe returned a session is retried and would mint a second one, so
+ * the same lead could receive two live payment links. The session is persisted
+ * against the conversation and looked up per lead before Stripe is called,
+ * mirroring how the payment side guards double-onboarding with
+ * `should_send_welcome`. `conversation_id` is required rather than optional on
+ * purpose: an optional key would silently disable the guard at any call site
+ * that forgot to pass it.
+ *
+ * `fetchCheckoutSession` re-applies the `status = 'replied'` eligibility gate,
+ * so a cache hit cannot become a route around suppression: an archived or
+ * already paid lead falls through to `fetchCheckoutLead`, which throws before
+ * Stripe is called.
+ */
 export async function createCheckoutSession(
-  input: { tenant_id: string; lead_id: string },
+  input: { tenant_id: string; lead_id: string; conversation_id: string },
   deps: Pick<StripeDeps, "queries" | "stripe"> = {},
 ): Promise<{ id: string; url: string }> {
   const db = deps.queries ?? defaultQueries;
   const stripe = deps.stripe ?? stripeClient();
+
+  const existing = await db.fetchCheckoutSession(input.tenant_id, input.lead_id);
+  if (existing) {
+    return existing;
+  }
+
   const lead = await db.fetchCheckoutLead(input.tenant_id, input.lead_id);
   const session = await stripe.checkout.sessions.create({
     mode: "payment",
@@ -97,7 +127,16 @@ export async function createCheckoutSession(
     throw new Error("Stripe checkout session did not include a URL");
   }
 
-  return { id: session.id, url: session.url };
+  // The write is first-writer-wins, so it returns whichever session is stored,
+  // which is not necessarily the one just created. Returning the stored session
+  // is what keeps a race from handing the lead two different payment links.
+  return db.recordCheckoutSession(
+    input.tenant_id,
+    input.lead_id,
+    input.conversation_id,
+    session.id,
+    session.url,
+  );
 }
 
 function paymentIntentId(session: Stripe.Checkout.Session): string | null {
