@@ -239,9 +239,6 @@ def test_no_template_contains_a_dash_substitute() -> None:
     failures: list[str] = []
     for template_path in sorted(PREVIEW_TEMPLATE_DIR.glob("*.html")):
         html = template_path.read_text(encoding="utf-8")
-        if template_path.stem != NEUTRAL_TEMPLATE_NAME:
-            # The trade templates predate this rule and are out of scope here.
-            continue
         for dash in ("\u2014", "\u2013"):
             if dash in html:
                 failures.append(f"{template_path.name}: contains {dash!r}")
@@ -339,7 +336,10 @@ def test_every_template_renders_without_a_phone() -> None:
             lead=lead,
             personalisation=personalisation,
         )
-        if "tel:" in rendered:
+        # Match the href, not a bare "tel:" substring: ordinary copy contains
+        # it (a project heading reading "Boutique Hotel: Fan-Coil System" is a
+        # false positive), and only an anchor can render a dead clickable row.
+        if 'href="tel:' in rendered:
             failures.append(f"{template_path.name}: empty tel: link rendered")
         if TOKEN_RE.findall(rendered):
             failures.append(f"{template_path.name}: unrendered tokens")
