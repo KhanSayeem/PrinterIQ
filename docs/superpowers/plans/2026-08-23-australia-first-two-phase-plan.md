@@ -130,6 +130,99 @@ month.** See the sending ladder below.
 
 - Email deliverability. No network calls were made against the list.
 
+## Where rows fail the required-field check
+
+A separate pass measured field completeness across all 909,812 records. It was
+run to answer one question: which missing field actually costs us the most
+leads.
+
+### Email coverage
+
+3,004 rows carry no email address, which is 0.3% of the file. The remaining
+906,808 rows all carry one, and all 906,808 addresses are distinct.
+
+Those 3,004 are not spread evenly.
+
+| Country | Rows with no email |
+| --- | --- |
+| **Australia** | **2,712** |
+| No country recorded | 279 |
+| United States | 4 |
+| India | 2 |
+| Zambia | 1 |
+| United Kingdom | 1 |
+| United Arab Emirates | 1 |
+| Brazil | 1 |
+| Italy | 1 |
+| Belgium | 1 |
+| Netherlands | 1 |
+
+Australia is 3.1% of the file and holds 90.3% of every missing email. Of the
+2,725 missing emails that can be attributed to a named country, 2,712 are
+Australian, which is 99.5%.
+
+Read this as a provenance signal. The international bulk looks like it was
+assembled with an email present as a condition of inclusion. The Australian
+slice was merged in under different rules. It matches the anomaly already
+recorded above, that 51.3% of the Australian slice carries a first name against
+2.1% file-wide.
+
+### Field completeness across the file
+
+| Field missing | Rows | Share |
+| --- | --- | --- |
+| Email | 3,004 | 0.3% |
+| Company name | 0 | 0.0% |
+| Industry | 332,222 | 36.5% |
+| Website | 165,664 | 18.2% |
+
+Under the required fields as they stand (Email, Company Name, Industry),
+576,095 rows import file-wide, which is 63.3%.
+
+Industry, not email, is the dominant rejector file-wide.
+
+### Industry is not the only column carrying trade signal
+
+Of the 332,222 rows with no `Industry`:
+
+- 313,505 (94.4%) have a non-blank `Category`.
+- 180,011 (54.2%) have a `Service_Category` that is something other than the
+  filler value "Other / Unspecified".
+- 313,858 (94.5%) have usable signal in at least one of those two columns.
+- 313,661 of those also have an email, so they are genuinely recoverable.
+
+The `Category` column holds colon-delimited OpenStreetMap tags such as
+`amenity:restaurant`, `amenity:cafe` and `amenity:dentist`. The delimiter fix
+that shipped in PR #138 already parses exactly this form. The importer can
+already read this data. It simply never looks in that column, because
+`Category` is not in the alias list for the Industry field.
+
+The Australian picture is much weaker. Of the 4,212 Australian rows with no
+industry, only 1,383 (32.8%) have usable signal, and only 1,191 of those also
+have an email. 89.7% of Australian `Service_Category` values read
+"Other / Unspecified", which is filler, not signal.
+
+### Recommendation
+
+Two changes would recover rows. The second is strictly better.
+
+(a) Remove Industry from the required fields. This recovers 2,861 Australian
+rows, but they arrive with a blank industry and score blind on component 3 of
+`qualify-v2`, which is 20 points out of 100.
+
+(b) Add `Category` and `Service_Category` as aliases for the Industry field.
+This recovers fewer rows, but the rows it recovers arrive with real signal.
+
+**Take (b), and take it in Phase 2, not now.** For Australia it is about 1,191
+leads that cannot be emailed for months anyway, because sending capacity of 30
+per day is the binding constraint, not the lead count. Internationally the same
+change is worth 313,661 leads, which is where it earns its keep.
+
+Deferring is safe. A row rejected at import is never inserted, so nothing blocks
+re-importing it later once the rule changes. The dedup check only matches rows
+already present in the `leads` table. Deferring costs nothing. A lead archived
+at a wrong threshold does block re-import, which is why calibration comes first.
+
 ## The sending ladder
 
 Four limits stack. Only the tightest one matters, and it is not the one people
