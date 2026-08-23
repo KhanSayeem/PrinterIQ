@@ -30,6 +30,17 @@ class PlaywrightAuditor:
     """Playwright-backed website auditor. Browser lifecycle is fully managed inside."""
 
     async def audit(self, url: str) -> dict[str, object]:
+        # Short-circuit before the playwright import, so no browser is
+        # launched and no dependency is touched for a URL there is nothing
+        # to visit. page.goto("") raises, which the navigation handler below
+        # catches and answers with _unreachable() — and _unreachable() says
+        # has_site True, which is the wrong record for a business with no
+        # site. workers.enrich decides this authoritatively from the lead
+        # row and never calls here with a blank URL; this is the net for any
+        # other caller.
+        if not url.strip():
+            return _no_site()
+
         from playwright.async_api import Error as _PlaywrightError  # type: ignore[import-untyped]
         from playwright.async_api import TimeoutError as _Timeout  # type: ignore[import-untyped]
         from playwright.async_api import async_playwright  # type: ignore[import-untyped]
@@ -132,6 +143,31 @@ def _detect_cms(html: str) -> str | None:
         if any(m in html for m in markers):
             return cms
     return None
+
+
+def _no_site() -> dict[str, object]:
+    """A business with no website URL at all.
+
+    Deliberately distinct from _unreachable(). No site and a site that will
+    not load are different facts about a business, and collapsing them would
+    replace one wrong record with a different wrong record. The one weakness
+    recorded here is the absence itself, which is measurable without a
+    browser; everything a browser would have measured stays None.
+    """
+    return {
+        "has_site": False,
+        "is_reachable": False,
+        "is_mobile_friendly": None,
+        "has_ssl": None,
+        "has_meta_title": None,
+        "has_meta_description": None,
+        "has_h1": None,
+        "load_ms": None,
+        "cms_detected": None,
+        "lighthouse_mobile_score": None,
+        "weaknesses": [Weakness.NO_WEBSITE],
+        "raw_audit": {},
+    }
 
 
 def _unreachable() -> dict[str, object]:

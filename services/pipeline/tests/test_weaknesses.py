@@ -11,6 +11,7 @@ def test_canonical_weakness_labels_match_the_documented_set() -> None:
         "no_meta_description",
         "no_h1",
         "slow_load",
+        "no_website",
     }
 
 
@@ -58,5 +59,33 @@ def test_canonical_vocabulary_is_still_the_producer_contract() -> None:
         "no_meta_description",
         "no_h1",
         "slow_load",
+        "no_website",
     }
     assert "none" not in WEAKNESS_LABELS
+
+
+def test_no_website_label_is_produced_by_the_enrich_worker() -> None:
+    """`no_website` is the one label whose producer is not the site auditor.
+
+    Absence of a URL cannot be observed by Playwright, because Playwright is
+    never handed one. The enrich worker reads the lead row, so it is the only
+    component that can measure this honestly. This test documents that split
+    so nobody "tidies" the label back into the auditor's exclusive vocabulary.
+    """
+    from workers import enrich
+
+    assert Weakness.NO_WEBSITE in enrich.NO_SITE_WEAKNESSES
+
+
+def test_weakness_vocabulary_docstring_names_the_enrichment_producer() -> None:
+    """The rule the module states about itself must stay true.
+
+    The class docstring used to say every label is "measured by a website
+    auditor". Adding `no_website` makes that sentence false, and a rule that
+    is visibly false is a rule the next contributor will ignore.
+    """
+    class_doc = Weakness.__doc__ or ""
+
+    assert "enrichment producer" in class_doc
+    assert "workers.enrich" in class_doc
+    assert "measured by a website auditor" not in class_doc
