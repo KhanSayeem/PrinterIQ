@@ -14,12 +14,19 @@ from zoneinfo import ZoneInfo
 from env import load_pipeline_env
 from offer import offer_price_display
 from pipeline_queue.definitions import JobType
+from weaknesses import Weakness
 
 logger = logging.getLogger(__name__)
 
-_HAIKU_PROMPT = "qualify-v1"
+_HAIKU_PROMPT = "qualify-v2"
 _SONNET_PROMPT = "opener-v2"
 _PROMPT_VERSION = "opener-v2"
+# Copy for a lead with no website. opener-v2 hard-codes "spotted [business
+# name]'s site and noticed [weakness]", and no wording of that sentence is
+# true for a business that has no site, so this is a separate file rather
+# than a branch inside one prompt. The prompt name doubles as the recorded
+# prompt_version, which is what lets the two copy paths be compared later.
+_NO_SITE_SONNET_PROMPT = "opener-nosite-v1"
 _DEFAULT_CHANNEL = "email"
 _SEND_WINDOW_TZ = ZoneInfo("Australia/Sydney")
 _SEND_WINDOW_START = time(hour=9)
@@ -174,6 +181,14 @@ async def qualify_lead(
     )
     has_actionable_weakness: bool = bool(grounded_weaknesses)
 
+    # Which copy path and which Instantly campaign this lead gets is decided
+    # from the enrichment row, which this pipeline owns, and never from the
+    # weakness_label the model returned. A model that wrote "no_website" for a
+    # lead whose site was measured and found slow would otherwise send that
+    # lead an email asserting they have no website at all.
+    is_no_website_lead = Weakness.NO_WEBSITE.value in grounded_weaknesses
+    sonnet_prompt = _NO_SITE_SONNET_PROMPT if is_no_website_lead else _SONNET_PROMPT
+
     lead_json = json.dumps(lead, default=str)
     enrichment_json = json.dumps(enrichment, default=str)
 
@@ -272,7 +287,7 @@ async def qualify_lead(
             return
 
     sonnet_resp = await claude_client.call(
-        _SONNET_PROMPT,
+        sonnet_prompt,
         {
             "lead_json": lead_json,
             "top_weakness": top_weakness,
@@ -285,7 +300,7 @@ async def qualify_lead(
     if sonnet_data is None:
         logger.warning("Sonnet returned invalid JSON — retrying once")
         sonnet_resp = await claude_client.call(
-            _SONNET_PROMPT,
+            sonnet_prompt,
             {
                 "lead_json": lead_json,
                 "top_weakness": top_weakness,
@@ -315,7 +330,10 @@ async def qualify_lead(
             "model_haiku": haiku_resp.model,
             "model_sonnet": sonnet_resp.model,
             "cost_usd": total_cost,
-            "prompt_version": _PROMPT_VERSION,
+            # The prompt name is the version. Recording the site version for
+            # a no-site lead would make the dashboard comparison of the two
+            # copy paths silently wrong rather than merely absent.
+            "prompt_version": sonnet_prompt,
         }
     )
     await qualification_repo.update_lead_status(
@@ -326,7 +344,7 @@ async def qualify_lead(
             "job_type": JobType.GENERATE_PREVIEW.value,
             "tenant_id": str(tenant_id),
             "lead_id": str(lead_id),
-            "campaign_id": _campaign_id(payload),
+            "campaign_id": _campaign_id(payload, no_website=is_no_website_lead),
             "channel": str(payload.get("channel", _DEFAULT_CHANNEL)),
             "send_after": _send_after(payload),
         }
@@ -426,12 +444,38 @@ def _strip_json_code_fence(text: str) -> str:
     return stripped
 
 
-def _campaign_id(payload: dict[str, object]) -> str:
+def _campaign_id(payload: dict[str, object], *, no_website: bool = False) -> str:
+    """Pick the Instantly campaign this lead's outreach belongs to.
+
+    An explicit campaign_id in the payload still wins, exactly as before.
+
+    A no-website lead goes to INSTANTLY_NO_WEBSITE_CAMPAIGN_ID when it is
+    set. The reason is not analytics: the normal campaign's Step 1 template
+    in Instantly opens with "spotted {{company_name}}'s site and noticed",
+    and those words live in Instantly rather than in this repo, so no prompt
+    change here can make them true for a business with no site.
+
+    When that variable is unset the lead falls back to the normal campaign,
+    on the operator's explicit instruction, so that merging this work does
+    not stop every send before the second campaign exists. That fallback is
+    the one place a no-website lead can still receive the site campaign's
+    opening line, so it is logged loudly rather than passed over in silence.
+    """
     raw_campaign_id = payload.get("campaign_id")
     if raw_campaign_id is not None and str(raw_campaign_id).strip():
         return str(raw_campaign_id)
 
     load_pipeline_env()
+    if no_website:
+        no_website_campaign_id = (os.getenv("INSTANTLY_NO_WEBSITE_CAMPAIGN_ID") or "").strip()
+        if no_website_campaign_id:
+            return no_website_campaign_id
+        logger.warning(
+            "INSTANTLY_NO_WEBSITE_CAMPAIGN_ID is unset; a lead with no website is falling "
+            "back to INSTANTLY_CAMPAIGN_ID, whose Instantly Step 1 template asserts the "
+            "lead has a site"
+        )
+
     env_campaign_id = os.getenv("INSTANTLY_CAMPAIGN_ID")
     if env_campaign_id:
         return env_campaign_id

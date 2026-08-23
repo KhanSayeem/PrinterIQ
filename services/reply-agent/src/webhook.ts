@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { ProcessReplyJob } from "./types.js";
 import { stripePayments } from "./stripe.js";
 import { queries as defaultQueries } from "./db/queries.js";
+import { REPLIES_QUEUE_NAME, REPLY_JOB_OPTIONS } from "./queue.js";
 
 export type ReplyQueue = {
   add(name: string, payload: ProcessReplyJob): Promise<unknown>;
@@ -319,8 +320,12 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
 function createQueue(): Queue<ProcessReplyJob> {
   const connectionUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
-  return new Queue<ProcessReplyJob>("replies", {
+  // Retry policy lives with the worker so producer and consumer cannot drift.
+  // Without it BullMQ defaults to a single attempt and a transient failure
+  // retires the job silently.
+  return new Queue<ProcessReplyJob>(REPLIES_QUEUE_NAME, {
     connection: { url: connectionUrl },
+    defaultJobOptions: REPLY_JOB_OPTIONS,
   });
 }
 

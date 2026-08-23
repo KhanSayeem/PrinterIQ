@@ -30,15 +30,9 @@ describe("offer price", () => {
     const create = vi.fn().mockResolvedValue({ id: "cs_1", url: "https://checkout" });
 
     await createCheckoutSession(
-      { tenant_id: tenantId, lead_id: leadId },
+      { tenant_id: tenantId, lead_id: leadId, conversation_id: conversationId },
       {
-        queries: {
-          fetchCheckoutLead: vi.fn().mockResolvedValue({
-            email: "owner@example.com",
-            business_name: "Test Plumbing",
-          }),
-          recordCompletedPayment: vi.fn(),
-        },
+        queries: checkoutQueries(),
         stripe: { checkout: { sessions: { create } } } as never,
       },
     );
@@ -48,8 +42,99 @@ describe("offer price", () => {
   });
 });
 
+function checkoutQueries(overrides: Record<string, unknown> = {}) {
+  return {
+    fetchCheckoutLead: vi.fn().mockResolvedValue({
+      email: "owner@example.com",
+      business_name: "Test Plumbing",
+    }),
+    recordCompletedPayment: vi.fn(),
+    fetchCheckoutSession: vi.fn().mockResolvedValue(null),
+    recordCheckoutSession: vi
+      .fn()
+      .mockImplementation(
+        async (_tenant: string, _lead: string, _conversation: string, id: string, url: string) => ({ id, url }),
+      ),
+    ...overrides,
+  } as never;
+}
+
+// The BullMQ jobId dedupes enqueues, but a retry after a partial failure would
+// otherwise mint a second Stripe session and hand the same lead two payment
+// links. The payment side already guards this way via should_send_welcome.
+describe("checkout session idempotency", () => {
+  it("reuses the session already stored for the lead and never calls Stripe again", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "cs_second", url: "https://checkout/second" });
+    const queries = checkoutQueries({
+      fetchCheckoutSession: vi.fn().mockResolvedValue({ id: "cs_first", url: "https://checkout/first" }),
+    }) as unknown as {
+      fetchCheckoutSession: ReturnType<typeof vi.fn>;
+      fetchCheckoutLead: ReturnType<typeof vi.fn>;
+      recordCheckoutSession: ReturnType<typeof vi.fn>;
+    };
+
+    const result = await createCheckoutSession(
+      { tenant_id: tenantId, lead_id: leadId, conversation_id: conversationId },
+      { queries: queries as never, stripe: { checkout: { sessions: { create } } } as never },
+    );
+
+    expect(result).toEqual({ id: "cs_first", url: "https://checkout/first" });
+    expect(create).not.toHaveBeenCalled();
+    expect(queries.recordCheckoutSession).not.toHaveBeenCalled();
+    expect(queries.fetchCheckoutSession).toHaveBeenCalledWith(tenantId, leadId);
+  });
+
+  it("persists a newly created session against the conversation", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "cs_first", url: "https://checkout/first" });
+    const queries = checkoutQueries() as unknown as { recordCheckoutSession: ReturnType<typeof vi.fn> };
+
+    const result = await createCheckoutSession(
+      { tenant_id: tenantId, lead_id: leadId, conversation_id: conversationId },
+      { queries: queries as never, stripe: { checkout: { sessions: { create } } } as never },
+    );
+
+    expect(queries.recordCheckoutSession).toHaveBeenCalledWith(
+      tenantId,
+      leadId,
+      conversationId,
+      "cs_first",
+      "https://checkout/first",
+    );
+    expect(result).toEqual({ id: "cs_first", url: "https://checkout/first" });
+  });
+
+  it("returns the session that actually won the write when another worker got there first", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "cs_loser", url: "https://checkout/loser" });
+    const queries = checkoutQueries({
+      recordCheckoutSession: vi.fn().mockResolvedValue({ id: "cs_winner", url: "https://checkout/winner" }),
+    });
+
+    const result = await createCheckoutSession(
+      { tenant_id: tenantId, lead_id: leadId, conversation_id: conversationId },
+      { queries: queries as never, stripe: { checkout: { sessions: { create } } } as never },
+    );
+
+    expect(result).toEqual({ id: "cs_winner", url: "https://checkout/winner" });
+  });
+
+  it("looks for an existing session before it asks Stripe for a new one", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "cs_first", url: "https://checkout/first" });
+    const queries = checkoutQueries() as unknown as { fetchCheckoutSession: ReturnType<typeof vi.fn> };
+
+    await createCheckoutSession(
+      { tenant_id: tenantId, lead_id: leadId, conversation_id: conversationId },
+      { queries: queries as never, stripe: { checkout: { sessions: { create } } } as never },
+    );
+
+    expect(queries.fetchCheckoutSession.mock.invocationCallOrder[0]!).toBeLessThan(
+      create.mock.invocationCallOrder[0]!,
+    );
+  });
+});
+
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const leadId = "22222222-2222-4222-8222-222222222222";
+const conversationId = "33333333-3333-4333-8333-333333333333";
 const instantlyWebhookIds = {
   reply: "reply-token",
   bounced: "bounced-token",

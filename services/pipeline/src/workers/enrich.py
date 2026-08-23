@@ -5,9 +5,13 @@ from typing import Protocol
 from uuid import UUID
 
 from pipeline_queue.definitions import JobType
-from weaknesses import WEAKNESS_LABELS
+from weaknesses import WEAKNESS_LABELS, Weakness
 
 logger = logging.getLogger(__name__)
+
+# The one weakness this worker measures itself rather than reading off an
+# audit result. See the Weakness docstring for why the producer differs.
+NO_SITE_WEAKNESSES: list[str] = [Weakness.NO_WEBSITE.value]
 
 
 class LeadFetcher(Protocol):
@@ -49,20 +53,31 @@ async def enrich_lead(
 
     lead = await lead_fetcher.get_lead(tenant_id=tenant_id, lead_id=lead_id)
     technologies = str(lead.get("technologies", "")).strip()
-    website_url = str(lead.get("website_url", ""))
+    website_url = str(lead.get("website_url") or "")
 
-    # Deliberate behaviour change: the Playwright audit now runs for every
-    # lead, Apollo `technologies` or not — one page load per enrichment.
-    # Previously, a lead with Apollo tech data skipped Playwright entirely
-    # and had has_h1/load_ms/has_meta_* hardcoded to None, so whether a
-    # lead's H1/load-time/meta tags were ever checked depended on whether
-    # the CSV happened to carry Apollo data, not on the site itself. Apollo
-    # data may still inform cms_detected/tech_source below, but it never
-    # substitutes for a measured signal again.
-    audit = await auditor.audit(website_url)
-    enrichment = _enrich_from_playwright(
-        audit, technologies=technologies, tenant_id=tenant_id, lead_id=lead_id
-    )
+    if not website_url.strip():
+        # A business with no website is not a business whose website failed
+        # to load. Auditing an empty URL produced the second record: page.goto
+        # ("") raises, the navigation handler returns _unreachable(), and that
+        # asserts has_site True with an empty weaknesses array, which archives
+        # the lead in qualify.py. Skipping the audit is also what stops 6,011
+        # Australian rows each launching a Chromium that can only fail.
+        enrichment = _enrich_without_a_site(
+            technologies=technologies, tenant_id=tenant_id, lead_id=lead_id
+        )
+    else:
+        # Deliberate behaviour change: the Playwright audit now runs for every
+        # lead, Apollo `technologies` or not — one page load per enrichment.
+        # Previously, a lead with Apollo tech data skipped Playwright entirely
+        # and had has_h1/load_ms/has_meta_* hardcoded to None, so whether a
+        # lead's H1/load-time/meta tags were ever checked depended on whether
+        # the CSV happened to carry Apollo data, not on the site itself. Apollo
+        # data may still inform cms_detected/tech_source below, but it never
+        # substitutes for a measured signal again.
+        audit = await auditor.audit(website_url)
+        enrichment = _enrich_from_playwright(
+            audit, technologies=technologies, tenant_id=tenant_id, lead_id=lead_id
+        )
 
     await enrichment_repo.insert_enrichment(enrichment)
     await enrichment_repo.update_lead_status(
@@ -76,6 +91,44 @@ async def enrich_lead(
             "score_threshold": score_threshold,
         }
     )
+
+
+def _enrich_without_a_site(
+    *,
+    technologies: str,
+    tenant_id: UUID,
+    lead_id: UUID,
+) -> dict[str, object]:
+    """Build the enrichment row for a lead with no website URL at all.
+
+    Every measured signal stays None on purpose. False would read as "we
+    looked and it was bad"; None is the honest "nothing was measured, because
+    there was nothing to measure". The single weakness recorded, `no_website`,
+    is measured here and nowhere else: it comes from the lead row, which the
+    auditor never sees.
+
+    `tech_source` is NOT NULL in the schema, so it names this path explicitly
+    rather than borrowing "playwright", which never ran.
+    """
+    return {
+        "tenant_id": tenant_id,
+        "lead_id": lead_id,
+        "has_site": False,
+        "is_reachable": False,
+        "is_mobile_friendly": None,
+        "has_ssl": None,
+        "has_meta_title": None,
+        "has_meta_description": None,
+        "has_h1": None,
+        "load_ms": None,
+        "lighthouse_mobile_score": None,
+        # No site means no CMS to detect. An Apollo `technologies` hint here
+        # would be an unmeasured claim about a website that does not exist.
+        "cms_detected": None,
+        "tech_source": "no_site+apollo" if technologies else "no_site",
+        "weaknesses": list(NO_SITE_WEAKNESSES),
+        "raw_audit": {},
+    }
 
 
 def _enrich_from_playwright(

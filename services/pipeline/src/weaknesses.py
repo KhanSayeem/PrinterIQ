@@ -20,8 +20,19 @@ class Weakness(StrEnum):
     """The complete, closed set of observable website weaknesses.
 
     Every value here must correspond to a signal that is actually measured
-    by a website auditor (see `clients.playwright_audit`). Do not add a
-    label here unless something in the codebase measures it.
+    by an enrichment producer. Do not add a label here unless something in
+    the codebase measures it.
+
+    Producers, and which labels each one owns:
+
+    - `clients.playwright_audit` measures a site that loaded, and owns every
+      label below except NO_WEBSITE.
+    - `workers.enrich` owns NO_WEBSITE alone. Playwright cannot observe the
+      absence of a URL because it is never handed one; the enrich worker
+      reads the lead row, so it is the only component that can measure this
+      honestly. It is also the least inferential label here: NO_H1 needs a
+      page load, a render and a selector match to be true, while NO_WEBSITE
+      needs one column of the lead row.
     """
 
     NO_MOBILE = "no_mobile"
@@ -30,6 +41,7 @@ class Weakness(StrEnum):
     NO_META_DESCRIPTION = "no_meta_description"
     NO_H1 = "no_h1"
     SLOW_LOAD = "slow_load"
+    NO_WEBSITE = "no_website"
 
 
 WEAKNESS_LABELS: frozenset[str] = frozenset(member.value for member in Weakness)
