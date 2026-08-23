@@ -76,10 +76,10 @@ _GENERAL_TRADE_MATCH_FIELDS = ("industry", "keywords")
 # behind it is empty rather than render an empty one. 54.2% of the Australian
 # list has no phone number, so "render it anyway" is the common case.
 _CONDITIONAL_BLOCK_RE = re.compile(
-    r"\{\{#IF_(?P<name>[A-Z0-9_]+)\}\}(?P<body>.*?)\{\{/IF_(?P=name)\}\}",
+    r"\{\{(?P<sense>[#^])IF_(?P<name>[A-Z0-9_]+)\}\}(?P<body>.*?)\{\{/IF_(?P=name)\}\}",
     re.DOTALL,
 )
-_CONDITIONAL_MARKER_RE = re.compile(r"\{\{[#/]IF_[A-Z0-9_]+\}\}")
+_CONDITIONAL_MARKER_RE = re.compile(r"\{\{[#^/]IF_[A-Z0-9_]+\}\}")
 
 _PERSONALISATION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -337,6 +337,7 @@ def render_preview_html(
         "{{BUSINESS_NAME}}": _escape_token(_string_value(lead, "business_name")),
         "{{CITY}}": _escape_token(_string_value(lead, "city")),
         "{{STATE}}": _escape_token(_string_value(lead, "state")),
+        "{{LOCATION}}": _escape_token(_location(lead)),
         "{{PHONE}}": _escape_token(_string_value(lead, "phone")),
         "{{EMAIL}}": _escape_token(_string_value(lead, "email")),
         "{{ABOUT_BLURB}}": _escape_token(str(personalisation["about_blurb"])),
@@ -365,6 +366,12 @@ def _apply_conditional_blocks(template_source: str, token_map: dict[str, str]) -
     worse than no row. Only 45.8% of the Australian list has a phone number,
     so this is the common case.
 
+    `{{^IF_X}}...{{/IF_X}}` is the same block with the test inverted, for the
+    copy that cannot simply drop a missing value. "Looking After <City>"
+    needs a noun in its accent slot, so the template has to be able to say
+    what to write when there is no city, not only what to write when there
+    is.
+
     Both failure modes dead-letter rather than render. A misspelt conditional
     that silently kept its block would publish a claim about a field nobody
     supplied; one that silently dropped it would remove a section nobody
@@ -375,7 +382,9 @@ def _apply_conditional_blocks(template_source: str, token_map: dict[str, str]) -
         token = "{{" + match.group("name") + "}}"
         if token not in token_map:
             raise DeadLetterError(f"unknown conditional token {token} in preview template")
-        return match.group("body") if token_map[token].strip() else ""
+        has_value = bool(token_map[token].strip())
+        keep = has_value if match.group("sense") == "#" else not has_value
+        return match.group("body") if keep else ""
 
     rendered = _CONDITIONAL_BLOCK_RE.sub(replace, template_source)
     leftover = _CONDITIONAL_MARKER_RE.findall(rendered)
@@ -398,6 +407,23 @@ async def _call_claude_for_personalisation(
             "keywords": _string_value(lead, "keywords"),
         },
     )
+
+
+def _location(lead: dict[str, object]) -> str:
+    """City and state as one value, so the comma between them belongs to the
+    value rather than to seven templates.
+
+    A template that writes `{{CITY}}, {{STATE}}` can only be right when both
+    are present. Most rows with no state have no city either, and the ones
+    that have a state but no city are not rare enough to leave rendering a
+    leading comma. The join is the only place that knows how many parts
+    there are.
+    """
+    parts = [
+        _string_value(lead, "city").strip(),
+        _string_value(lead, "state").strip(),
+    ]
+    return ", ".join(part for part in parts if part)
 
 
 def _string_value(row: dict[str, object], field_name: str) -> str:

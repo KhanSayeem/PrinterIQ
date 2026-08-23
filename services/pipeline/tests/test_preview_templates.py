@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +30,9 @@ EXPECTED_TOKENS = {
     "{{CITY}}",
     "{{EMAIL}}",
     "{{FOUNDER_NAME}}",
+    # {{STATE}} is gone from every template. It only ever appeared beside the
+    # city, and the comma between the two belongs to the joined value.
+    "{{LOCATION}}",
     "{{PHONE}}",
     "{{SERVICE_1_DESC}}",
     "{{SERVICE_1_TITLE}}",
@@ -42,11 +46,11 @@ EXPECTED_TOKENS = {
     "{{SERVICE_5_TITLE}}",
     "{{SERVICE_6_DESC}}",
     "{{SERVICE_6_TITLE}}",
-    "{{STATE}}",
     "{{YEAR_FOUNDED}}",
 }
 REMOVED_TOKENS = {
     "{{FIRST_NAME}}",
+    "{{STATE}}",
     "{{PREVIEW_URL}}",
     "{{TAGLINE}}",
     "{{WEAKNESS_CALLOUT}}",
@@ -339,4 +343,211 @@ def test_every_template_renders_without_a_phone() -> None:
             failures.append(f"{template_path.name}: empty tel: link rendered")
         if TOKEN_RE.findall(rendered):
             failures.append(f"{template_path.name}: unrendered tokens")
+    assert failures == []
+
+
+# ---------------------------------------------------------------------------
+# A lead with no city and no state still gets a page worth looking at
+# ---------------------------------------------------------------------------
+
+# Dropping State from the required import fields lets 8,511 more Australian
+# rows in, and most of the rows with no state have no city either, so
+# "neither" is the common case rather than the edge one.
+BASELINE_CITY = "Brisbane"
+BASELINE_STATE = "QLD"
+DEGRADED_LOCATION_CASES = [
+    ("Brisbane", ""),
+    ("", "QLD"),
+    ("", ""),
+]
+
+_TEXT_NODE_RE = re.compile(r">([^<>]*)<")
+_SEPARATORS = ",\u00b7"
+
+
+def _render(template_html: str, *, city: str, state: str) -> str:
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "services" / "pipeline" / "src"))
+    from workers.generate_preview import render_preview_html
+
+    return render_preview_html(
+        template_html,
+        lead={
+            "business_name": "Sample Co",
+            "city": city,
+            "state": state,
+            "phone": "+61400000001",
+            "email": "sample@example.com",
+        },
+        personalisation={
+            "about_blurb": "A sample blurb.",
+            "founder_name": "Sam Sample",
+            "year_founded": 2004,
+            "services": [
+                {"title": f"Service {index}", "description": f"Description {index}"}
+                for index in range(1, 7)
+            ],
+        },
+    )
+
+
+def _visible_lines(rendered_html: str) -> list[str]:
+    body = SCRIPT_OR_STYLE_RE.sub(" ", rendered_html)
+    lines: list[str] = []
+    for node in _TEXT_NODE_RE.findall(body):
+        for raw_line in node.splitlines():
+            line = raw_line.strip()
+            if line:
+                lines.append(line)
+    return lines
+
+
+_EMPTY_ELEMENT_RE = re.compile(
+    r"<(span|li|p|h1|h2|h3|h4|a|title)\b[^>]*>\s*</\1>", re.IGNORECASE
+)
+
+
+def _empty_elements(rendered_html: str) -> Counter[str]:
+    body = SCRIPT_OR_STYLE_RE.sub(" ", rendered_html)
+    return Counter(tag.lower() for tag in _EMPTY_ELEMENT_RE.findall(body))
+
+
+def _acquired_defects(baseline_html: str, degraded_html: str) -> list[str]:
+    """Marks a vanished city or state left behind, judged only on the lines
+    it changed.
+
+    A page is full of punctuation that is correct where it stands: the dot
+    between two marquee items, a comma before a line break. Checking every
+    line would either flag all of that or have to be watered down until it
+    flags nothing. Comparing against the same page rendered with both values
+    present isolates exactly the lines this change can break.
+    """
+    remaining = Counter(_visible_lines(baseline_html))
+    defects: list[str] = []
+    for line in _visible_lines(degraded_html):
+        if remaining[line] > 0:
+            remaining[line] -= 1
+            continue
+        if line[0] in _SEPARATORS:
+            defects.append(f"opens with {line[0]!r}: {line!r}")
+        if line[-1] in _SEPARATORS:
+            defects.append(f"closes with {line[-1]!r}: {line!r}")
+        if re.search(rf"[{_SEPARATORS}]\s*[{_SEPARATORS}]", line):
+            defects.append(f"doubled separator: {line!r}")
+        if re.search(r"\s,", line):
+            # A dot is legitimately space-surrounded. A comma never is.
+            defects.append(f"space before a comma: {line!r}")
+        if "  " in line:
+            defects.append(f"gap left by a missing value: {line!r}")
+
+    # An accent word that vanished leaves no text to inspect at all, only
+    # an element with nothing in it. "Transforming <span></span> Gardens"
+    # reads as a rendering fault rather than as copy, and every check above
+    # is blind to it because an empty element contributes no text node.
+    baseline_empties = _empty_elements(baseline_html)
+    for tag, count in _empty_elements(degraded_html).items():
+        if count > baseline_empties[tag]:
+            defects.append(
+                f"{count - baseline_empties[tag]} more empty <{tag}> than with a location"
+            )
+    return defects
+
+
+def test_the_defect_detector_finds_the_marks_it_is_looking_for() -> None:
+    """Proves the sweep below is testing something.
+
+    Each pair is what one line of a template degrades into when a value goes
+    missing. If the detector were broken, the sweep would pass by finding
+    nothing at all.
+    """
+    assert _acquired_defects("<p>Sample Co, Brisbane</p>", "<p>Sample Co,</p>") != []
+    assert _acquired_defects("<p>Brisbane, QLD</p>", "<p>, QLD</p>") != []
+    assert _acquired_defects(
+        "<p>Brisbane \u00b7 QLD \u00b7 Surrounds</p>", "<p>\u00b7 QLD \u00b7 Surrounds</p>"
+    ) != []
+    assert _acquired_defects("<p>Sample Co \u00b7 Brisbane</p>", "<p>Sample Co \u00b7</p>") != []
+    assert _acquired_defects(
+        "<p>Founded in Brisbane in 2004.</p>", "<p>Founded in  in 2004.</p>"
+    ) != []
+    assert _acquired_defects(
+        "<p>Serving Brisbane, QLD and beyond</p>", "<p>Serving , and beyond</p>"
+    ) != []
+    assert _acquired_defects(
+        "<h2>Transforming <span>Brisbane</span> Gardens</h2>",
+        "<h2>Transforming <span></span> Gardens</h2>",
+    ) != []
+
+
+def test_the_defect_detector_passes_punctuation_that_is_correct_where_it_stands() -> None:
+    """The other half of the proof. A detector that flagged everything would
+    make the sweep meaningless too, just noisily instead of quietly."""
+    # A location line that shed only its state is finished copy, not a defect.
+    assert _acquired_defects(
+        "<p>Sample Co \u00b7 Brisbane, QLD</p>", "<p>Sample Co \u00b7 Brisbane</p>"
+    ) == []
+    # A comma before a line break, unchanged between the two renders.
+    assert _acquired_defects(
+        "<p>Every job, every detail,</p>", "<p>Every job, every detail,</p>"
+    ) == []
+    # A lone separator span, unchanged between the two renders.
+    assert _acquired_defects(
+        '<span class="dot">\u00b7</span>', '<span class="dot">\u00b7</span>'
+    ) == []
+    # A decorative element that is empty in both renders is part of the
+    # design, not damage.
+    assert _acquired_defects('<span class="rule"></span>', '<span class="rule"></span>') == []
+
+
+def test_every_template_renders_cleanly_when_the_city_or_state_is_missing() -> None:
+    """A page with a stray comma where the suburb should be tells the
+    prospect the page was generated. That is the one thing it must not say.
+
+    Runs over the whole directory so a template added later is covered
+    without anybody remembering to add it here.
+    """
+    failures: list[str] = []
+    for template_path in sorted(PREVIEW_TEMPLATE_DIR.glob("*.html")):
+        source = template_path.read_text(encoding="utf-8")
+        baseline = _render(source, city=BASELINE_CITY, state=BASELINE_STATE)
+        for city, state in DEGRADED_LOCATION_CASES:
+            degraded = _render(source, city=city, state=state)
+            for defect in _acquired_defects(baseline, degraded):
+                failures.append(f"{template_path.name} city={city!r} state={state!r}: {defect}")
+    assert failures == [], "\n".join(failures[:40])
+
+
+def test_a_lead_with_both_a_city_and_a_state_still_says_where_it_is() -> None:
+    """Guards the cheap way to pass the sweep above: deleting every mention
+    of the location. The page has to still be local when the data is there."""
+    failures: list[str] = []
+    for template_path in sorted(PREVIEW_TEMPLATE_DIR.glob("*.html")):
+        rendered = _render(
+            template_path.read_text(encoding="utf-8"),
+            city=BASELINE_CITY,
+            state=BASELINE_STATE,
+        )
+        if f"{BASELINE_CITY}, {BASELINE_STATE}" not in rendered:
+            failures.append(f"{template_path.name}: never renders the city and state together")
+        if rendered.count(BASELINE_CITY) < 10:
+            failures.append(
+                f"{template_path.name}: only {rendered.count(BASELINE_CITY)} city mentions"
+            )
+    assert failures == []
+
+
+def test_no_template_pairs_city_and_state_by_hand() -> None:
+    """`{{CITY}}, {{STATE}}` is only ever right when both are present.
+
+    The comma belongs to the joined value, which is what {{LOCATION}} is, so
+    no template is allowed to punctuate the pair itself.
+    """
+    failures: list[str] = []
+    pair = re.compile(
+        r"\{\{CITY\}\}\s*[,\u00b7]\s*\{\{STATE\}\}|\{\{STATE\}\}\s*[,\u00b7]\s*\{\{CITY\}\}"
+    )
+    for template_path in sorted(PREVIEW_TEMPLATE_DIR.glob("*.html")):
+        html = template_path.read_text(encoding="utf-8")
+        if pair.search(html):
+            failures.append(f"{template_path.name}: joins {{{{CITY}}}} and {{{{STATE}}}} by hand")
     assert failures == []

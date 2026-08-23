@@ -801,3 +801,158 @@ def test_unclosed_conditional_block_dead_letters() -> None:
             lead=_lead(phone="+61400000001"),
             personalisation=_personalisation(),
         )
+
+
+# ---------------------------------------------------------------------------
+# {{LOCATION}}: one token for the city/state pair, so the comma between them
+# belongs to the value rather than to the template
+# ---------------------------------------------------------------------------
+
+
+def test_location_joins_city_and_state() -> None:
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{LOCATION}}",
+        lead=_lead(city="Brisbane", state="QLD"),
+        personalisation=_personalisation(),
+    )
+
+    assert html == "Brisbane, QLD"
+
+
+def test_location_is_the_city_alone_when_the_state_is_blank() -> None:
+    """A template that wrote `{{CITY}}, {{STATE}}` produced "Brisbane, " here.
+
+    The comma is punctuation between two values, so it can only be decided
+    where both values are known: in the renderer, not in seven templates.
+    """
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{LOCATION}}",
+        lead=_lead(city="Brisbane", state=""),
+        personalisation=_personalisation(),
+    )
+
+    assert html == "Brisbane"
+
+
+def test_location_is_the_state_alone_when_the_city_is_blank() -> None:
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{LOCATION}}",
+        lead=_lead(city="", state="QLD"),
+        personalisation=_personalisation(),
+    )
+
+    assert html == "QLD"
+
+
+def test_location_is_empty_when_neither_city_nor_state_is_known() -> None:
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{LOCATION}}",
+        lead=_lead(city="", state=""),
+        personalisation=_personalisation(),
+    )
+
+    assert html == ""
+
+
+def test_location_ignores_a_whitespace_only_state() -> None:
+    """Whitespace is not a value. `_missing_required_fields` uses the same
+    rule, so a row that imports on a blank state must render on one too."""
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{LOCATION}}",
+        lead=_lead(city="Brisbane", state="   "),
+        personalisation=_personalisation(),
+    )
+
+    assert html == "Brisbane"
+
+
+def test_location_is_html_escaped() -> None:
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{LOCATION}}",
+        lead=_lead(city="Sut<on", state="NSW"),
+        personalisation=_personalisation(),
+    )
+
+    assert html == "Sut&lt;on, NSW"
+
+
+def test_location_block_is_removed_when_neither_city_nor_state_is_known() -> None:
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        '<ul>{{#IF_LOCATION}}<li>{{LOCATION}}</li>{{/IF_LOCATION}}<li>{{EMAIL}}</li></ul>',
+        lead=_lead(city="", state=""),
+        personalisation=_personalisation(),
+    )
+
+    assert "<li>hello@aquaflow.example</li>" in html
+    assert html.count("<li>") == 1
+    assert "{{" not in html
+
+
+# ---------------------------------------------------------------------------
+# Inverted conditional blocks: copy that needs a location-free wording
+# ---------------------------------------------------------------------------
+
+
+def test_inverted_block_is_kept_when_the_field_is_blank() -> None:
+    """Some copy cannot simply drop its city. "Looking After <City>" needs a
+    noun in the accent slot, so the template has to be able to say what to
+    write when there is no city, not only what to write when there is."""
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{#IF_CITY}}{{CITY}}{{/IF_CITY}}{{^IF_CITY}}Our Locals{{/IF_CITY}}",
+        lead=_lead(city=""),
+        personalisation=_personalisation(),
+    )
+
+    assert html == "Our Locals"
+
+
+def test_inverted_block_is_dropped_when_the_field_has_a_value() -> None:
+    module = _generate_preview_module()
+
+    html = module.render_preview_html(
+        "{{#IF_CITY}}{{CITY}}{{/IF_CITY}}{{^IF_CITY}}Our Locals{{/IF_CITY}}",
+        lead=_lead(city="Brisbane"),
+        personalisation=_personalisation(),
+    )
+
+    assert html == "Brisbane"
+
+
+def test_unknown_inverted_conditional_token_dead_letters() -> None:
+    """The inverted form gets the same guard as the positive one. Without it
+    a typo would silently publish the fallback copy on every page."""
+    module = _generate_preview_module()
+
+    with pytest.raises(module.DeadLetterError, match="unknown conditional"):
+        module.render_preview_html(
+            "{{^IF_FAX}}no fax{{/IF_FAX}}",
+            lead=_lead(),
+            personalisation=_personalisation(),
+        )
+
+
+def test_unclosed_inverted_conditional_block_dead_letters() -> None:
+    module = _generate_preview_module()
+
+    with pytest.raises(module.DeadLetterError, match="unbalanced conditional"):
+        module.render_preview_html(
+            "{{^IF_CITY}}no city",
+            lead=_lead(city=""),
+            personalisation=_personalisation(),
+        )

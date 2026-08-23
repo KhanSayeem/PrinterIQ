@@ -241,16 +241,28 @@ def normalise_industry(raw: str) -> str:
 def _missing_required_fields(values: Mapping[str, str]) -> list[str]:
     """Required fields, keyed by the human-facing column name for logs.
 
-    Website and phone are deliberately absent. A blank website is now a
-    scoring signal (`no_website`) rather than a rejection, and a lead's phone
-    is never used to send anything: it renders into the preview page and
-    nowhere else. 54.2% of the Australian list has no phone and 21.3% has no
-    website, so requiring either threw away most of the list.
+    Website, phone and state are deliberately absent. A blank website is now
+    a scoring signal (`no_website`) rather than a rejection, and a lead's
+    phone is never used to send anything: it renders into the preview page
+    and nowhere else. 54.2% of the Australian list has no phone and 21.3% has
+    no website, so requiring either threw away most of the list.
+
+    State went the same way for two reasons. It gated 8,511 of the 22,697
+    otherwise-importable Australian rows, and 2,768 of the 3,397 with no
+    website at all, which is the population the no-website campaign exists to
+    reach. It is also not trustworthy data: 497,556 records file-wide hold a
+    country name in that column, "germany" 105,355 times on its own. Nothing
+    downstream gates on it: `leads.state` is nullable, the qualifier and the
+    preview personaliser both receive it but neither branches on it, and the
+    preview page now drops the whole location line when it is blank.
+
+    The three that remain each have a caller that cannot proceed without
+    them. Email is the only send channel, Company Name is what the preview
+    page is built about, and Industry is reasoned over by the qualifier.
     """
     required_values = {
         "Email": values["email"],
         "Company Name": values["business_name"],
-        "State": values["state"],
         "Industry": values["industry"],
     }
     return [name for name, value in required_values.items() if not value.strip()]

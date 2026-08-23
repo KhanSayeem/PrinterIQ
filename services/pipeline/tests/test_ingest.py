@@ -512,6 +512,82 @@ def test_row_without_website_is_accepted_and_stores_an_empty_url(tmp_path: Path)
     asyncio.run(scenario())
 
 
+# ---------------------------------------------------------------------------
+# A blank state is a gap in the data, not a rejection
+# ---------------------------------------------------------------------------
+
+
+def test_row_without_a_state_is_accepted_and_stores_an_empty_state(tmp_path: Path) -> None:
+    """Requiring State threw away 8,511 of the 22,697 importable Australian
+    rows, and 2,768 of the 3,397 with no website at all: the exact population
+    the no-website campaign exists to reach.
+
+    The column is also not trustworthy. 497,556 records file-wide carry a
+    country name in it; "germany" alone appears 105,355 times. A field that
+    wrong cannot be a gate.
+    """
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path, fieldnames=UNDERSCORE_FIELDNAMES, rows=[_underscore_row(0, State="")]
+        )
+
+        summary, repository, queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        assert summary.inserted_rows == 1
+        assert summary.rejected_by_field == {}
+        assert repository.inserted[0].fields["state"] == ""
+        assert len(queue.jobs) == 1
+        assert queue.jobs[0]["job_type"] == JobType.ENRICH_LEAD.value
+
+
+    asyncio.run(scenario())
+
+
+def test_row_without_a_state_or_a_city_or_a_website_is_accepted(tmp_path: Path) -> None:
+    """The row this change exists for: no website, no state, no city. It has
+    to survive all three gaps at once, not one at a time."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, State="", City="", Website="")],
+        )
+
+        summary, repository, queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        assert summary.inserted_rows == 1
+        fields = repository.inserted[0].fields
+        assert fields["state"] == ""
+        assert fields["city"] == ""
+        assert fields["website_url"] == ""
+        assert len(queue.jobs) == 1
+
+    asyncio.run(scenario())
+
+
+def test_apollo_row_without_a_state_is_accepted(tmp_path: Path) -> None:
+    """The spaced-header Apollo path shares the same gate. If only the
+    underscore path were proven, half the callers would still reject."""
+
+    async def scenario() -> None:
+        csv_path = _write_apollo_csv(
+            tmp_path,
+            row_count=1,
+            row_overrides={0: {"State": ""}},
+        )
+
+        summary, _repository, _queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        assert summary.inserted_rows == 1
+
+    asyncio.run(scenario())
+
+
 def test_row_without_email_is_still_rejected(tmp_path: Path) -> None:
     """Loosening two required fields must not loosen the rest. Email is the
     send channel; without it the lead cannot be contacted at all."""
@@ -531,9 +607,17 @@ def test_row_without_email_is_still_rejected(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_row_without_company_name_or_state_is_still_rejected(tmp_path: Path) -> None:
+def test_row_without_company_name_or_industry_is_still_rejected(tmp_path: Path) -> None:
+    """The three fields that survive every loosening. Company Name is what
+    the preview page is built about, Email is the only send channel, and
+    Industry is what the scoring prompt reasons over.
+
+    Each is asserted on its own row so a single field silently becoming
+    optional cannot hide behind another still rejecting.
+    """
+
     async def scenario() -> None:
-        for field_name in ("Company_Name", "State"):
+        for field_name in ("Company_Name", "Industry", "Email"):
             csv_path = _write_csv(
                 tmp_path,
                 fieldnames=UNDERSCORE_FIELDNAMES,
@@ -541,9 +625,12 @@ def test_row_without_company_name_or_state_is_still_rejected(tmp_path: Path) -> 
                 name=f"missing-{field_name}.csv",
             )
 
-            summary, _repository, _queue = await _ingest(csv_path)
+            summary, repository, queue = await _ingest(csv_path)
 
             assert summary.rejected_rows == 1, field_name
+            assert summary.inserted_rows == 0, field_name
+            assert repository.inserted == [], field_name
+            assert queue.jobs == [], field_name
 
     asyncio.run(scenario())
 
@@ -559,15 +646,18 @@ def test_rejection_reasons_are_counted_per_field(tmp_path: Path) -> None:
             _underscore_row(0, Email=""),
             _underscore_row(1, State=""),
             _underscore_row(2, State="", Industry=""),
-            _underscore_row(3),
+            _underscore_row(3, Company_Name=""),
+            _underscore_row(4),
         ]
         csv_path = _write_csv(tmp_path, fieldnames=UNDERSCORE_FIELDNAMES, rows=rows)
 
         summary, _repository, _queue = await _ingest(csv_path)
 
+        # Row 1 is missing only State, which no longer rejects, so it imports
+        # alongside row 4. Row 2 still rejects, but for Industry alone.
         assert summary.rejected_rows == 3
-        assert summary.inserted_rows == 1
-        assert summary.rejected_by_field == {"Email": 1, "State": 2, "Industry": 1}
+        assert summary.inserted_rows == 2
+        assert summary.rejected_by_field == {"Email": 1, "Industry": 1, "Company Name": 1}
 
     asyncio.run(scenario())
 
