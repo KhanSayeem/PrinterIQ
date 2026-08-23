@@ -70,7 +70,7 @@ Top Australian industries: Finance and Accounting 7,480, Construction 3,837,
 Legal Services 1,871, Retail 1,375, Hospitality and Food 1,369. Construction is
 13.6%, so the trades-only assumption still has to go even for Australia.
 
-## Phase 1: Australia (28,270 records)
+## Phase 1: Australia (28,270 records, 22,697 importable)
 
 Correctness work only. No scale work needed.
 
@@ -152,10 +152,16 @@ two is the single biggest lever on how fast Australia pays back.
 
 ### What this means per phase
 
-**Australia.** We import 28,270 records into our own database and push only
-qualified leads into Instantly, roughly 4,000. That is well inside the 25,000
-contact ceiling. At 30 per day it is about 4.4 months of sending; at 155 per day
-about 26 days.
+**Australia.** 28,270 Australian records exist in the file, but **22,697 are
+what actually import.** The other 5,573 fail the required-field check: 2,712
+carry no email address, 4,212 carry no industry, and 1,351 are missing both.
+A row with no email cannot be contacted at all, and industry is what the
+scorer reasons over.
+
+Of those 22,697 we push only qualified leads into Instantly, roughly 3,200 to
+5,700 depending on where the threshold lands. That is well inside the 25,000
+contact ceiling. At 30 per day it is about 4 to 6 months of sending; at 155 per
+day about 21 to 37 days.
 
 **International.** The 25,000 contact ceiling is a wall. The full file would
 produce roughly 130,000 email-ready leads. The next plan up, Light Speed at $358
@@ -198,8 +204,13 @@ Per-lead measured cost: $0.001272 Haiku only, $0.008220 Haiku plus Sonnet.
 
 | Scope | Score every lead | Write emails | Total | Time |
 | --- | --- | --- | --- | --- |
-| Australia (28,270) | $40 | $42 to $178 | $82 to $218 | ~21 hours |
+| Australia (22,697 importable) | $29 | $22 to $39 | $51 to $68 | ~17 hours |
 | Whole file (909,812) | $1,306 | $1,350 to $5,700 | $2,650 to $7,000 | 22 to 27 days |
+
+The Australian row costs less than an earlier draft of this table showed. That
+draft costed 28,270 records, which is the number of Australian rows in the
+file rather than the number that clear the importer. Paying to score 5,573
+rows that never enter the database was never going to happen.
 
 A cost risk was raised about 2,530 dead qualification jobs potentially tripling
 the bill. This was checked and dismissed: all 2,530 are dated 2026-06-12 and are
