@@ -70,7 +70,7 @@ Top Australian industries: Finance and Accounting 7,480, Construction 3,837,
 Legal Services 1,871, Retail 1,375, Hospitality and Food 1,369. Construction is
 13.6%, so the trades-only assumption still has to go even for Australia.
 
-## Phase 1: Australia (28,270 records)
+## Phase 1: Australia (28,270 records, 22,697 importable)
 
 Correctness work only. No scale work needed.
 
@@ -130,6 +130,99 @@ month.** See the sending ladder below.
 
 - Email deliverability. No network calls were made against the list.
 
+## Where rows fail the required-field check
+
+A separate pass measured field completeness across all 909,812 records. It was
+run to answer one question: which missing field actually costs us the most
+leads.
+
+### Email coverage
+
+3,004 rows carry no email address, which is 0.3% of the file. The remaining
+906,808 rows all carry one, and all 906,808 addresses are distinct.
+
+Those 3,004 are not spread evenly.
+
+| Country | Rows with no email |
+| --- | --- |
+| **Australia** | **2,712** |
+| No country recorded | 279 |
+| United States | 4 |
+| India | 2 |
+| Zambia | 1 |
+| United Kingdom | 1 |
+| United Arab Emirates | 1 |
+| Brazil | 1 |
+| Italy | 1 |
+| Belgium | 1 |
+| Netherlands | 1 |
+
+Australia is 3.1% of the file and holds 90.3% of every missing email. Of the
+2,725 missing emails that can be attributed to a named country, 2,712 are
+Australian, which is 99.5%.
+
+Read this as a provenance signal. The international bulk looks like it was
+assembled with an email present as a condition of inclusion. The Australian
+slice was merged in under different rules. It matches the anomaly already
+recorded above, that 51.3% of the Australian slice carries a first name against
+2.1% file-wide.
+
+### Field completeness across the file
+
+| Field missing | Rows | Share |
+| --- | --- | --- |
+| Email | 3,004 | 0.3% |
+| Company name | 0 | 0.0% |
+| Industry | 332,222 | 36.5% |
+| Website | 165,664 | 18.2% |
+
+Under the required fields as they stand (Email, Company Name, Industry),
+576,095 rows import file-wide, which is 63.3%.
+
+Industry, not email, is the dominant rejector file-wide.
+
+### Industry is not the only column carrying trade signal
+
+Of the 332,222 rows with no `Industry`:
+
+- 313,505 (94.4%) have a non-blank `Category`.
+- 180,011 (54.2%) have a `Service_Category` that is something other than the
+  filler value "Other / Unspecified".
+- 313,858 (94.5%) have usable signal in at least one of those two columns.
+- 313,661 of those also have an email, so they are genuinely recoverable.
+
+The `Category` column holds colon-delimited OpenStreetMap tags such as
+`amenity:restaurant`, `amenity:cafe` and `amenity:dentist`. The delimiter fix
+that shipped in PR #138 already parses exactly this form. The importer can
+already read this data. It simply never looks in that column, because
+`Category` is not in the alias list for the Industry field.
+
+The Australian picture is much weaker. Of the 4,212 Australian rows with no
+industry, only 1,383 (32.8%) have usable signal, and only 1,191 of those also
+have an email. 89.7% of Australian `Service_Category` values read
+"Other / Unspecified", which is filler, not signal.
+
+### Recommendation
+
+Two changes would recover rows. The second is strictly better.
+
+(a) Remove Industry from the required fields. This recovers 2,861 Australian
+rows, but they arrive with a blank industry and score blind on component 3 of
+`qualify-v2`, which is 20 points out of 100.
+
+(b) Add `Category` and `Service_Category` as aliases for the Industry field.
+This recovers fewer rows, but the rows it recovers arrive with real signal.
+
+**Take (b), and take it in Phase 2, not now.** For Australia it is about 1,191
+leads that cannot be emailed for months anyway, because sending capacity of 30
+per day is the binding constraint, not the lead count. Internationally the same
+change is worth 313,661 leads, which is where it earns its keep.
+
+Deferring is safe. A row rejected at import is never inserted, so nothing blocks
+re-importing it later once the rule changes. The dedup check only matches rows
+already present in the `leads` table. Deferring costs nothing. A lead archived
+at a wrong threshold does block re-import, which is why calibration comes first.
+
 ## The sending ladder
 
 Four limits stack. Only the tightest one matters, and it is not the one people
@@ -152,10 +245,16 @@ two is the single biggest lever on how fast Australia pays back.
 
 ### What this means per phase
 
-**Australia.** We import 28,270 records into our own database and push only
-qualified leads into Instantly, roughly 4,000. That is well inside the 25,000
-contact ceiling. At 30 per day it is about 4.4 months of sending; at 155 per day
-about 26 days.
+**Australia.** 28,270 Australian records exist in the file, but **22,697 are
+what actually import.** The other 5,573 fail the required-field check: 2,712
+carry no email address, 4,212 carry no industry, and 1,351 are missing both.
+A row with no email cannot be contacted at all, and industry is what the
+scorer reasons over.
+
+Of those 22,697 we push only qualified leads into Instantly, roughly 3,200 to
+5,700 depending on where the threshold lands. That is well inside the 25,000
+contact ceiling. At 30 per day it is about 4 to 6 months of sending; at 155 per
+day about 21 to 37 days.
 
 **International.** The 25,000 contact ceiling is a wall. The full file would
 produce roughly 130,000 email-ready leads. The next plan up, Light Speed at $358
@@ -198,8 +297,13 @@ Per-lead measured cost: $0.001272 Haiku only, $0.008220 Haiku plus Sonnet.
 
 | Scope | Score every lead | Write emails | Total | Time |
 | --- | --- | --- | --- | --- |
-| Australia (28,270) | $40 | $42 to $178 | $82 to $218 | ~21 hours |
+| Australia (22,697 importable) | $29 | $22 to $39 | $51 to $68 | ~17 hours |
 | Whole file (909,812) | $1,306 | $1,350 to $5,700 | $2,650 to $7,000 | 22 to 27 days |
+
+The Australian row costs less than an earlier draft of this table showed. That
+draft costed 28,270 records, which is the number of Australian rows in the
+file rather than the number that clear the importer. Paying to score 5,573
+rows that never enter the database was never going to happen.
 
 A cost risk was raised about 2,530 dead qualification jobs potentially tripling
 the bill. This was checked and dismissed: all 2,530 are dated 2026-06-12 and are

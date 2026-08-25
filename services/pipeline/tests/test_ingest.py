@@ -513,6 +513,98 @@ def test_row_without_website_is_accepted_and_stores_an_empty_url(tmp_path: Path)
 
 
 # ---------------------------------------------------------------------------
+# The stored website URL must be well formed
+# ---------------------------------------------------------------------------
+
+
+def test_bare_domain_is_stored_with_an_https_scheme(tmp_path: Path) -> None:
+    """The incident this fix exists for.
+
+    The Australian source CSV spells websites as bare domains with no
+    scheme. Every earlier import happened to carry `https://`, so the raw
+    passthrough was never exercised. Chromium rejects a schemeless string,
+    the audit answered with its unreachable record and an empty weaknesses
+    array, and an empty weaknesses array archives the lead on the derived
+    gate in workers.qualify, which runs after the paid Haiku call. 252 real
+    leads were archived on that fabricated premise.
+    """
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, Website="cottellandco.com.au")],
+        )
+
+        summary, repository, _queue = await _ingest(csv_path)
+
+        assert summary.rejected_rows == 0
+        assert repository.inserted[0].fields["website_url"] == "https://cottellandco.com.au"
+
+    asyncio.run(scenario())
+
+
+def test_stored_website_url_keeps_a_source_supplied_http_scheme(tmp_path: Path) -> None:
+    """Ingest must not upgrade http to https. `has_ssl` is measured from the
+    scheme that actually loaded, so rewriting the source here would either
+    fabricate an SSL result or fail navigation against a host with no TLS."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, Website="http://example.com.au")],
+        )
+
+        _summary, repository, _queue = await _ingest(csv_path)
+
+        assert repository.inserted[0].fields["website_url"] == "http://example.com.au"
+
+    asyncio.run(scenario())
+
+
+def test_stored_website_url_is_stripped_of_surrounding_whitespace(tmp_path: Path) -> None:
+    """A stray space in the export is enough to break navigation, and the
+    CSV reader hands the value through verbatim."""
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, Website="  www.example.com  ")],
+        )
+
+        _summary, repository, _queue = await _ingest(csv_path)
+
+        assert repository.inserted[0].fields["website_url"] == "https://www.example.com"
+
+    asyncio.run(scenario())
+
+
+def test_a_blank_website_is_never_turned_into_a_bare_scheme(tmp_path: Path) -> None:
+    """Regression guard on the normaliser's most damaging failure mode.
+
+    A blank website means the business has no site, and workers.enrich keys
+    its truthful `no_website` record on the empty string. Storing `https://`
+    for a blank cell would send 6,011 Australian rows down the audit path
+    and convert an accurate record into a fabricated unreachable one.
+    """
+
+    async def scenario() -> None:
+        csv_path = _write_csv(
+            tmp_path,
+            fieldnames=UNDERSCORE_FIELDNAMES,
+            rows=[_underscore_row(0, Website="   ")],
+        )
+
+        _summary, repository, _queue = await _ingest(csv_path)
+
+        assert repository.inserted[0].fields["website_url"] == ""
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
 # A blank state is a gap in the data, not a rejection
 # ---------------------------------------------------------------------------
 

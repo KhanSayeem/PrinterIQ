@@ -41,8 +41,14 @@ class _FakePage:
         html: str = "<html></html>",
         raise_timeout: bool = False,
         raise_nav_error: str | None = None,
+        nav_error_urls: dict[str, str] | None = None,
+        timeout_urls: set[str] | None = None,
+        status_by_url: dict[str, int] | None = None,
     ) -> None:
         self._status = status
+        self._nav_error_urls = nav_error_urls or {}
+        self._timeout_urls = timeout_urls or set()
+        self._status_by_url = status_by_url or {}
         self._eval_answers = {
             "() => !!document.querySelector('meta[name=\"viewport\"]')": has_viewport_meta,
             "() => !!document.title": has_title,
@@ -57,11 +63,15 @@ class _FakePage:
 
     async def goto(self, url: str, timeout: int, wait_until: str) -> _FakeResponse:
         self.goto_calls.append({"url": url, "timeout": timeout, "wait_until": wait_until})
+        if url in self._timeout_urls:
+            raise FakeTimeoutError("timed out")
+        if url in self._nav_error_urls:
+            raise FakePlaywrightError(self._nav_error_urls[url])
         if self._raise_timeout:
             raise FakeTimeoutError("timed out")
         if self._raise_nav_error:
             raise FakePlaywrightError(self._raise_nav_error)
-        return _FakeResponse(self._status)
+        return _FakeResponse(self._status_by_url.get(url, self._status))
 
     async def evaluate(self, script: str) -> bool:
         return self._eval_answers[script]
@@ -399,3 +409,225 @@ def test_unreachable_still_reports_has_site_true(monkeypatch: pytest.MonkeyPatch
     assert result["has_site"] is True
     assert result["is_reachable"] is False
     assert result["weaknesses"] == []
+
+
+# ---------------------------------------------------------------------------
+# Defensive normalisation at the audit boundary
+# ---------------------------------------------------------------------------
+
+
+def test_schemeless_url_is_normalised_before_navigation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The audit must not depend on ingest having cleaned the value.
+
+    252 leads are already in the database with the raw bare domain the
+    Australian export supplies, and re-enriching them goes through this
+    method with exactly that value. Chromium rejects a schemeless string,
+    which surfaced as an unreachable record with an empty weaknesses array,
+    and that empty array archives the lead in workers.qualify after the paid
+    Haiku call has already been spent.
+    """
+    page = _FakePage()
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0], url="cottellandco.com.au")
+
+    assert [call["url"] for call in page.goto_calls] == ["https://cottellandco.com.au"]
+    assert result["is_reachable"] is True
+    assert result["raw_audit"] == {"url": "https://cottellandco.com.au", "status": 200}
+
+
+def test_normalised_url_drives_has_ssl_not_the_raw_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The second victim on this path.
+
+    `has_ssl` was a `startswith("https://")` test against the raw value, so
+    a schemeless URL could never register SSL and always carried a `no_ssl`
+    weakness, even for a site served entirely over TLS.
+    """
+    page = _FakePage()
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0], url="example.com.au")
+
+    assert result["has_ssl"] is True
+    assert Weakness.NO_SSL not in result["weaknesses"]
+
+
+def test_mixed_case_https_scheme_does_not_fabricate_a_no_ssl_weakness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakePage()
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0], url="HTTPS://example.com")
+
+    assert page.goto_calls[0]["url"] == "https://example.com"
+    assert result["has_ssl"] is True
+    assert Weakness.NO_SSL not in result["weaknesses"]
+
+
+def test_surrounding_whitespace_is_stripped_before_navigation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakePage()
+    browser = _FakeBrowser(page)
+
+    _run_audit(browser, monkeypatch, times=[0.0, 1.0], url="  https://example.com  ")
+
+    assert page.goto_calls[0]["url"] == "https://example.com"
+
+
+# ---------------------------------------------------------------------------
+# http fallback for a scheme we inferred
+# ---------------------------------------------------------------------------
+
+
+def test_inferred_https_falls_back_to_http_when_navigation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An http-only site is a real business we should still reach.
+
+    We guessed https for a bare domain, so a navigation failure on that
+    guess is not evidence about the business, it is evidence about our
+    guess. Recording it as unreachable produces the empty weaknesses array
+    that archives the lead, which is exactly the failure this incident was.
+    """
+    page = _FakePage(
+        nav_error_urls={
+            "https://example.com.au": "Page.goto: net::ERR_SSL_PROTOCOL_ERROR",
+        }
+    )
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 0.0, 0.0, 1.0], url="example.com.au")
+
+    assert [call["url"] for call in page.goto_calls] == [
+        "https://example.com.au",
+        "http://example.com.au",
+    ]
+    assert result["is_reachable"] is True
+    assert result["has_site"] is True
+
+
+def test_inferred_https_falls_back_to_http_after_a_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host with no TLS listener commonly hangs rather than refusing, so
+    the timeout path needs the same fallback as the error path."""
+    page = _FakePage(timeout_urls={"https://example.com.au"})
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 0.0, 1.0], url="example.com.au")
+
+    assert [call["url"] for call in page.goto_calls] == [
+        "https://example.com.au",
+        "http://example.com.au",
+    ]
+    assert result["is_reachable"] is True
+
+
+def test_http_fallback_records_has_ssl_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """has_ssl must reflect the scheme that actually loaded, not the one we
+    guessed. The fallback loaded over http, so the site genuinely has no
+    SSL and no_ssl is a measured weakness rather than an assumed one."""
+    page = _FakePage(
+        nav_error_urls={"https://example.com.au": "Page.goto: net::ERR_SSL_PROTOCOL_ERROR"}
+    )
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 0.0, 0.0, 1.0], url="example.com.au")
+
+    assert result["has_ssl"] is False
+    assert Weakness.NO_SSL in result["weaknesses"]
+    assert result["raw_audit"] == {"url": "http://example.com.au", "status": 200}
+
+
+def test_successful_https_attempt_records_has_ssl_true_and_never_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the has_ssl contract, plus the guarantee that a
+    working site is never visited twice."""
+    page = _FakePage()
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0], url="example.com.au")
+
+    assert len(page.goto_calls) == 1
+    assert result["has_ssl"] is True
+    assert Weakness.NO_SSL not in result["weaknesses"]
+
+
+def test_inferred_https_falls_back_to_http_on_an_error_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Some hosts answer the https port with an error page rather than
+    refusing the connection, which is still a failure of our guess."""
+    page = _FakePage(status_by_url={"https://example.com.au": 502, "http://example.com.au": 200})
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 0.0, 0.0, 1.0], url="example.com.au")
+
+    assert [call["url"] for call in page.goto_calls] == [
+        "https://example.com.au",
+        "http://example.com.au",
+    ]
+    assert result["is_reachable"] is True
+    assert result["has_ssl"] is False
+
+
+def test_source_supplied_https_is_never_retried_over_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback is a correction to our own guess, not a downgrade policy.
+
+    When the source said https and https failed, that is a fact about the
+    site. Retrying over http would visit a URL nobody claimed exists and
+    could report SSL findings for a host that never served the page.
+    """
+    page = _FakePage(raise_nav_error="Page.goto: net::ERR_CONNECTION_REFUSED")
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0], url="https://example.com")
+
+    assert [call["url"] for call in page.goto_calls] == ["https://example.com"]
+    assert result["is_reachable"] is False
+    assert result["weaknesses"] == []
+
+
+def test_a_genuinely_dead_domain_is_still_unreachable_after_the_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not weaken the unreachable handling from PR #134.
+
+    Both attempts failing is a real finding about a dead domain. It must
+    still return the unreachable record rather than crashing, and must still
+    claim no weakness it could not measure.
+    """
+    page = _FakePage(raise_nav_error="Page.goto: net::ERR_NAME_NOT_RESOLVED")
+    browser = _FakeBrowser(page)
+
+    result = _run_audit(browser, monkeypatch, times=[0.0, 1.0], url="dead-domain.com.au")
+
+    assert [call["url"] for call in page.goto_calls] == [
+        "https://dead-domain.com.au",
+        "http://dead-domain.com.au",
+    ]
+    assert result["has_site"] is True
+    assert result["is_reachable"] is False
+    assert result["weaknesses"] == []
+    assert result["has_ssl"] is None
+    assert result["load_ms"] is None
+    assert result["raw_audit"] == {}
+
+
+def test_the_page_is_closed_once_even_when_both_attempts_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retry runs inside the existing page lifecycle, so the finally
+    block that closes it must not become conditional on a single attempt."""
+    page = _FakePage(raise_nav_error="Page.goto: net::ERR_NAME_NOT_RESOLVED")
+    browser = _FakeBrowser(page)
+
+    _run_audit(browser, monkeypatch, times=[0.0, 1.0], url="dead-domain.com.au")
+
+    assert page.closed is True
+    assert browser.closed is True
