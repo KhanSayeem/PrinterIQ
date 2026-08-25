@@ -114,8 +114,21 @@ CREATE TABLE website_previews (
   prompt_version       TEXT NOT NULL,
   cost_usd             NUMERIC(10,6) NOT NULL,
   generated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Open and click tracking are off for deliverability, so a hit on the
+  -- high-entropy preview URL is the only evidence that a given prospect both
+  -- received the email and clicked through. See migration 0013.
+  first_viewed_at      TIMESTAMPTZ,
+  last_viewed_at       TIMESTAMPTZ,
+  view_count           INTEGER NOT NULL DEFAULT 0,
   CONSTRAINT fk_website_previews_lead_tenant
-    FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id)
+    FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id),
+  CONSTRAINT website_previews_view_tracking_consistent
+    CHECK (
+      view_count >= 0
+      AND (first_viewed_at IS NULL) = (view_count = 0)
+      AND (first_viewed_at IS NULL) = (last_viewed_at IS NULL)
+      AND (first_viewed_at IS NULL OR last_viewed_at >= first_viewed_at)
+    )
 );
 
 CREATE INDEX idx_website_previews_tenant_lead
