@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from weaknesses import Weakness
+from website_url import normalise_website_url
 
 logger = logging.getLogger(__name__)
 
@@ -45,97 +46,136 @@ class PlaywrightAuditor:
         from playwright.async_api import TimeoutError as _Timeout  # type: ignore[import-untyped]
         from playwright.async_api import async_playwright  # type: ignore[import-untyped]
 
+        # Normalised here as well as at ingest, deliberately. workers.ingest
+        # now stores a well-formed value, but 252 leads are already in the
+        # database holding the raw bare domain the Australian export supplies,
+        # and re-enriching them arrives here with exactly that string.
+        # page.goto rejects a schemeless URL, which produced _unreachable()
+        # and its empty weaknesses array, and that array archives the lead in
+        # workers.qualify after the paid Haiku call. Normalising at this
+        # boundary means no caller, and no historical row, can reproduce it.
+        normalised = normalise_website_url(url)
+        if not normalised.url:
+            return _no_site()
+
+        # The http retry exists for one specific case: we guessed https for a
+        # schemeless value, and the guess failed. That failure is evidence
+        # about our guess, not about the business, and an http-only site is a
+        # real business we should still reach. When the source supplied the
+        # scheme there is nothing to correct, so no second attempt is made
+        # and a failure stays the honest finding it was.
+        attempts = [normalised.url]
+        if normalised.scheme_was_inferred:
+            attempts.append("http://" + normalised.url.removeprefix("https://"))
+
         async with async_playwright() as p:
             browser = await p.chromium.launch()
             try:
                 page = await browser.new_page(viewport=_MOBILE_VIEWPORT)
                 try:
-                    loop = asyncio.get_event_loop()
-                    start = loop.time()
-                    response = await page.goto(
-                        url, timeout=_TIMEOUT_MS, wait_until="domcontentloaded"
-                    )
-                    load_ms = int((loop.time() - start) * 1000)
+                    for attempt_url in attempts:
+                        loop = asyncio.get_event_loop()
+                        start = loop.time()
+                        try:
+                            response = await page.goto(
+                                attempt_url, timeout=_TIMEOUT_MS, wait_until="domcontentloaded"
+                            )
+                        except _Timeout:
+                            logger.warning("Playwright 30s timeout for %s", attempt_url)
+                            continue
+                        except _PlaywrightError as exc:
+                            # A site that will not load is a finding, not a
+                            # crash. Only _Timeout was caught before, so a
+                            # dead domain, a refused connection or a
+                            # certificate that does not match the domain
+                            # escaped the auditor and dead-lettered the enrich
+                            # job, leaving the lead with no enrichment row at
+                            # all. Re-enriching production hit this on 15 of
+                            # the first hundred leads.
+                            #
+                            # Deliberately does not record a weakness. A bad
+                            # certificate is tempting to log as no_ssl, but
+                            # the page never loaded and nothing was measured;
+                            # asserting otherwise is the fabricated-weakness
+                            # problem the grounding work exists to prevent.
+                            # is_reachable = False is the honest signal, and
+                            # the empty weaknesses array archives the lead on
+                            # the derived gate.
+                            logger.warning(
+                                "Playwright navigation failed for %s: %s",
+                                attempt_url,
+                                str(exc).splitlines()[0],
+                            )
+                            continue
 
-                    if response is None or response.status >= 400:
-                        return _unreachable()
+                        load_ms = int((loop.time() - start) * 1000)
+                        if response is None or response.status >= 400:
+                            continue
 
-                    has_ssl = url.startswith("https://")
-                    is_mobile = bool(
-                        await page.evaluate(
-                            "() => !!document.querySelector('meta[name=\"viewport\"]')"
+                        return await _measure_loaded_page(
+                            page, url=attempt_url, status=response.status, load_ms=load_ms
                         )
-                    )
-                    has_title = bool(await page.evaluate("() => !!document.title"))
-                    has_meta_desc = bool(
-                        await page.evaluate(
-                            "() => !!document.querySelector('meta[name=\"description\"]')"
-                        )
-                    )
-                    has_h1 = bool(
-                        await page.evaluate("() => !!document.querySelector('h1')")
-                    )
-                    html: str = await page.content()
-                    cms = _detect_cms(html)
 
-                    weaknesses: list[str] = []
-                    if not is_mobile:
-                        weaknesses.append(Weakness.NO_MOBILE)
-                    if not has_ssl:
-                        weaknesses.append(Weakness.NO_SSL)
-                    if not has_title:
-                        weaknesses.append(Weakness.NO_META_TITLE)
-                    if not has_meta_desc:
-                        weaknesses.append(Weakness.NO_META_DESCRIPTION)
-                    if not has_h1:
-                        weaknesses.append(Weakness.NO_H1)
-                    if load_ms > _SLOW_LOAD_THRESHOLD_MS:
-                        weaknesses.append(Weakness.SLOW_LOAD)
-
-                    return {
-                        "has_site": True,
-                        "is_reachable": True,
-                        "is_mobile_friendly": is_mobile,
-                        "has_ssl": has_ssl,
-                        "has_meta_title": has_title,
-                        "has_meta_description": has_meta_desc,
-                        "has_h1": has_h1,
-                        "load_ms": load_ms,
-                        "cms_detected": cms,
-                        "lighthouse_mobile_score": None,
-                        "weaknesses": weaknesses,
-                        "raw_audit": {"url": url, "status": response.status},
-                    }
-
-                except _Timeout:
-                    logger.warning("Playwright 30s timeout for %s", url)
-                    return _unreachable()
-                except _PlaywrightError as exc:
-                    # A site that will not load is a finding, not a crash.
-                    # Only _Timeout was caught before, so a dead domain, a
-                    # refused connection or a certificate that does not match
-                    # the domain escaped the auditor and dead-lettered the
-                    # enrich job, leaving the lead with no enrichment row at
-                    # all. Re-enriching production hit this on 15 of the first
-                    # hundred leads.
-                    #
-                    # Deliberately does not record a weakness. A bad
-                    # certificate is tempting to log as no_ssl, but the page
-                    # never loaded and nothing was measured; asserting
-                    # otherwise is the fabricated-weakness problem the
-                    # grounding work exists to prevent. is_reachable = False
-                    # is the honest signal, and the empty weaknesses array
-                    # archives the lead on the derived gate.
-                    logger.warning(
-                        "Playwright navigation failed for %s: %s",
-                        url,
-                        str(exc).splitlines()[0],
-                    )
                     return _unreachable()
                 finally:
                     await page.close()
             finally:
                 await browser.close()
+
+
+async def _measure_loaded_page(
+    page: object, *, url: str, status: int, load_ms: int
+) -> dict[str, object]:
+    """Measure a page that actually loaded, over the scheme that loaded it.
+
+    `url` is the attempt that succeeded, not the value the caller passed in.
+    That distinction is the whole point: has_ssl must describe the scheme the
+    site really answered on. When the https guess failed and the http
+    fallback is what loaded, the site genuinely has no SSL, so no_ssl becomes
+    a measured weakness rather than an assumed one. Reading the scheme off
+    the caller's raw string, which is what this code used to do, meant a
+    schemeless URL could never register SSL at all.
+    """
+    has_ssl = url.startswith("https://")
+    is_mobile = bool(
+        await page.evaluate("() => !!document.querySelector('meta[name=\"viewport\"]')")
+    )
+    has_title = bool(await page.evaluate("() => !!document.title"))
+    has_meta_desc = bool(
+        await page.evaluate("() => !!document.querySelector('meta[name=\"description\"]')")
+    )
+    has_h1 = bool(await page.evaluate("() => !!document.querySelector('h1')"))
+    html: str = await page.content()
+    cms = _detect_cms(html)
+
+    weaknesses: list[str] = []
+    if not is_mobile:
+        weaknesses.append(Weakness.NO_MOBILE)
+    if not has_ssl:
+        weaknesses.append(Weakness.NO_SSL)
+    if not has_title:
+        weaknesses.append(Weakness.NO_META_TITLE)
+    if not has_meta_desc:
+        weaknesses.append(Weakness.NO_META_DESCRIPTION)
+    if not has_h1:
+        weaknesses.append(Weakness.NO_H1)
+    if load_ms > _SLOW_LOAD_THRESHOLD_MS:
+        weaknesses.append(Weakness.SLOW_LOAD)
+
+    return {
+        "has_site": True,
+        "is_reachable": True,
+        "is_mobile_friendly": is_mobile,
+        "has_ssl": has_ssl,
+        "has_meta_title": has_title,
+        "has_meta_description": has_meta_desc,
+        "has_h1": has_h1,
+        "load_ms": load_ms,
+        "cms_detected": cms,
+        "lighthouse_mobile_score": None,
+        "weaknesses": weaknesses,
+        "raw_audit": {"url": url, "status": status},
+    }
 
 
 def _detect_cms(html: str) -> str | None:
