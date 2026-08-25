@@ -37,6 +37,8 @@ export async function GET(request: NextRequest) {
         search: filters.search,
         scoreMin: filters.scoreMin,
         scoreMax: filters.scoreMax,
+        unsubscribed: filters.unsubscribed,
+        previewView: filters.previewView,
         page: filters.page,
         pageSize: 25,
       }),

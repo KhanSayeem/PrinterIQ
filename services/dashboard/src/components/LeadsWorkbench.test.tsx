@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LeadsWorkbench } from "./LeadsWorkbench";
 import type { LeadListRow } from "./LeadQuickPanel";
 
-const counts = { all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 };
+const counts = { all: 5, qualified: 2, replied: 1, paid: 1, archived: 1, unsubscribed: 3, previewSeen: 2, previewUnseen: 4 };
 
 const leads: LeadListRow[] = [
   {
@@ -316,7 +316,7 @@ describe("LeadsWorkbench", () => {
       ok: true,
       json: async () => ({
         rows: [leads[1]],
-        counts: { all: 5, qualified: 2, replied: 1, paid: 1, archived: 1 },
+        counts,
         total: 1,
         page: 1,
         totalPages: 1,

@@ -45,6 +45,8 @@ export default async function LeadsPage({
         scoreMin: filters.scoreMin,
         scoreMax: filters.scoreMax,
         search: filters.search,
+        unsubscribed: filters.unsubscribed,
+        previewView: filters.previewView,
         page: requestedPage,
         pageSize,
       }),

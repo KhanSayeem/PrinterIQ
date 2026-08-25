@@ -105,6 +105,20 @@ describe("dashboard lead queries", () => {
     expect(query.params).toContain(tenantId);
   });
 
+  it("tallies unsubscribed and preview pills inside the single filter-count aggregate", () => {
+    const query = buildLeadFilterCountsQuery(db, { tenantId }).toSQL();
+
+    // One pass over the tenant's leads: no second aggregate is issued per page load.
+    expect(query.sql.match(/select/g)).toHaveLength(2);
+    expect(query.sql).toContain('from "leads"');
+    expect(query.sql).toContain('left join "website_previews"');
+    expect(query.sql).toContain('"website_previews"."tenant_id" =');
+    expect(query.sql).toContain('exists');
+    expect(query.sql).toContain('"outreach_sends"."unsubscribed" = true');
+    expect(query.sql).toContain('"website_previews"."first_viewed_at" is not null');
+    expect(query.sql).toContain('"website_previews"."first_viewed_at" is null');
+  });
+
   it("normalizes lead filter counts with an all total and zero-filled visible statuses", () => {
     expect(
       normalizeLeadFilterCounts([
@@ -118,7 +132,70 @@ describe("dashboard lead queries", () => {
       replied: 0,
       paid: 1,
       archived: 0,
+      unsubscribed: 0,
+      previewSeen: 0,
+      previewUnseen: 0,
     });
+  });
+
+  it("sums the unsubscribed and preview tallies across every status group", () => {
+    expect(
+      normalizeLeadFilterCounts([
+        { status: "contacted", count: "4", unsubscribedCount: "1", previewSeenCount: "2", previewUnseenCount: "2" },
+        { status: "archived", count: "2", unsubscribedCount: 2, previewSeenCount: 0, previewUnseenCount: "1" },
+      ]),
+    ).toEqual({
+      all: 6,
+      qualified: 0,
+      replied: 0,
+      paid: 0,
+      archived: 2,
+      unsubscribed: 3,
+      previewSeen: 2,
+      previewUnseen: 3,
+    });
+  });
+
+  it("filters the lead list to leads with an unsubscribed outreach send", () => {
+    const query = buildLeadListQuery(db, { tenantId, unsubscribed: true, page: 1, pageSize: 25 }).toSQL();
+
+    expect(query.sql).toContain('"leads"."tenant_id" =');
+    expect(query.sql).toContain('exists');
+    expect(query.sql).toContain('from "outreach_sends"');
+    expect(query.sql).toContain('"outreach_sends"."unsubscribed" = true');
+    expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
+    expect(query.params.filter((param) => param === tenantId).length).toBeGreaterThan(1);
+  });
+
+  it("filters the lead list to leads whose preview has been viewed", () => {
+    const query = buildLeadListQuery(db, { tenantId, previewView: "seen", page: 1, pageSize: 25 }).toSQL();
+
+    expect(query.sql).toContain('left join "website_previews"');
+    expect(query.sql).toContain('"website_previews"."tenant_id" =');
+    expect(query.sql).toContain('"website_previews"."first_viewed_at" is not null');
+  });
+
+  it("filters the lead list to leads whose preview exists but has never been viewed", () => {
+    const query = buildLeadListQuery(db, { tenantId, previewView: "unseen", page: 1, pageSize: 25 }).toSQL();
+
+    expect(query.sql).toContain('left join "website_previews"');
+    expect(query.sql).toContain('"website_previews"."id" is not null');
+    expect(query.sql).toContain('"website_previews"."first_viewed_at" is null');
+  });
+
+  it("applies the unsubscribed and preview filters to the lead-list total as well", () => {
+    const query = buildLeadListCountQuery(db, {
+      tenantId,
+      unsubscribed: true,
+      previewView: "unseen",
+      page: 1,
+      pageSize: 25,
+    }).toSQL();
+
+    expect(query.sql).toContain("count(*)");
+    expect(query.sql).toContain('"outreach_sends"."unsubscribed" = true');
+    expect(query.sql).toContain('"website_previews"."first_viewed_at" is null');
+    expect(query.sql).not.toContain("limit");
   });
 
   it("counts filtered lead-list totals without applying page limits", () => {
