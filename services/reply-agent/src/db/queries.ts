@@ -8,6 +8,7 @@ import type {
   ConversationHistoryItem,
   EscalationContext,
   LeadContext,
+  PreviewViewState,
 } from "../types.js";
 
 type Queryable = Pick<pg.Pool, "query">;
@@ -681,6 +682,81 @@ export async function recordCompletedPayment(
   return row;
 }
 
+/** Count one view of a preview page.
+ *
+ * `first_viewed_at` is written with COALESCE rather than a read-then-write so
+ * the "only on the first view" rule is decided by Postgres inside the row
+ * lock, not by application code. Two concurrent hits, which is normal when a
+ * prospect reloads or opens the link on a phone and a laptop, would otherwise
+ * both read NULL and both claim to be the first view.
+ *
+ * Scoped by tenant_id even though preview_slug is globally unique. The tenant
+ * comes from configuration, not from the request, so a slug belonging to
+ * another tenant matches nothing here instead of being written to.
+ *
+ * Returns null when the slug matches no preview for this tenant, which is the
+ * caller's signal that the hit was for a page we do not own.
+ */
+export async function recordWebsitePreviewView(
+  tenantId: string,
+  previewSlug: string,
+  client?: Queryable,
+): Promise<{ lead_id: string } | null> {
+  const result = await db(client).query<{ lead_id: string }>(
+    `
+      UPDATE website_previews
+      SET
+        first_viewed_at = COALESCE(first_viewed_at, NOW()),
+        last_viewed_at  = NOW(),
+        view_count      = view_count + 1
+      WHERE tenant_id = $1
+        AND preview_slug = $2
+      RETURNING lead_id
+    `,
+    [tenantId, previewSlug],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+/** Per-lead preview view state, for splitting "delivered and ignored" from
+ * "never arrived".
+ *
+ * `preview_seen` is derived here rather than left to each caller so that one
+ * definition of seen exists. A lead with a preview row and no first_viewed_at
+ * is unseen; a lead with no preview row at all does not appear, because
+ * nothing was ever sent for it to have seen.
+ *
+ * Pass null for leadIds to read the whole tenant, or a list to narrow to a
+ * page of leads without a second round trip per row.
+ */
+export async function fetchPreviewViewStates(
+  tenantId: string,
+  leadIds: string[] | null = null,
+  client?: Queryable,
+): Promise<PreviewViewState[]> {
+  const result = await db(client).query<PreviewViewState>(
+    `
+      SELECT
+        website_previews.lead_id,
+        website_previews.first_viewed_at,
+        website_previews.last_viewed_at,
+        website_previews.view_count,
+        website_previews.first_viewed_at IS NOT NULL AS preview_seen
+      FROM website_previews
+      WHERE website_previews.tenant_id = $1
+        AND (
+          $2::uuid[] IS NULL
+          OR website_previews.lead_id = ANY($2::uuid[])
+        )
+      ORDER BY website_previews.last_viewed_at DESC NULLS LAST
+    `,
+    [tenantId, leadIds],
+  );
+
+  return result.rows;
+}
+
 export const queries = {
   insertInboundConversation,
   fetchLeadContext,
@@ -700,4 +776,6 @@ export const queries = {
   fetchEscalationContext,
   hasCompletedPayment,
   recordCompletedPayment,
+  recordWebsitePreviewView,
+  fetchPreviewViewStates,
 };

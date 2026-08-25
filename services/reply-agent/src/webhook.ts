@@ -7,6 +7,7 @@ import type { ProcessReplyJob } from "./types.js";
 import { stripePayments } from "./stripe.js";
 import { queries as defaultQueries } from "./db/queries.js";
 import { REPLIES_QUEUE_NAME, REPLY_JOB_OPTIONS } from "./queue.js";
+import { recordPreviewView, type PreviewViewConfig } from "./preview_view.js";
 
 export type ReplyQueue = {
   add(name: string, payload: ProcessReplyJob): Promise<unknown>;
@@ -25,6 +26,13 @@ type BuildServerOptions = {
   stripe?: {
     handleWebhook(rawBody: string | Buffer, signature: string, options?: { webhookSecret?: string }): Promise<unknown>;
   };
+  /** Omit to leave the preview view route unregistered.
+   *
+   * Absent configuration means the route 404s rather than accepting hits it
+   * cannot attribute. A half-configured recorder that answers 204 and writes
+   * nothing is the exact failure this feature exists to detect elsewhere.
+   */
+  previewView?: PreviewViewConfig;
 };
 
 const webhookPayloadSchema = z.record(z.unknown());
@@ -50,6 +58,18 @@ function readNestedString(payload: Record<string, unknown>, path: string[]): str
   }
 
   return typeof current === "string" && current.trim().length > 0 ? current : null;
+}
+
+/** Read a single-valued request header, treating blank and repeated as absent. */
+function readHeader(request: FastifyRequest, name: string): string | null {
+  const value = request.headers[name];
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  if (Array.isArray(value) && value.length === 1 && value[0]?.trim()) {
+    return value[0];
+  }
+  return null;
 }
 
 function readInstantlySecret(request: FastifyRequest): string | null {
@@ -314,6 +334,40 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     return reply.code(200).send({ ok: true });
   });
 
+  const previewView = options.previewView;
+  if (previewView) {
+    /** Mirrored hit on a preview page, sent by nginx from
+     * `preview.presciaiq.com`. See `nginx/preview.presciaiq.com.conf`.
+     *
+     * nginx discards this response, so the status code is for curl and for
+     * the tests. What matters is that it always answers and never throws: the
+     * prospect's page was already served by the original request, and no
+     * failure here may follow it back.
+     *
+     * `webhooks.presciaiq.com` proxies every path to this process, so this
+     * route is publicly reachable even though nginx only ever calls it over
+     * localhost. The shared secret is what stops a stranger forging views and
+     * making a lead that never opened the email look engaged.
+     */
+    server.post("/internal/preview-view", async (request, reply) => {
+      if (!secretsMatch(readHeader(request, "x-preview-view-secret"), previewView.secret)) {
+        console.warn("preview view rejected: reason=invalid_secret");
+        return reply.code(403).send();
+      }
+
+      await recordPreviewView(
+        {
+          path: readHeader(request, "x-preview-path") ?? undefined,
+          method: readHeader(request, "x-preview-method") ?? undefined,
+          userAgent: readHeader(request, "user-agent") ?? undefined,
+        },
+        { tenantId: previewView.tenantId, queries: previewView.queries },
+      );
+
+      return reply.code(204).send();
+    });
+  }
+
   return server;
 }
 
@@ -327,6 +381,33 @@ function createQueue(): Queue<ProcessReplyJob> {
     connection: { url: connectionUrl },
     defaultJobOptions: REPLY_JOB_OPTIONS,
   });
+}
+
+/** Build the preview view configuration, or explain why there is none.
+ *
+ * Missing configuration is a warning rather than a startup failure. Reply
+ * handling, Stripe and the Instantly webhooks are revenue-critical and must
+ * keep running; view tracking is an observability signal. Refusing to boot
+ * over it would trade a lost signal for a lost sale. The warning is loud
+ * because the alternative, a service that quietly records nothing, looks
+ * exactly like a campaign that never landed.
+ */
+export function buildPreviewViewConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  queries: PreviewViewConfig["queries"] = defaultQueries,
+): PreviewViewConfig | undefined {
+  const secret = env.PREVIEW_VIEW_SECRET;
+  const tenantId = env.TENANT_ID;
+
+  if (!secret || !tenantId) {
+    const missing = [!secret ? "PREVIEW_VIEW_SECRET" : null, !tenantId ? "TENANT_ID" : null]
+      .filter(Boolean)
+      .join(", ");
+    console.warn(`preview view tracking disabled: missing ${missing}`);
+    return undefined;
+  }
+
+  return { secret, tenantId, queries };
 }
 
 async function main(): Promise<void> {
@@ -353,6 +434,7 @@ async function main(): Promise<void> {
   const server = buildServer({
     instantlyWebhookSecrets: instantlyWebhookSecrets as { reply: string; bounced: string; unsubbed: string },
     queue,
+    previewView: buildPreviewViewConfig(),
   });
   const port = Number.parseInt(process.env.PORT ?? "3001", 10);
 
