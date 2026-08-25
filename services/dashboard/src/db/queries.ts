@@ -1,7 +1,8 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import type { PreviewViewFilter } from "@/lib/lead-list-params";
 import { getDb } from "./client";
 import {
   conversations,
@@ -53,6 +54,8 @@ export type LeadListFilters = {
   search?: string;
   scoreMin?: number;
   scoreMax?: number;
+  unsubscribed?: boolean;
+  previewView?: PreviewViewFilter;
   page?: number;
   pageSize?: number;
 };
@@ -63,6 +66,9 @@ export type LeadFilterCounts = {
   replied: number;
   paid: number;
   archived: number;
+  unsubscribed: number;
+  previewSeen: number;
+  previewUnseen: number;
 };
 
 export type LeadIdentity = {
@@ -342,6 +348,21 @@ export function normalizeLeadListPageMeta({
   };
 }
 
+function leadUnsubscribedExists(tenantId: string) {
+  return sql`exists (
+    select 1 from ${outreachSends}
+    where ${outreachSends.leadId} = ${leads.id}
+      and ${outreachSends.tenantId} = ${tenantId}
+      and ${outreachSends.unsubscribed} = true
+  )`;
+}
+
+function previewViewCondition(previewView: PreviewViewFilter) {
+  return previewView === "seen"
+    ? isNotNull(websitePreviews.firstViewedAt)
+    : and(isNotNull(websitePreviews.id), isNull(websitePreviews.firstViewedAt));
+}
+
 function buildLeadListWhere(filters: LeadListFilters) {
   const search = filters.search?.trim();
   const searchPattern = search ? `%${search}%` : undefined;
@@ -366,6 +387,8 @@ function buildLeadListWhere(filters: LeadListFilters) {
       : undefined,
     filters.scoreMin === undefined ? undefined : gte(qualifications.score, filters.scoreMin),
     filters.scoreMax === undefined ? undefined : lte(qualifications.score, filters.scoreMax),
+    filters.unsubscribed ? leadUnsubscribedExists(filters.tenantId) : undefined,
+    filters.previewView ? previewViewCondition(filters.previewView) : undefined,
   ].filter(Boolean);
 }
 
@@ -478,6 +501,10 @@ export function buildLeadListQuery(db: DashboardDb, filters: LeadListFilters) {
       qualifications,
       and(eq(qualifications.leadId, leads.id), eq(qualifications.tenantId, filters.tenantId)),
     )
+    .leftJoin(
+      websitePreviews,
+      and(eq(websitePreviews.leadId, leads.id), eq(websitePreviews.tenantId, filters.tenantId)),
+    )
     .where(and(...where))
     .orderBy(desc(leads.updatedAt))
     .limit(pageSize)
@@ -497,18 +524,32 @@ export function buildLeadListCountQuery(db: DashboardDb, filters: LeadListFilter
       qualifications,
       and(eq(qualifications.leadId, leads.id), eq(qualifications.tenantId, filters.tenantId)),
     )
+    .leftJoin(
+      websitePreviews,
+      and(eq(websitePreviews.leadId, leads.id), eq(websitePreviews.tenantId, filters.tenantId)),
+    )
     .where(and(...where));
 }
 
 export function buildLeadFilterCountsQuery(db: DashboardDb, identity: { tenantId: string }) {
   requireTenantId(identity.tenantId);
 
+  // website_previews.lead_id is unique, so this join cannot fan the lead rows out.
+  // The unsubscribed and preview tallies ride along on the existing single pass
+  // instead of adding further tenant-wide aggregates per page load.
   return db
     .select({
       status: leads.status,
       count: sql<string>`count(*)`,
+      unsubscribedCount: sql<string>`count(*) filter (where ${leadUnsubscribedExists(identity.tenantId)})`,
+      previewSeenCount: sql<string>`count(*) filter (where ${websitePreviews.firstViewedAt} is not null)`,
+      previewUnseenCount: sql<string>`count(*) filter (where ${websitePreviews.id} is not null and ${websitePreviews.firstViewedAt} is null)`,
     })
     .from(leads)
+    .leftJoin(
+      websitePreviews,
+      and(eq(websitePreviews.leadId, leads.id), eq(websitePreviews.tenantId, identity.tenantId)),
+    )
     .where(and(eq(leads.tenantId, identity.tenantId), eq(leads.isDeleted, false)))
     .groupBy(leads.status);
 }
@@ -1509,10 +1550,18 @@ async function addLatestConversationsToLeadRows<T extends { id: string; weakness
 }
 
 export function normalizeLeadFilterCounts(
-  rows: Array<{ status: string | null; count: number | string }>,
+  rows: Array<{
+    status: string | null;
+    count: number | string;
+    unsubscribedCount?: number | string | null;
+    previewSeenCount?: number | string | null;
+    previewUnseenCount?: number | string | null;
+  }>,
 ): LeadFilterCounts {
   const counts = new Map(rows.map((row) => [row.status, toNumber(row.count)]));
   const all = rows.reduce((sum, row) => sum + toNumber(row.count), 0);
+  const sumColumn = (key: "unsubscribedCount" | "previewSeenCount" | "previewUnseenCount") =>
+    rows.reduce((sum, row) => sum + toNumber(row[key] ?? 0), 0);
 
   return {
     all,
@@ -1520,6 +1569,9 @@ export function normalizeLeadFilterCounts(
     replied: counts.get("replied") ?? 0,
     paid: counts.get("paid") ?? 0,
     archived: counts.get("archived") ?? 0,
+    unsubscribed: sumColumn("unsubscribedCount"),
+    previewSeen: sumColumn("previewSeenCount"),
+    previewUnseen: sumColumn("previewUnseenCount"),
   };
 }
 

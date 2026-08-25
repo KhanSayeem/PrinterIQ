@@ -3,8 +3,8 @@
 import { Upload } from "lucide-react";
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LeadFilterCounts } from "@/db/queries";
-import type { LeadListFilterParams } from "@/lib/lead-list-params";
-import { LeadFilters } from "./LeadFilters";
+import type { LeadListFilterParams, PreviewViewFilter } from "@/lib/lead-list-params";
+import { LeadFilters, type LeadFilterSelection } from "./LeadFilters";
 import { LeadQuickPanelWithClose, type LeadListRow } from "./LeadQuickPanel";
 import { LeadTable } from "./LeadTable";
 
@@ -36,6 +36,8 @@ function buildLeadListQuery(filters: LeadListFilters, page: number) {
   if (filters.search) query.set("q", filters.search);
   if (filters.scoreMin !== undefined) query.set("score_min", String(filters.scoreMin));
   if (filters.scoreMax !== undefined) query.set("score_max", String(filters.scoreMax));
+  if (filters.unsubscribed) query.set("unsubscribed", "1");
+  if (filters.previewView) query.set("preview", filters.previewView);
   if (page > 1) query.set("page", String(page));
   return query;
 }
@@ -297,10 +299,25 @@ export function LeadsWorkbench({
       {importError ? <div className="import-status error" role="alert">{importError}</div> : null}
       <LeadFilters
         activeStatus={activeFilters.status}
+        activeUnsubscribed={activeFilters.unsubscribed}
+        activePreviewView={activeFilters.previewView}
         searchValue={searchInput}
         counts={data.counts}
         pending={pending}
-        onSelect={(status) => loadPage({ ...activeFilters, search: normalizeSearch(searchInput), status }, 1)}
+        onSelect={(selection: LeadFilterSelection) =>
+          loadPage(
+            {
+              ...activeFilters,
+              search: normalizeSearch(searchInput),
+              status: selection.status,
+              unsubscribed: selection.unsubscribed,
+            },
+            1,
+          )
+        }
+        onPreviewSelect={(previewView?: PreviewViewFilter) =>
+          loadPage({ ...activeFilters, search: normalizeSearch(searchInput), previewView }, 1)
+        }
         onSearchChange={(search) => {
           setSearchInput(search);
           void loadPage({ ...activeFilters, search: normalizeSearch(search) }, 1);
@@ -333,6 +350,7 @@ export function LeadsWorkbench({
               />
             ) : null}
             <LeadQuickPanelWithClose
+              key={selectedLead.id}
               tenantId={tenantId}
               lead={selectedLead}
               onClose={handleCloseQuickPanel}

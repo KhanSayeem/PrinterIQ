@@ -1,3 +1,7 @@
+export const PREVIEW_VIEW_FILTERS = ["seen", "unseen"] as const;
+
+export type PreviewViewFilter = (typeof PREVIEW_VIEW_FILTERS)[number];
+
 export type LeadListSearchParams = Record<string, string | undefined>;
 
 export type LeadListFilterParams = {
@@ -7,6 +11,8 @@ export type LeadListFilterParams = {
   search?: string;
   scoreMin?: number;
   scoreMax?: number;
+  unsubscribed?: boolean;
+  previewView?: PreviewViewFilter;
   page: number;
 };
 
@@ -21,6 +27,16 @@ function asSearch(value: string | undefined) {
   return trimmed || undefined;
 }
 
+function asFlag(value: string | undefined) {
+  return value === "1" || value === "true" ? true : undefined;
+}
+
+function asPreviewView(value: string | undefined): PreviewViewFilter | undefined {
+  return PREVIEW_VIEW_FILTERS.includes(value as PreviewViewFilter)
+    ? (value as PreviewViewFilter)
+    : undefined;
+}
+
 export function parseLeadListParams(params: LeadListSearchParams): LeadListFilterParams {
   return {
     status: params.status || undefined,
@@ -29,6 +45,8 @@ export function parseLeadListParams(params: LeadListSearchParams): LeadListFilte
     search: asSearch(params.q ?? params.search),
     scoreMin: asNumber(params.score_min),
     scoreMax: asNumber(params.score_max),
+    unsubscribed: asFlag(params.unsubscribed),
+    previewView: asPreviewView(params.preview),
     page: Math.max(asNumber(params.page) ?? 1, 1),
   };
 }

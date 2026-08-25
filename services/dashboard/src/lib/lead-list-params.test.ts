@@ -10,6 +10,8 @@ describe("parseLeadListParams", () => {
       search: undefined,
       scoreMin: undefined,
       scoreMax: undefined,
+      unsubscribed: undefined,
+      previewView: undefined,
       page: 1,
     });
   });
@@ -32,8 +34,19 @@ describe("parseLeadListParams", () => {
       search: "aqua",
       scoreMin: 40,
       scoreMax: 80,
+      unsubscribed: undefined,
+      previewView: undefined,
       page: 3,
     });
+  });
+
+  it("parses the unsubscribed flag and the preview view filter", () => {
+    expect(parseLeadListParams({ unsubscribed: "1" }).unsubscribed).toBe(true);
+    expect(parseLeadListParams({ unsubscribed: "true" }).unsubscribed).toBe(true);
+    expect(parseLeadListParams({ unsubscribed: "0" }).unsubscribed).toBeUndefined();
+    expect(parseLeadListParams({ preview: "seen" }).previewView).toBe("seen");
+    expect(parseLeadListParams({ preview: "unseen" }).previewView).toBe("unseen");
+    expect(parseLeadListParams({ preview: "maybe" }).previewView).toBeUndefined();
   });
 
   it("ignores invalid numeric params and clamps page to at least 1", () => {
