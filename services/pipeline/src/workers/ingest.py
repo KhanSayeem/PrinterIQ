@@ -11,6 +11,7 @@ from typing import Protocol
 from uuid import UUID
 
 from pipeline_queue.definitions import JobType
+from website_url import normalise_website_url
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +287,13 @@ def _lead_from_apollo_row(
         "city": values["city"],
         "state": values["state"],
         "country": "Australia",
-        "website_url": values["website"],
+        # Stored normalised rather than raw. The Australian export spells
+        # websites as bare domains, Chromium rejects a schemeless string, and
+        # the resulting unreachable record carries an empty weaknesses array
+        # that archives the lead in workers.qualify after the paid Haiku call
+        # has already been spent. A blank cell stays blank, because that is
+        # the exact value workers.enrich keys its no_website path on.
+        "website_url": normalise_website_url(values["website"]).url,
         "industry": values["industry"],
         "keywords": values["keywords"],
         "technologies": values["technologies"],
