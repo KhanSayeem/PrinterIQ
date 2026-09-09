@@ -27,6 +27,15 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: /Replies/i })).not.toHaveClass("active");
   });
 
+  it("links to the deliverability health area", () => {
+    render(<Sidebar operatorName="Daniel Marsi" />);
+
+    expect(screen.getByRole("link", { name: /Deliverability/i })).toHaveAttribute(
+      "href",
+      "/deliverability",
+    );
+  });
+
   it("does not link to the retired prospects area", () => {
     render(<Sidebar operatorName="Daniel Marsi" />);
 
