@@ -1,8 +1,23 @@
-import { getLeadFilterCounts, getLeadListPage } from "@/db/queries";
+import { getLeadFilterCounts, getLeadListPage, getTodaySoFarSummary, type TodaySoFarSummary } from "@/db/queries";
 import type { LeadListRow } from "@/components/LeadQuickPanel";
 import { LeadsWorkbench } from "@/components/LeadsWorkbench";
 import { getDashboardTenantId } from "@/auth/tenant";
 import { parseLeadListParams } from "@/lib/lead-list-params";
+
+/**
+ * Today's numbers are a side panel on the lead list, not a precondition for
+ * it. A failure here says so on the bar and leaves the list alone.
+ */
+async function loadTodaySoFar(tenantId: string): Promise<TodaySoFarSummary | null> {
+  try {
+    return await getTodaySoFarSummary({ tenantId });
+  } catch (error) {
+    console.error("Failed to load today so far", {
+      message: error instanceof Error ? error.message : "Unknown today so far loading error",
+    });
+    return null;
+  }
+}
 
 function getLeadLoadErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -27,6 +42,7 @@ export default async function LeadsPage({
   let totalPages = 1;
   let pageSize = 25;
   let tenantId: string;
+  let todaySummary: TodaySoFarSummary | null = null;
 
   try {
     const resolvedTenantId = getDashboardTenantId();
@@ -35,7 +51,7 @@ export default async function LeadsPage({
     }
     tenantId = resolvedTenantId;
 
-    const [filterCounts, leadPage] = await Promise.all([
+    const [filterCounts, leadPage, today] = await Promise.all([
       getLeadFilterCounts({ tenantId }),
       getLeadListPage({
         tenantId,
@@ -50,7 +66,9 @@ export default async function LeadsPage({
         page: requestedPage,
         pageSize,
       }),
+      loadTodaySoFar(tenantId),
     ]);
+    todaySummary = today;
     counts = filterCounts;
     rows = leadPage.rows;
     total = leadPage.total;
@@ -72,6 +90,7 @@ export default async function LeadsPage({
   return (
     <LeadsWorkbench
       tenantId={tenantId}
+      todaySummary={todaySummary}
       leads={rows}
       counts={counts}
       filters={filters}
