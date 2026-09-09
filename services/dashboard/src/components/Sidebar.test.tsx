@@ -25,4 +25,10 @@ describe("Sidebar", () => {
 
     expect(screen.queryByRole("link", { name: /Prospects/i })).not.toBeInTheDocument();
   });
+
+  it("links to the sending controls so the kill switch is one click away", () => {
+    render(<Sidebar operatorName="Daniel Marsi" />);
+
+    expect(screen.getByRole("link", { name: /Sending/i })).toHaveAttribute("href", "/sending");
+  });
 });
