@@ -92,6 +92,20 @@ export type EscalationContext = {
   instantly_campaign_id: string;
 };
 
+/** What a lead has done with the preview page that was sent to them.
+ *
+ * `preview_seen` is the operator-facing question: with open and click
+ * tracking off, this is the only per-lead evidence that an email arrived and
+ * was read. `view_count` separates a glance from a lead who came back.
+ */
+export type PreviewViewState = {
+  lead_id: string;
+  first_viewed_at: Date | null;
+  last_viewed_at: Date | null;
+  view_count: number;
+  preview_seen: boolean;
+};
+
 export type ConversationHistoryItem = {
   direction: string;
   channel: string;

@@ -546,6 +546,56 @@ After Issue #42 is complete, add this extra dashboard check:
 
 - [ ] Open the lead detail page in the dashboard and confirm the WebsitePreviewCard shows the correct preview.
 
+## Enabling preview view tracking
+
+With open and click tracking switched off, a hit on a preview URL is the only
+per-lead evidence that an email was delivered and read. It is recorded by an
+nginx `mirror` on `preview.presciaiq.com` that posts to the reply-agent. The
+mirror never delays or breaks the page: if any of the steps below are skipped,
+previews still serve normally and only the tracking is missing.
+
+1. Apply `database/migrations/0013_add_website_preview_view_tracking.sql`.
+2. Set `PREVIEW_VIEW_SECRET` in the root `.env`, generated with
+   `openssl rand -hex 32`, and restart the reply-agent so it picks it up:
+
+```bash
+pm2 restart reply-agent --update-env
+```
+
+3. Give nginx the same secret. It lives outside the repo so it never reaches
+   git:
+
+```bash
+printf 'proxy_set_header X-Preview-View-Secret "%s";\n' "$PREVIEW_VIEW_SECRET" \
+  > /etc/nginx/snippets/preview-view-secret.conf
+chmod 600 /etc/nginx/snippets/preview-view-secret.conf
+```
+
+4. Deploy `nginx/preview.presciaiq.com.conf`, then:
+
+```bash
+nginx -t && systemctl reload nginx
+```
+
+Verification. Load a real preview in a browser, not with `curl`, because a
+`curl` user agent is deliberately not counted:
+
+```sql
+SELECT lead_id, first_viewed_at, last_viewed_at, view_count
+FROM website_previews
+WHERE tenant_id = '<tenant_id>' AND preview_slug = '<preview_slug>';
+```
+
+- [ ] `view_count` is 1 and both timestamps are set.
+- [ ] Reload the page. `view_count` is 2, `last_viewed_at` moves, and
+      `first_viewed_at` does not.
+
+If nothing is recorded, check the reply-agent log. The two lines worth looking
+for are `preview view tracking disabled: missing ...`, which means the service
+booted without the secret or `TENANT_ID`, and
+`preview view rejected: reason=invalid_secret`, which means nginx and the
+reply-agent hold different secrets.
+
 ## Local smoke testing
 
 Local Redis and orchestrator smoke tests are safe to run while domains and mailboxes are warming up. Start local Redis with:

@@ -112,3 +112,28 @@ def test_prospect_active_run_guard_migration_matches_canonical_schema() -> None:
     )
     assert "persisted" in active_index
     assert "review_ready" in active_index
+
+
+def test_canonical_schema_includes_website_preview_view_tracking() -> None:
+    """Migration 0013 and schema.sql must agree on the view tracking contract.
+
+    The table is `website_previews`, not `previews`. Anything that writes a
+    view against a `previews` table is writing against a table that does not
+    exist, and Postgres will say so at runtime rather than at review time.
+    """
+    schema = (REPO_ROOT / "database" / "schema.sql").read_text()
+    migration_path = (
+        REPO_ROOT / "database" / "migrations" / "0013_add_website_preview_view_tracking.sql"
+    )
+
+    assert migration_path.exists()
+    migration = migration_path.read_text()
+
+    assert "ALTER TABLE website_previews" in migration
+    assert "ADD COLUMN IF NOT EXISTS first_viewed_at TIMESTAMPTZ" in migration
+    assert "ADD COLUMN IF NOT EXISTS last_viewed_at  TIMESTAMPTZ" in migration
+    assert "ADD COLUMN IF NOT EXISTS view_count      INTEGER NOT NULL DEFAULT 0" in migration
+
+    assert "first_viewed_at      TIMESTAMPTZ" in schema
+    assert "last_viewed_at       TIMESTAMPTZ" in schema
+    assert "view_count           INTEGER NOT NULL DEFAULT 0" in schema

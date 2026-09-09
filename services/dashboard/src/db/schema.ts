@@ -120,6 +120,11 @@ export const websitePreviews = pgTable(
     promptVersion: text("prompt_version").notNull(),
     costUsd: numeric("cost_usd", { precision: 10, scale: 6 }).notNull(),
     generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    // Added by database/migrations/0013. Preview views are the only engagement
+    // signal available while open and click tracking stay off for deliverability.
+    firstViewedAt: timestamp("first_viewed_at", { withTimezone: true }),
+    lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
+    viewCount: integer("view_count").notNull().default(0),
   },
   (table) => [
     foreignKey({

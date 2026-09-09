@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, CreditCard, ListChecks, Pin, Search, Users, X } from "lucide-react";
+import { CreditCard, ListChecks, Pin, Search, Users, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -69,11 +69,6 @@ export function Sidebar({
             </Link>
           );
         })}
-        <div className="nav-section-label">Signals</div>
-        <div className="nav-item" title="Live data">
-          <BarChart3 size={16} />
-          <span className="nav-label-text">Live data</span>
-        </div>
       </nav>
       <div className="sidebar-footer">
         <div className="user-row">
