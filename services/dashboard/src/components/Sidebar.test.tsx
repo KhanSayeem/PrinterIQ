@@ -20,6 +20,13 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Macauley")).not.toBeInTheDocument();
   });
 
+  it("links to the reply inbox", () => {
+    render(<Sidebar operatorName="Daniel Marsi" />);
+
+    expect(screen.getByRole("link", { name: /Replies/i })).toHaveAttribute("href", "/replies");
+    expect(screen.getByRole("link", { name: /Replies/i })).not.toHaveClass("active");
+  });
+
   it("does not link to the retired prospects area", () => {
     render(<Sidebar operatorName="Daniel Marsi" />);
 
