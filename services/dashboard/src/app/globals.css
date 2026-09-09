@@ -240,6 +240,27 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .bubble-out { background: var(--bg-hover); }
 .bubble-in { background: #f5f3ff; }
 .bubble-note { background: #fffbeb; font-style: italic; }
+
+/* Reply inbox: read-only list of inbound replies delivered by Instantly. */
+.reply-inbox { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.reply-list { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.reply-item { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; }
+.reply-item-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--text-tertiary); margin-bottom: 6px; }
+.reply-lead-link { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.reply-lead-link:hover { color: var(--text-link); }
+.reply-company { color: var(--text-secondary); }
+.reply-email { overflow-wrap: anywhere; }
+.reply-item-spacer { flex: 1; min-width: 0; }
+.reply-time { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); white-space: nowrap; }
+.reply-body { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.intent-unclassified { background: var(--bg-active); color: var(--text-secondary); }
+.intent-interested { background: #ecfdf5; color: #065f46; }
+.intent-question { background: #eff6ff; color: #1e40af; }
+.intent-objection { background: #fffbeb; color: #92400e; }
+.intent-not_interested { background: #f4f4f2; color: #57564f; }
+.intent-unsubscribe { background: #fff1f2; color: #9f1239; }
+.intent-abusive { background: #fee2e2; color: #991b1b; }
+.intent-escalated { background: #fef3c7; color: #92400e; }
 .outreach-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 8px; }
 .outreach-step { font-size: 10px; font-weight: 500; color: var(--text-tertiary); width: 48px; flex-shrink: 0; }
 .payment-status-banner { padding: 16px 20px; border-radius: var(--radius-md); background: #fffbeb; border: 1px solid #fde68a; margin-bottom: 14px; }
@@ -417,6 +438,7 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
   .pipeline-workbench { grid-template-columns: 1fr; overflow-y: auto; }
   .pipeline-detail-panel { border-left: 0; border-top: 1px solid var(--border); }
   .funnel-content, .revenue-content { padding: 16px; }
+  .reply-list { padding: 12px 16px; }
   .funnel-bars { padding: 16px; }
 }
 

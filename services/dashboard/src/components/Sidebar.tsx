@@ -1,6 +1,6 @@
 "use client";
 
-import { CreditCard, ListChecks, Pin, Users, X } from "lucide-react";
+import { CreditCard, Inbox, ListChecks, Pin, Users, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -8,6 +8,7 @@ import { operatorInitials } from "@/auth/operator-identity";
 
 const items = [
   { href: "/leads", label: "Leads", icon: Users },
+  { href: "/replies", label: "Replies", icon: Inbox },
   { href: "/pipeline", label: "Pipeline", icon: ListChecks },
   { href: "/revenue", label: "Revenue", icon: CreditCard },
 ];
