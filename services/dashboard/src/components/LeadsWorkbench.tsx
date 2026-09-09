@@ -2,11 +2,12 @@
 
 import { Upload } from "lucide-react";
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LeadFilterCounts } from "@/db/queries";
+import type { LeadFilterCounts, TodaySoFarSummary } from "@/db/queries";
 import type { LeadListFilterParams, PreviewViewFilter } from "@/lib/lead-list-params";
 import { LeadFilters, type LeadFilterSelection } from "./LeadFilters";
 import { LeadQuickPanelWithClose, type LeadListRow } from "./LeadQuickPanel";
 import { LeadTable } from "./LeadTable";
+import { TodaySoFarBar } from "./TodaySoFarBar";
 
 type LeadListFilters = Omit<LeadListFilterParams, "page">;
 
@@ -116,6 +117,7 @@ function LeadPagination({
 
 export function LeadsWorkbench({
   tenantId,
+  todaySummary,
   leads,
   counts,
   filters,
@@ -125,6 +127,11 @@ export function LeadsWorkbench({
   pageSize,
 }: {
   tenantId: string;
+  /**
+   * Today's numbers, or null when they could not be read. Leave it undefined
+   * to render the workbench without the bar at all.
+   */
+  todaySummary?: TodaySoFarSummary | null;
   leads: LeadListRow[];
   counts: LeadFilterCounts;
   filters: LeadListFilters;
@@ -295,6 +302,7 @@ export function LeadsWorkbench({
           </label>
         </div>
       </div>
+      {todaySummary !== undefined ? <TodaySoFarBar summary={todaySummary} /> : null}
       {importMessage ? <div className="import-status success" role="status">{importMessage}</div> : null}
       {importError ? <div className="import-status error" role="alert">{importError}</div> : null}
       <LeadFilters

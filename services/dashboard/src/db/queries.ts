@@ -1,8 +1,9 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { PreviewViewFilter } from "@/lib/lead-list-params";
+import { formatSydneyDayLabel, getSydneyDayRange } from "@/lib/sydney-day";
 import { getDb } from "./client";
 import {
   conversations,
@@ -289,6 +290,47 @@ export type RevenueAnalytics = {
   paidConversionRate: number | null;
   aiCosts: AiCostByModel[];
   totalAiCostUsd: number;
+};
+
+/**
+ * Deliverability limits the operator has to react to before a sending domain
+ * is burned. Both are read as strictly above: a day sitting exactly on the
+ * line is not yet an alarm.
+ */
+export const BOUNCE_RATE_WARNING_PERCENT = 3;
+export const UNSUBSCRIBE_RATE_WARNING_PERCENT = 0.5;
+
+export type TodayMetricTone = "neutral" | "warning";
+
+export type TodaySoFarCounts = {
+  dayLabel: string;
+  sent: unknown;
+  replies: unknown;
+  bounces: unknown;
+  unsubscribes: unknown;
+};
+
+export type TodaySoFarSummary = {
+  dayLabel: string;
+  sent: number;
+  /**
+   * Always null. Nothing in this system writes `outreach_sends.opened`: there
+   * is no Instantly open webhook and no analytics poller, so the column has
+   * been false on every row since it was created. Reporting null keeps the
+   * gap visible instead of drawing a zero that reads like a bad send day.
+   */
+  opens: number | null;
+  opensTracked: boolean;
+  replies: number;
+  bounces: number;
+  unsubscribes: number;
+  replyRate: number | null;
+  bounceRate: number | null;
+  unsubscribeRate: number | null;
+  bounceTone: TodayMetricTone;
+  unsubscribeTone: TodayMetricTone;
+  anySent: boolean;
+  hasActivity: boolean;
 };
 
 export type AiCostByModel = {
@@ -1418,6 +1460,135 @@ export function buildAiCostByModelQuery(
       ),
     )
     .groupBy(qualifications.modelHaiku, qualifications.modelSonnet, qualifications.promptVersion);
+}
+
+export function buildTodaySendCountQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; dayStart: Date; dayEnd: Date },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      sentCount: sql<string>`count(*)`,
+    })
+    .from(outreachSends)
+    .where(
+      and(
+        eq(outreachSends.tenantId, identity.tenantId),
+        gte(outreachSends.sentAt, identity.dayStart),
+        lt(outreachSends.sentAt, identity.dayEnd),
+      ),
+    );
+}
+
+export function buildTodayReplyCountQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; dayStart: Date; dayEnd: Date },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      replyCount: sql<string>`count(*)`,
+    })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.tenantId, identity.tenantId),
+        eq(conversations.direction, "inbound"),
+        gte(conversations.createdAt, identity.dayStart),
+        lt(conversations.createdAt, identity.dayEnd),
+      ),
+    );
+}
+
+/**
+ * Bounces and unsubscribes today, as closely as the schema allows.
+ *
+ * `outreach_sends` carries no `bounced_at` or `unsubscribed_at`. The reply
+ * agent flips the boolean and stamps `updated_at`, so `updated_at` is the only
+ * time signal the suppression webhooks leave behind. It is the row's last
+ * write, not the event's own timestamp, so a row that bounces and later
+ * unsubscribes lands both counts on the later day.
+ */
+export function buildTodaySuppressionCountsQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; dayStart: Date; dayEnd: Date },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      bounceCount: sql<string>`count(*) filter (where ${outreachSends.bounced})`,
+      unsubscribeCount: sql<string>`count(*) filter (where ${outreachSends.unsubscribed})`,
+    })
+    .from(outreachSends)
+    .where(
+      and(
+        eq(outreachSends.tenantId, identity.tenantId),
+        gte(outreachSends.updatedAt, identity.dayStart),
+        lt(outreachSends.updatedAt, identity.dayEnd),
+      ),
+    );
+}
+
+function rateAgainstSent(count: number, sent: number) {
+  return sent === 0 ? null : (count / sent) * 100;
+}
+
+function toneForRate(rate: number | null, warnAbove: number): TodayMetricTone {
+  return rate !== null && rate > warnAbove ? "warning" : "neutral";
+}
+
+export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary {
+  const sent = toNumber(counts.sent);
+  const replies = toNumber(counts.replies);
+  const bounces = toNumber(counts.bounces);
+  const unsubscribes = toNumber(counts.unsubscribes);
+
+  const bounceRate = rateAgainstSent(bounces, sent);
+  const unsubscribeRate = rateAgainstSent(unsubscribes, sent);
+
+  return {
+    dayLabel: counts.dayLabel,
+    sent,
+    opens: null,
+    opensTracked: false,
+    replies,
+    bounces,
+    unsubscribes,
+    replyRate: rateAgainstSent(replies, sent),
+    bounceRate,
+    unsubscribeRate,
+    bounceTone: toneForRate(bounceRate, BOUNCE_RATE_WARNING_PERCENT),
+    unsubscribeTone: toneForRate(unsubscribeRate, UNSUBSCRIBE_RATE_WARNING_PERCENT),
+    anySent: sent > 0,
+    hasActivity: sent + replies + bounces + unsubscribes > 0,
+  };
+}
+
+export async function getTodaySoFarSummary(identity: { tenantId: string; now?: Date }) {
+  requireTenantId(identity.tenantId);
+
+  const db = getDb();
+  const now = identity.now ?? new Date();
+  const { start: dayStart, end: dayEnd } = getSydneyDayRange(now);
+  const window = { tenantId: identity.tenantId, dayStart, dayEnd };
+
+  const [sendRows, replyRows, suppressionRows] = await Promise.all([
+    buildTodaySendCountQuery(db, window),
+    buildTodayReplyCountQuery(db, window),
+    buildTodaySuppressionCountsQuery(db, window),
+  ]);
+
+  return normalizeTodaySoFar({
+    dayLabel: formatSydneyDayLabel(now),
+    sent: sendRows[0]?.sentCount,
+    replies: replyRows[0]?.replyCount,
+    bounces: suppressionRows[0]?.bounceCount,
+    unsubscribes: suppressionRows[0]?.unsubscribeCount,
+  });
 }
 
 export async function getLeadList(filters: LeadListFilters) {
