@@ -161,7 +161,26 @@ def test_preview_nginx_config_blocks_search_indexing() -> None:
     assert "location /p/" in config
     assert "location /assets/" in config
     assert "location / {\n        return 404;" in config
-    assert "try_files $uri $uri/ $uri.html =404;" in config
+    assert "try_files $uri $uri/index.html $uri.html =404;" in config
+
+
+def test_preview_nginx_try_files_never_matches_a_bare_directory() -> None:
+    """A bare $uri/ makes `mirror` fire twice, so one view records as two.
+
+    Each slug on disk is a directory holding index.html. Matching $uri/
+    matches that directory, so nginx issues an internal redirect to add the
+    index, and the redirect re-enters `location /p/` and fires the mirror a
+    second time. Measured against production before the fix: the
+    trailing-slash URL that goes in the email recorded 2 views per load while
+    the access log showed 1 request.
+
+    This is pinned separately from the block above because the failure is
+    silent. Nothing errors, pages serve normally, and the only symptom is an
+    engagement number that is exactly double the truth.
+    """
+    config = NGINX_PREVIEW_CONFIG_PATH.read_text(encoding="utf-8")
+
+    assert "try_files $uri $uri/ " not in config
 
 
 # ---------------------------------------------------------------------------
