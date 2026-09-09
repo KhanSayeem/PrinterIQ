@@ -1,21 +1,23 @@
 "use client";
 
-import { CreditCard, ListChecks, Pin, Search, Users, X } from "lucide-react";
+import { CreditCard, ListChecks, Pin, Users, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { operatorInitials } from "@/auth/operator-identity";
 
 const items = [
-  { href: "/prospects", label: "Prospects", icon: Search },
   { href: "/leads", label: "Leads", icon: Users },
   { href: "/pipeline", label: "Pipeline", icon: ListChecks },
   { href: "/revenue", label: "Revenue", icon: CreditCard },
 ];
 
 export function Sidebar({
+  operatorName,
   mobileOpen = false,
   onMobileClose,
 }: {
+  operatorName: string;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
 }) {
@@ -65,16 +67,15 @@ export function Sidebar({
             >
               <Icon size={16} />
               <span className="nav-label-text">{item.label}</span>
-              {item.href === "/leads" ? <span className="nav-badge">5</span> : null}
             </Link>
           );
         })}
       </nav>
       <div className="sidebar-footer">
         <div className="user-row">
-          <div className="user-avatar">M</div>
+          <div className="user-avatar" aria-hidden="true">{operatorInitials(operatorName)}</div>
           <div className="user-info">
-            <div className="user-name">Macauley</div>
+            <div className="user-name" title={operatorName}>{operatorName}</div>
             <div className="user-role">Operator</div>
           </div>
         </div>

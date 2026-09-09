@@ -33,7 +33,7 @@ vi.mock("next/link", () => ({
 describe("AppShell mobile navigation", () => {
   it("opens and closes the mobile sidebar drawer from the topbar", () => {
     render(
-      <AppShell operatorEmail="operator@example.com">
+      <AppShell operatorEmail="operator@example.com" operatorName="Operator Example">
         <div>Page content</div>
       </AppShell>,
     );
@@ -53,7 +53,7 @@ describe("AppShell mobile navigation", () => {
 
   it("closes the mobile sidebar drawer from the backdrop", () => {
     render(
-      <AppShell operatorEmail="operator@example.com">
+      <AppShell operatorEmail="operator@example.com" operatorName="Operator Example">
         <div>Page content</div>
       </AppShell>,
     );
@@ -70,7 +70,7 @@ describe("AppShell mobile navigation", () => {
 
   it("closes the mobile sidebar drawer after selecting a nav link", () => {
     render(
-      <AppShell operatorEmail="operator@example.com">
+      <AppShell operatorEmail="operator@example.com" operatorName="Operator Example">
         <div>Page content</div>
       </AppShell>,
     );

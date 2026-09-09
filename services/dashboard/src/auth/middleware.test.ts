@@ -14,11 +14,11 @@ describe("dashboard auth middleware rules", () => {
     expect(redirect?.searchParams.get("redirectedFrom")).toBe("/leads");
   });
 
-  it("redirects unauthenticated /prospects requests to /login", () => {
-    const redirect = getAuthRedirect(new URL("http://localhost:3000/prospects"), null);
+  it("redirects unauthenticated /pipeline requests to /login", () => {
+    const redirect = getAuthRedirect(new URL("http://localhost:3000/pipeline"), null);
 
     expect(redirect?.pathname).toBe("/login");
-    expect(redirect?.searchParams.get("redirectedFrom")).toBe("/prospects");
+    expect(redirect?.searchParams.get("redirectedFrom")).toBe("/pipeline");
   });
 
   it("allows API route handlers to return their own unauthenticated response", () => {

@@ -73,7 +73,7 @@ export function LoginForm() {
       <button className="login-submit" type="submit" disabled={isSubmitting}>
         {isSubmitting ? "Signing in..." : "Sign in"}
       </button>
-      <p className="login-note">Macauley-only operator access.</p>
+      <p className="login-note">Authorised operators only.</p>
     </form>
   );
 }
