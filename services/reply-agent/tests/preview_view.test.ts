@@ -328,3 +328,138 @@ describe("POST /internal/preview-view", () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+/** The regression suite for the silent failure shipped in #146.
+ *
+ * Every test above used the slug `a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6`, invented
+ * to look like the UUID-derived slug that migration 0007 backfilled onto rows
+ * that already existed. No preview minted since then has looked like that.
+ * `generate_preview._new_preview_slug` returns `secrets.token_urlsafe(24)`,
+ * which is 32 characters of base64url: mixed case, digits, `-` and `_`. All
+ * 570 preview rows in production carry that shape and not one matched the
+ * hex-only pattern this module parsed with, so every mirrored hit was
+ * discarded before it reached the database and the endpoint answered 204 to
+ * every one of them.
+ *
+ * These slugs are therefore taken verbatim from the generator's alphabet
+ * rather than written to fit the parser, which is the only reason the suite
+ * above went green while the feature recorded nothing.
+ */
+describe("slugs in the shape generate_preview actually mints", () => {
+  // secrets.token_urlsafe(24): 32 base64url characters.
+  const tokenUrlsafeSlug = "y0ubWHHzg8-iebSdGpMNwEf3PXuqsJgu";
+  const underscoreSlug = "vhUmD_5VrLk6H2xvXN9tJ3VchX941SLY";
+  const leadingDashSlug = "-Pu8LfonEWv19WfCRfLxeOv_1615ijs5";
+  // The UUID-derived shape migration 0007 backfilled. Still live on the
+  // oldest rows, so it has to keep working.
+  const legacyHexSlug = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+
+  it("reads a base64url slug off the served path", () => {
+    expect(extractPreviewSlug(`/p/${tokenUrlsafeSlug}/`)).toBe(tokenUrlsafeSlug);
+    expect(extractPreviewSlug(`/p/${tokenUrlsafeSlug}`)).toBe(tokenUrlsafeSlug);
+    expect(extractPreviewSlug(`/p/${underscoreSlug}/`)).toBe(underscoreSlug);
+    expect(extractPreviewSlug(`/p/${leadingDashSlug}/`)).toBe(leadingDashSlug);
+    expect(extractPreviewSlug(`/p/${tokenUrlsafeSlug}/index.html`)).toBe(tokenUrlsafeSlug);
+    expect(extractPreviewSlug(`/p/${tokenUrlsafeSlug}/?utm_source=email`)).toBe(tokenUrlsafeSlug);
+  });
+
+  it("still reads the UUID-derived slug backfilled by migration 0007", () => {
+    expect(extractPreviewSlug(`/p/${legacyHexSlug}/`)).toBe(legacyHexSlug);
+  });
+
+  // Widening the alphabet must not widen it to include the separators that
+  // keep a traversal attempt or a stray asset path out of the database.
+  it("still refuses a path that is not a preview page", () => {
+    expect(extractPreviewSlug("/p/../../etc/passwd")).toBeNull();
+    expect(extractPreviewSlug("/p/..")).toBeNull();
+    expect(extractPreviewSlug("/p/")).toBeNull();
+    expect(extractPreviewSlug("/p/favicon.ico")).toBeNull();
+    expect(extractPreviewSlug("/assets/previews/plumbing/hero.jpg")).toBeNull();
+    expect(extractPreviewSlug("/")).toBeNull();
+    expect(extractPreviewSlug(undefined)).toBeNull();
+  });
+
+  it("records a view for a real preview slug loaded by a browser", async () => {
+    const queries = createPreviewViewQueries();
+
+    const outcome = await recordPreviewView(
+      { path: `/p/${tokenUrlsafeSlug}/`, method: "GET", userAgent: chromeUserAgent },
+      { tenantId, queries },
+    );
+
+    expect(queries.recordWebsitePreviewView).toHaveBeenCalledWith(tenantId, tokenUrlsafeSlug);
+    expect(outcome).toEqual({ recorded: true, leadId });
+  });
+
+  it("records through the route nginx mirrors to", async () => {
+    const queries = createPreviewViewQueries();
+    const server = buildServer({
+      instantlyWebhookSecrets: { reply: "r", bounced: "b", unsubbed: "u" },
+      queue: createQueue(),
+      previewView: { secret: previewViewSecret, tenantId, queries },
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/internal/preview-view",
+      headers: {
+        "x-preview-view-secret": previewViewSecret,
+        "x-preview-path": `/p/${tokenUrlsafeSlug}/`,
+        "x-preview-method": "GET",
+        "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1",
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(queries.recordWebsitePreviewView).toHaveBeenCalledWith(tenantId, tokenUrlsafeSlug);
+  });
+});
+
+/** A tracking write that does not happen has to leave a trace.
+ *
+ * nginx mirrors only requests under /p/, so a mirrored path that yields no
+ * slug is never a stray asset fetch: it is a preview page this module did not
+ * recognise. That is the exact condition that hid #146 for a full campaign,
+ * and in the database it is indistinguishable from a campaign that landed in
+ * spam, which is the one conclusion this feature exists to rule out.
+ */
+describe("an unrecordable view is reported, not discarded", () => {
+  it("warns when a mirrored preview path yields no slug", async () => {
+    const queries = createPreviewViewQueries();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const outcome = await recordPreviewView(
+      { path: "/p/slug-in-some-unrecognised-shape!", method: "GET", userAgent: chromeUserAgent },
+      { tenantId, queries },
+    );
+
+    expect(outcome).toEqual({ recorded: false, reason: "not_a_preview_path" });
+    expect(queries.recordWebsitePreviewView).not.toHaveBeenCalled();
+
+    const logged = warn.mock.calls.map((call) => String(call[0])).join(" ");
+    expect(logged).toContain("preview view not recorded");
+    expect(logged).toContain("unparsed_preview_path");
+    // Long enough to diagnose a slug format change, short of reproducing the
+    // slug: it is a bearer token for one named prospect's page.
+    expect(logged).toContain("segment_length=32");
+    expect(logged).not.toContain("slug-in-some-unrecognised-shape");
+    warn.mockRestore();
+  });
+
+  // Nothing outside /p/ reaches this route through the mirror, so a path from
+  // somewhere else is a probe, not a lost view. Warning on those would bury
+  // the line above in noise on the day it matters.
+  it("stays quiet for a path nginx would never mirror", async () => {
+    const queries = createPreviewViewQueries();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const outcome = await recordPreviewView(
+      { path: "/assets/previews/plumbing/hero.jpg", method: "GET", userAgent: chromeUserAgent },
+      { tenantId, queries },
+    );
+
+    expect(outcome).toEqual({ recorded: false, reason: "not_a_preview_path" });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

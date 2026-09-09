@@ -35,13 +35,31 @@ export type PreviewViewOutcome =
   | { recorded: true; leadId: string }
   | { recorded: false; reason: "not_a_preview_path" | "non_human" | "unknown_slug" | "record_failed" };
 
-/** Preview slugs are 32 lowercase hex characters: a UUID with the dashes
- * stripped, minted by migration 0007 and by the generate_preview worker.
- * Matching the shape rather than "whatever follows /p/" means a traversal
- * attempt, a favicon request or a stray asset path can never become a
- * database round trip.
+/** The nginx location whose requests are mirrored here. Nothing outside it
+ * reaches this module through the mirror, which is what makes an unparsed
+ * path inside it worth a warning and an unparsed path outside it not.
  */
-const PREVIEW_PATH_PATTERN = /^\/p\/([0-9a-f]{32})(?:\/.*)?(?:\?.*)?$/;
+const PREVIEW_LOCATION_PREFIX = "/p/";
+
+/** Preview slugs come in two shapes and the parser has to accept both.
+ *
+ * `generate_preview._new_preview_slug` mints every current slug with
+ * `secrets.token_urlsafe(24)`: 32 characters of base64url, so mixed case,
+ * digits, `-` and `_`. Migration 0007 backfilled the rows that predate it
+ * with a UUID stripped of its dashes, which is 32 lowercase hex characters
+ * and a strict subset of the same alphabet. One character class covers both.
+ *
+ * This pattern originally admitted only the hex shape, which no slug the
+ * generator has ever produced can match, so every mirrored hit was discarded
+ * unrecorded. The length bound is a range rather than exactly 32 so that
+ * changing the token size does not silently switch tracking off a second
+ * time.
+ *
+ * Matching a shape rather than "whatever follows /p/" is still what keeps a
+ * traversal attempt or a stray asset path from becoming a database round
+ * trip: `.` and `/` are outside the class, so `..` cannot match.
+ */
+const PREVIEW_PATH_PATTERN = /^\/p\/([A-Za-z0-9_-]{16,64})(?:\/[^?#]*)?(?:[?#].*)?$/;
 
 /** Substrings matched against a lowercased user agent.
  *
@@ -123,12 +141,37 @@ function maskSlug(previewSlug: string): string {
   return `${previewSlug.slice(0, 6)}...`;
 }
 
+/** Describe a path this module could not parse, without reproducing it.
+ *
+ * The segment after `/p/` is a bearer token for one named prospect's page, so
+ * it gets the treatment the no-PII rule gives an email address. Its length is
+ * what actually diagnoses a slug format change, and a length discloses
+ * nothing.
+ */
+function describeUnparsedPath(path: string): string {
+  const segment = path.slice(PREVIEW_LOCATION_PREFIX.length).split(/[/?#]/)[0] ?? "";
+  return `segment_length=${segment.length}`;
+}
+
 export async function recordPreviewView(
   request: PreviewViewRequest,
   config: { tenantId: string; queries: PreviewViewQueries },
 ): Promise<PreviewViewOutcome> {
   const previewSlug = extractPreviewSlug(request.path);
   if (!previewSlug) {
+    // nginx mirrors only requests under /p/, so a mirrored path that yields
+    // no slug is not a stray asset fetch, it is a preview page this module
+    // failed to recognise. Silence here is what let a hex-only slug pattern
+    // discard an entire campaign's views unnoticed: in the database an
+    // unparsed slug and a campaign that landed in spam look identical, and
+    // those two call for opposite responses. Paths from outside /p/ stay
+    // quiet, because they cannot be lost views and warning on them would bury
+    // this line in noise on the day it matters.
+    if (request.path?.startsWith(PREVIEW_LOCATION_PREFIX)) {
+      console.warn(
+        `preview view not recorded: reason=unparsed_preview_path ${describeUnparsedPath(request.path)}`,
+      );
+    }
     return { recorded: false, reason: "not_a_preview_path" };
   }
 
