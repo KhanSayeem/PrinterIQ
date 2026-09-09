@@ -90,6 +90,128 @@ describe("InstantlyHttpClient", () => {
     });
   });
 
+  it("lists sending accounts from the Instantly v2 accounts endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          {
+            email: "murphy@presciaweb.com",
+            timestamp_created: "2026-06-17T00:00:00.000Z",
+            warmup_status: 1,
+            status: 1,
+            daily_limit: 20,
+            stat_warmup_score: 100,
+            setup_pending: false,
+          },
+        ],
+      }),
+    });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    const accounts = await client.listAccounts();
+
+    expect(fetchMock).toHaveBeenCalledWith("https://api.instantly.test/api/v2/accounts?limit=100", {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer api-key",
+        "Content-Type": "application/json",
+      },
+    });
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]!.email).toBe("murphy@presciaweb.com");
+  });
+
+  it("follows the accounts cursor so a second page is not silently dropped", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [{ email: "one@presciaweb.com", warmup_status: 1 }],
+          next_starting_after: "cursor-1",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [{ email: "two@presciaweb.com", warmup_status: 1 }] }),
+      });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    const accounts = await client.listAccounts();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]![0]).toBe(
+      "https://api.instantly.test/api/v2/accounts?limit=100&starting_after=cursor-1",
+    );
+    expect(accounts.map((account) => account.email)).toEqual([
+      "one@presciaweb.com",
+      "two@presciaweb.com",
+    ]);
+  });
+
+  it("requests daily account analytics for the given mailboxes and date window", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { date: "2026-09-09", email_account: "murphy@presciaweb.com", sent: 12, bounced: 0 },
+      ],
+    });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    const rows = await client.getDailyAccountAnalytics({
+      emails: ["murphy@presciaweb.com", "jo@presciaweb.com"],
+      startDate: "2026-08-11",
+      endDate: "2026-09-09",
+    });
+
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      "https://api.instantly.test/api/v2/accounts/analytics/daily?start_date=2026-08-11&end_date=2026-09-09&emails=murphy%40presciaweb.com&emails=jo%40presciaweb.com",
+    );
+    expect(rows[0]!.sent).toBe(12);
+  });
+
+  it("does not call Instantly for daily analytics when there are no mailboxes", async () => {
+    const fetchMock = vi.fn();
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await expect(
+      client.getDailyAccountAnalytics({ emails: [], startDate: "2026-08-11", endDate: "2026-09-09" }),
+    ).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("throws rather than returning an empty account list when Instantly errors", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await expect(client.listAccounts()).rejects.toThrow("failed with 500");
+  });
+
   it("omits empty reply subjects so Instantly can infer the thread subject", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     const client = new InstantlyHttpClient({

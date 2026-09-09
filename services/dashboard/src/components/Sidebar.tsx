@@ -1,6 +1,6 @@
 "use client";
 
-import { CreditCard, ListChecks, Pin, Users, X } from "lucide-react";
+import { CreditCard, ListChecks, MailWarning, Pin, Users, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -10,6 +10,7 @@ const items = [
   { href: "/leads", label: "Leads", icon: Users },
   { href: "/pipeline", label: "Pipeline", icon: ListChecks },
   { href: "/revenue", label: "Revenue", icon: CreditCard },
+  { href: "/deliverability", label: "Deliverability", icon: MailWarning },
 ];
 
 export function Sidebar({
