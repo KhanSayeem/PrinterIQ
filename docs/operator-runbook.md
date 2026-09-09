@@ -2,6 +2,42 @@
 
 Macauley's guide for day-to-day operations.
 
+## Emergency stop: pause all sending
+
+Open `https://dashboard.presciaiq.com/sending`, or click **Sending** in the
+sidebar. The page reads the campaign state straight from Instantly every time it
+loads, so it says `Sending is LIVE`, `Sending is PAUSED` or
+`Sending state UNKNOWN`. It never shows paused because it hopes so.
+
+- Press **Stop all sending**, type `STOP`, then press **Confirm stop**. Nothing
+  reaches Instantly until that phrase is typed, so a stray click cannot pause a
+  campaign and a stray click cannot fail to pause one either.
+- The dashboard then calls `POST /api/v2/campaigns/{id}/pause` for every
+  configured campaign and re-reads each campaign with
+  `GET /api/v2/campaigns/{id}` to check the pause actually took.
+- **Read the result before you walk away.** Success is only reported as
+  `Paused N of N campaigns. Instantly confirms sending is stopped.` Anything
+  else, including `Paused 1 of 2 campaigns`, means at least one campaign may
+  still be sending, and the reason is printed under that campaign's name.
+  Finish the job in the Instantly UI.
+- **Resume sending** works the same way behind the phrase `RESUME`, and is
+  verified the same way against `status = active`.
+
+Which campaigns the button can reach depends on what the dashboard process can
+see: `INSTANTLY_CAMPAIGN_ID` and `INSTANTLY_NO_WEBSITE_CAMPAIGN_ID` must be set
+in `services/dashboard/.env.production`, alongside `INSTANTLY_API_KEY`. The
+copies in `/root/printeriq/.env` are read by the pipeline only, see the table
+under "Which env file to edit". With neither set, the page says
+`NO CAMPAIGN CONFIGURED` and the stop button reports plainly that nothing was
+paused.
+
+Two limits worth knowing before you rely on it:
+
+- It pauses campaigns. Mail Instantly has already handed to a mailbox can still
+  land.
+- It does not stop the pipeline from queueing new leads into Instantly. To stop
+  that too, `pm2 stop pipeline` on the VPS.
+
 ## SSH into the VPS
 
 ```bash

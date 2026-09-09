@@ -9,6 +9,12 @@ type InstantlyClientOptions = {
   pausedListId?: string;
 };
 
+export type InstantlyCampaign = {
+  id: string;
+  name: string;
+  status: number;
+};
+
 export type InstantlyReplyInput = {
   instantlyEmailId: string;
   instantlyAccountId: string;
@@ -87,6 +93,30 @@ export class InstantlyHttpClient {
         to_list_id: this.pausedListId,
       }),
     });
+  }
+
+  async getCampaign(instantlyCampaignId: string): Promise<InstantlyCampaign> {
+    const path = `/api/v2/campaigns/${instantlyCampaignId}`;
+    const body = await this.requestJson<unknown>(path, { method: "GET" });
+
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      throw new Error(`Instantly API GET ${path} returned a non-object response`);
+    }
+
+    const campaign = body as Record<string, unknown>;
+    return {
+      id: typeof campaign.id === "string" ? campaign.id : instantlyCampaignId,
+      name: typeof campaign.name === "string" ? campaign.name : "",
+      status: typeof campaign.status === "number" ? campaign.status : Number.NaN,
+    };
+  }
+
+  async pauseCampaign(instantlyCampaignId: string): Promise<void> {
+    await this.request(`/api/v2/campaigns/${instantlyCampaignId}/pause`, { method: "POST" });
+  }
+
+  async activateCampaign(instantlyCampaignId: string): Promise<void> {
+    await this.request(`/api/v2/campaigns/${instantlyCampaignId}/activate`, { method: "POST" });
   }
 
   async sendReply(input: InstantlyReplyInput): Promise<void> {

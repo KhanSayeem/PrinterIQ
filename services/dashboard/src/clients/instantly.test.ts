@@ -230,4 +230,124 @@ describe("InstantlyHttpClient", () => {
     const payload = JSON.parse(fetchMock.mock.calls[0]![1].body);
     expect(payload).not.toHaveProperty("subject");
   });
+
+  it("reads a campaign state from the Instantly v2 campaigns endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: "campaign-1", name: "Website preview", status: 1 }),
+    });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await expect(client.getCampaign("campaign-1")).resolves.toEqual({
+      id: "campaign-1",
+      name: "Website preview",
+      status: 1,
+    });
+    expect(fetchMock).toHaveBeenCalledWith("https://api.instantly.test/api/v2/campaigns/campaign-1", {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer api-key",
+        "Content-Type": "application/json",
+      },
+      body: undefined,
+    });
+  });
+
+  it("throws instead of guessing when the campaign read fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await expect(client.getCampaign("campaign-1")).rejects.toThrow(
+      "Instantly API GET /api/v2/campaigns/campaign-1 failed with 503",
+    );
+  });
+
+  it("throws when the campaign read returns a body that is not an object", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => "nope" });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await expect(client.getCampaign("campaign-1")).rejects.toThrow(
+      "Instantly API GET /api/v2/campaigns/campaign-1 returned a non-object response",
+    );
+  });
+
+  it("pauses a campaign through the Instantly v2 campaign pause endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await client.pauseCampaign("campaign-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("https://api.instantly.test/api/v2/campaigns/campaign-1/pause", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer api-key",
+        "Content-Type": "application/json",
+      },
+      body: undefined,
+    });
+  });
+
+  it("activates a campaign through the Instantly v2 campaign activate endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await client.activateCampaign("campaign-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("https://api.instantly.test/api/v2/campaigns/campaign-1/activate", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer api-key",
+        "Content-Type": "application/json",
+      },
+      body: undefined,
+    });
+  });
+
+  it("throws when a campaign pause is rejected by Instantly", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await expect(client.pauseCampaign("campaign-1")).rejects.toThrow(
+      "Instantly API POST /api/v2/campaigns/campaign-1/pause failed with 500",
+    );
+  });
+
+  it("fails before calling fetch when the API key is missing for a campaign pause", async () => {
+    const fetchMock = vi.fn();
+    const client = new InstantlyHttpClient({
+      apiKey: undefined,
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+
+    await expect(client.pauseCampaign("campaign-1")).rejects.toThrow(
+      "Missing env var: INSTANTLY_API_KEY",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
