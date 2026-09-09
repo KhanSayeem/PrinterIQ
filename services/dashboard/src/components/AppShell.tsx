@@ -8,15 +8,21 @@ import { HeaderActions } from "./HeaderActions";
 export function AppShell({
   children,
   operatorEmail,
+  operatorName,
 }: {
   children: React.ReactNode;
   operatorEmail: string;
+  operatorName: string;
 }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   return (
     <>
-      <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
+      <Sidebar
+        operatorName={operatorName}
+        mobileOpen={mobileNavOpen}
+        onMobileClose={() => setMobileNavOpen(false)}
+      />
       {mobileNavOpen ? (
         <button
           type="button"

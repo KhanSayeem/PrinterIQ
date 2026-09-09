@@ -62,8 +62,58 @@ describe("PipelineStagePanel", () => {
       />,
     );
 
-    expect(screen.getByText("No score data yet.")).toBeInTheDocument();
     expect(screen.getByText("No website weaknesses recorded for this stage.")).toBeInTheDocument();
     expect(screen.getByText("No leads currently in this stage.")).toBeInTheDocument();
+    expect(screen.queryByText("No score data yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Avg score")).not.toBeInTheDocument();
+    expect(screen.queryByText("Previous conversion")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dropped from previous")).not.toBeInTheDocument();
+  });
+
+  it("drops the tautological metrics on the first stage", () => {
+    render(
+      <PipelineStagePanel
+        detail={{
+          status: "imported",
+          label: "Imported",
+          count: 12,
+          shareOfImported: 100,
+          previousConversionLabel: "Starting stage",
+          droppedFromPrevious: 0,
+          averageScore: null,
+          topWeaknesses: [],
+          sampleLeads: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Imported details")).toBeInTheDocument();
+    expect(screen.queryByText("Share of imported")).not.toBeInTheDocument();
+    expect(screen.queryByText("Starting stage")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dropped from previous")).not.toBeInTheDocument();
+    expect(screen.queryByText("Avg score")).not.toBeInTheDocument();
+  });
+
+  it("keeps the metrics that carry information for later stages", () => {
+    render(
+      <PipelineStagePanel
+        detail={{
+          status: "contacted",
+          label: "Contacted",
+          count: 4,
+          shareOfImported: 40,
+          previousConversionLabel: "80.0%",
+          droppedFromPrevious: 1,
+          averageScore: 66.5,
+          topWeaknesses: [],
+          sampleLeads: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Share of imported")).toBeInTheDocument();
+    expect(screen.getByText("80.0%")).toBeInTheDocument();
+    expect(screen.getByText("Dropped from previous")).toBeInTheDocument();
+    expect(screen.getByText("66.5")).toBeInTheDocument();
   });
 });
