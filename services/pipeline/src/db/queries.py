@@ -83,6 +83,25 @@ class QueueJobUpdate:
     error_message: str | None = None
 
 
+@dataclass(frozen=True)
+class QueueProgress:
+    """Whether the pipeline worker is finishing work, not merely holding it.
+
+    `last_completion_at` is the only column here that proves progress.
+    `started_at` is rewritten every time a job is leased or retried, and the
+    `active` count leaks: the live database currently holds 25 rows in `active`
+    against 5 genuinely running jobs, because a process that dies holding a
+    lease never closes its row. The three leaked rows dated 2026-08-25 are the
+    August deadlock, still sitting there. Both are carried for diagnosis and
+    neither may be used as the progress signal.
+    """
+
+    last_completion_at: datetime | None
+    last_start_at: datetime | None
+    active_job_count: int
+    oldest_active_started_at: datetime | None
+
+
 class QueueJobStore:
     def __init__(self, connection: DatabaseConnection) -> None:
         self._connection = connection
@@ -92,6 +111,9 @@ class QueueJobStore:
 
     async def update_queue_job(self, update: QueueJobUpdate) -> None:
         await update_queue_job(self._connection, update)
+
+    async def fetch_queue_progress(self, *, tenant_id: UUID) -> QueueProgress:
+        return await fetch_queue_progress(self._connection, tenant_id=tenant_id)
 
 
 @dataclass(frozen=True)
@@ -2330,6 +2352,60 @@ def _coerce_queue_job_lease(raw_row: object) -> QueueJobLease:
         acquired=bool(row["acquired"]),
         lease_started_at=lease_started_at,
     )
+
+
+async def fetch_queue_progress(
+    connection: DatabaseConnection,
+    *,
+    tenant_id: UUID,
+) -> QueueProgress:
+    """Read the progress signal the stall alarm is built on.
+
+    `completed_at` is written only by `update_queue_job` for the `completed`
+    and `dead` statuses, so a non-null maximum is proof that a job reached a
+    terminal state. A `failed` row leaves `completed_at` null on purpose: a
+    worker that fails every job is not making progress either, and this alarm
+    should say so rather than count failures as movement.
+
+    Scoped by tenant like every other read in this module. The alarm runs for
+    the tenant in TENANT_ID, which is the tenant the campaign runs under.
+    """
+    row = await connection.fetchrow(
+        """
+        SELECT
+          max(completed_at) AS last_completion_at,
+          max(started_at) AS last_start_at,
+          count(*) FILTER (WHERE status = 'active') AS active_job_count,
+          min(started_at) FILTER (WHERE status = 'active') AS oldest_active_started_at
+        FROM queue_jobs
+        WHERE tenant_id = $1
+        """,
+        tenant_id,
+    )
+    if row is None:
+        return QueueProgress(
+            last_completion_at=None,
+            last_start_at=None,
+            active_job_count=0,
+            oldest_active_started_at=None,
+        )
+    mapping = cast(Mapping[str, object], row)
+    return QueueProgress(
+        last_completion_at=_optional_datetime(mapping.get("last_completion_at")),
+        last_start_at=_optional_datetime(mapping.get("last_start_at")),
+        active_job_count=int(cast(SupportsInt, mapping.get("active_job_count") or 0)),
+        oldest_active_started_at=_optional_datetime(mapping.get("oldest_active_started_at")),
+    )
+
+
+def _optional_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        return datetime.fromisoformat(value)
+    raise TypeError(f"Expected a timestamp, got {type(value).__name__}")
 
 
 async def update_queue_job(connection: DatabaseConnection, update: QueueJobUpdate) -> None:

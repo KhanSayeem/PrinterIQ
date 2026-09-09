@@ -37,7 +37,7 @@ from db.queries import (
     QueueJobUpdate,
 )
 from env import load_pipeline_env
-from pipeline_queue.definitions import JobType
+from pipeline_queue.definitions import PIPELINE_CONCURRENCY, JobType
 from pipeline_queue.worker_base import (
     QueueJobRepository,
     QueueLeaseUnavailableError,
@@ -55,9 +55,51 @@ from workers.purge_prospect_data import purge_prospect_data
 from workers.qualify import qualify_lead
 from workers.schedule_outreach import SendWindowNotReachedError, schedule_outreach
 
-PIPELINE_CONCURRENCY = 5
 INSTANTLY_RATE_LIMIT_PER_MINUTE = 50
 CLAUDE_RATE_LIMIT_PER_MINUTE = 50
+
+# Watchdog budget for a job that touches one lead.
+#
+# Measured, not guessed. Across every completed row in the live `queue_jobs`
+# table the slowest job of any kind ran for 100 seconds (ingest_csv), while
+# enrich_lead peaks at 61 seconds over 7,699 rows (p99: 12) and qualify_lead
+# at 34 seconds over 7,551 (p99: 14). The structural worst case agrees: an
+# enrich is at most two Playwright attempts of 30 seconds each against a dead
+# domain, and Instantly and Apollo calls carry a 30 second httpx timeout.
+#
+# 15 minutes is nine times the slowest job this system has ever run, and it
+# also clears one full Anthropic SDK read timeout (600 seconds), so a single
+# slow-but-progressing Claude call is never killed. It sits deliberately below
+# the SDK's three-attempt worst case of about 30 minutes: during a live
+# campaign, holding one of five slots for half an hour on one lead is worse
+# than cancelling and letting the queue retry that lead.
+WATCHDOG_TIMEOUT_SECONDS = 15 * 60
+
+# Watchdog budget for a job that walks a whole discovery run.
+#
+# `assess_prospects` audits every prospect in a run in sequence, up to
+# PROSPECT_DISCOVERY_TOTAL_LIMIT (500), and each audit can spend two 30 second
+# Playwright attempts on a dead domain. `enrich_prospect_contacts` makes one
+# 30 second Apollo call per prospect. Measured durations are nothing like that
+# bad (97 seconds for the slowest contact enrichment, 31 for a normalize), but
+# the budget has to cover the shape of the work rather than the luck of it.
+#
+# 4 hours covers 240 consecutive worst-case audits. A run unlucky enough to
+# exceed it is retried and resumes rather than restarting: assessed rows are
+# skipped, because `_is_assessable_owned_site` only accepts rows still in
+# `normalized` with no route.
+BATCH_WATCHDOG_TIMEOUT_SECONDS = 4 * 60 * 60
+
+# How old an item in `bull:pipeline:active` must be before a running worker
+# treats it as orphaned and requeues it.
+#
+# Matched to the ten minute interval `create_queue_job` already uses to decide
+# an `active` lease is stale enough to steal. Anything shorter would requeue
+# work whose database lease is still held, and the retry would be refused.
+STALE_ACTIVE_MIN_AGE_SECONDS = 10 * 60
+
+# How often the running worker sweeps for those orphans.
+RECLAIM_INTERVAL_SECONDS = 60.0
 logger = logging.getLogger(__name__)
 _RECOVERED_ACTIVE_RETRY_MARKER = "_printeriq_recovered_active_retry"
 
@@ -78,6 +120,9 @@ class QueueMessage:
 class QueueTransport(Protocol):
     async def recover_active(self) -> int:
         """Return active items to the waiting queue after a process restart."""
+
+    async def reclaim_stale_active(self, *, min_age_seconds: float) -> int:
+        """Requeue active items this process is not working on and that have aged out."""
 
     async def pop(self) -> QueueMessage | None:
         """Return one queued payload, or None if no job is ready."""
@@ -667,6 +712,35 @@ def pipeline_rate_limiters() -> dict[JobType, MinuteRateLimiter]:
     }
 
 
+def watchdog_timeouts_by_job_type() -> dict[JobType, float]:
+    """How long each job type may hold a concurrency slot before it is cancelled.
+
+    Every pipeline job type is listed on purpose. A type with no budget is a
+    type that can wedge a slot forever, which is the whole of the 2026-08-25
+    incident, and the parity test in `test_job_watchdog.py` fails if a new job
+    type is added without one.
+
+    Two tiers. Lead-scoped work is bounded by a handful of network calls, so it
+    gets WATCHDOG_TIMEOUT_SECONDS. Discovery batch work walks up to 500
+    prospects in one job and gets BATCH_WATCHDOG_TIMEOUT_SECONDS. See the
+    constants for the measured numbers behind both.
+    """
+    return {
+        JobType.INGEST_CSV: BATCH_WATCHDOG_TIMEOUT_SECONDS,
+        JobType.ENRICH_LEAD: WATCHDOG_TIMEOUT_SECONDS,
+        JobType.QUALIFY_LEAD: WATCHDOG_TIMEOUT_SECONDS,
+        JobType.GENERATE_PREVIEW: WATCHDOG_TIMEOUT_SECONDS,
+        JobType.SCHEDULE_OUTREACH: WATCHDOG_TIMEOUT_SECONDS,
+        JobType.START_DISCOVERY: WATCHDOG_TIMEOUT_SECONDS,
+        JobType.POLL_OUTSCRAPER: WATCHDOG_TIMEOUT_SECONDS,
+        JobType.NORMALIZE_PROSPECTS: BATCH_WATCHDOG_TIMEOUT_SECONDS,
+        JobType.ASSESS_PROSPECTS: BATCH_WATCHDOG_TIMEOUT_SECONDS,
+        JobType.ENRICH_PROSPECT_CONTACTS: BATCH_WATCHDOG_TIMEOUT_SECONDS,
+        JobType.PREPARE_SHADOW_REVIEW: BATCH_WATCHDOG_TIMEOUT_SECONDS,
+        JobType.PURGE_PROSPECT_DATA: BATCH_WATCHDOG_TIMEOUT_SECONDS,
+    }
+
+
 def max_attempts_by_job_type() -> dict[JobType, int]:
     return {
         JobType.INGEST_CSV: 3,
@@ -694,6 +768,8 @@ class PipelineQueueManager:
         sleep: Sleeper | None = None,
         poll_interval_seconds: float = 1.0,
         concurrency: int = PIPELINE_CONCURRENCY,
+        watchdog_timeouts: dict[JobType, float] | None = None,
+        reclaim_interval_seconds: float = RECLAIM_INTERVAL_SECONDS,
     ) -> None:
         if concurrency < 1:
             raise ValueError("concurrency must be at least 1")
@@ -704,16 +780,53 @@ class PipelineQueueManager:
         self._poll_interval_seconds = poll_interval_seconds
         self._concurrency = concurrency
         self._max_attempts = max_attempts_by_job_type()
+        self._watchdog_timeouts = (
+            watchdog_timeouts if watchdog_timeouts is not None else watchdog_timeouts_by_job_type()
+        )
+        self._reclaim_interval_seconds = reclaim_interval_seconds
 
     async def run_forever(self) -> None:
         await self._queue.recover_active()
-        await asyncio.gather(*(self._run_loop() for _ in range(self._concurrency)))
+        await asyncio.gather(
+            *(self._run_loop() for _ in range(self._concurrency)),
+            self._reclaim_loop(),
+        )
 
     async def _run_loop(self) -> None:
         while True:
             processed = await self.run_once()
             if not processed:
                 await self._sleep(self._poll_interval_seconds)
+
+    async def _reclaim_loop(self) -> None:
+        """Requeue items a dead process left behind, while this one runs.
+
+        `recover_active` only ever ran at startup, which is why restarting the
+        worker "fixed" the August deadlock and why nothing fixed it for the two
+        weeks before somebody did. An item stranded in `bull:pipeline:active`
+        is invisible to a running worker: nothing pops it, nothing acks it and
+        nothing retries it.
+
+        A failure in here must never take the worker down with it. The job
+        loops are the revenue path; this is housekeeping.
+        """
+        while True:
+            await self._sleep(self._reclaim_interval_seconds)
+            try:
+                reclaimed = await self._queue.reclaim_stale_active(
+                    min_age_seconds=STALE_ACTIVE_MIN_AGE_SECONDS
+                )
+            except Exception as error:
+                logger.warning(
+                    "Stale active reclaim sweep failed",
+                    extra={"error_name": error.__class__.__name__},
+                )
+                continue
+            if reclaimed:
+                logger.warning(
+                    "Requeued stale active queue items",
+                    extra={"reclaimed": reclaimed},
+                )
 
     async def run_once(self) -> bool:
         message = await self._queue.pop()
@@ -760,6 +873,7 @@ class PipelineQueueManager:
                 max_attempts=max_attempts,
                 retry_if_unavailable=recovered_active,
                 recover_stale_active=recovered_active,
+                timeout_seconds=self._watchdog_timeouts.get(job_type),
             )
         except QueueLeaseUnavailableError:
             if not recovered_active:
@@ -800,7 +914,13 @@ def _pop_recovered_active_marker(payload: dict[str, object]) -> bool:
 
 
 class RedisPipelineQueue:
-    def __init__(self, redis: object, *, queue_name: str = "pipeline") -> None:
+    def __init__(
+        self,
+        redis: object,
+        *,
+        queue_name: str = "pipeline",
+        clock: Clock | None = None,
+    ) -> None:
         self._redis = cast(Any, redis)
         self._wait_key = f"bull:{queue_name}:wait"
         self._active_key = f"bull:{queue_name}:active"
@@ -808,6 +928,9 @@ class RedisPipelineQueue:
         self._dead_key = f"bull:{queue_name}:dead"
         self._job_key_prefix = f"bull:{queue_name}:"
         self._recovered_active_items: set[str] = set()
+        self._clock = clock or time.monotonic
+        self._in_flight: set[str] = set()
+        self._active_first_seen: dict[str, float] = {}
 
     async def recover_active(self) -> int:
         recovered = 0
@@ -818,6 +941,49 @@ class RedisPipelineQueue:
             self._recovered_active_items.add(_decode_redis_value(raw_item))
             recovered += 1
         return recovered
+
+    async def reclaim_stale_active(self, *, min_age_seconds: float) -> int:
+        """Requeue active items that no live slot in this process is holding.
+
+        `recover_active` empties the whole active list, which is only safe at
+        startup because nothing is running yet. Doing that on a live worker
+        would hand a job that is currently being processed to a second slot and
+        the lead would be enriched, qualified and emailed twice.
+
+        So this sweep skips anything popped here and not yet acked, and it only
+        acts on an item after it has been seen in `active` for
+        `min_age_seconds` across separate sweeps. Age is measured from first
+        sighting because Redis list entries carry no timestamp; the effect is
+        that an orphan is reclaimed one sweep interval after it ages out, and
+        an item that arrived while we were not looking is never reclaimed on
+        the strength of a single observation.
+
+        Requeued items are marked as recovered so the retry re-leases them with
+        `recover_stale_active`, the same path a restart takes.
+        """
+        raw_items = await self._redis.lrange(self._active_key, 0, -1)
+        items = [_decode_redis_value(raw_item) for raw_item in raw_items]
+        present = set(items)
+        self._active_first_seen = {
+            item: first_seen
+            for item, first_seen in self._active_first_seen.items()
+            if item in present
+        }
+
+        now = self._clock()
+        reclaimed = 0
+        for item in items:
+            if item in self._in_flight:
+                continue
+            first_seen = self._active_first_seen.setdefault(item, now)
+            if now - first_seen < min_age_seconds:
+                continue
+            await self._redis.lrem(self._active_key, 1, item)
+            await self._redis.rpush(self._wait_key, item)
+            self._active_first_seen.pop(item, None)
+            self._recovered_active_items.add(item)
+            reclaimed += 1
+        return reclaimed
 
     async def pop(self) -> QueueMessage | None:
         await self._promote_due_jobs()
@@ -834,6 +1000,10 @@ class RedisPipelineQueue:
             return None
         recovered_active = item in self._recovered_active_items
         self._recovered_active_items.discard(item)
+        # Held until ack so the reclaim sweep cannot requeue a job this process
+        # is in the middle of running.
+        self._in_flight.add(item)
+        self._active_first_seen.pop(item, None)
         return QueueMessage(
             payload=payload,
             ack_token=item,
@@ -854,6 +1024,7 @@ class RedisPipelineQueue:
         await self._redis.rpush(self._wait_key, encoded)
 
     async def ack(self, message: QueueMessage) -> None:
+        self._in_flight.discard(message.ack_token)
         if message.ack_token.startswith("hash:"):
             await self._redis.delete(message.ack_token.removeprefix("hash:"))
             return

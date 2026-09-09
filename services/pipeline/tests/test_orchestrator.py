@@ -64,9 +64,14 @@ class FakeQueueTransport:
     acked: list[QueueMessage] = field(default_factory=list)
     recovery_calls: int = 0
     recovered_active: bool = False
+    reclaim_calls: list[float] = field(default_factory=list)
 
     async def recover_active(self) -> int:
         self.recovery_calls += 1
+        return 0
+
+    async def reclaim_stale_active(self, *, min_age_seconds: float) -> int:
+        self.reclaim_calls.append(min_age_seconds)
         return 0
 
     async def pop(self) -> QueueMessage | None:
