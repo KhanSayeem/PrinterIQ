@@ -1,5 +1,4 @@
 import { PipelineFunnel } from "@/components/PipelineFunnel";
-import { PipelineStagePanel } from "@/components/PipelineStagePanel";
 import { getDashboardTenantId } from "@/auth/tenant";
 import { getPipelineAnalytics } from "@/db/queries";
 
@@ -13,12 +12,7 @@ function getPipelineLoadErrorMessage(error: unknown) {
   return "Unknown pipeline loading error";
 }
 
-export default async function PipelinePage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | undefined>>;
-}) {
-  const params = await searchParams;
+export default async function PipelinePage() {
   let analytics: PipelineAnalytics;
 
   try {
@@ -27,7 +21,7 @@ export default async function PipelinePage({
       throw new Error("Dashboard tenant not configured");
     }
 
-    analytics = await getPipelineAnalytics({ tenantId, selectedStage: params.stage });
+    analytics = await getPipelineAnalytics({ tenantId });
   } catch (error) {
     const message = getPipelineLoadErrorMessage(error);
     console.error("Failed to load pipeline data", { message });
@@ -51,16 +45,9 @@ export default async function PipelinePage({
       {analytics.total === 0 ? (
         <div className="empty-state">No pipeline data. Import leads first.</div>
       ) : (
-        <div className="pipeline-workbench">
-          <section className="pipeline-main">
-            <PipelineFunnel
-              stages={analytics.stages}
-              conversions={analytics.conversions}
-              selectedStage={analytics.selectedStage}
-            />
-          </section>
-          <PipelineStagePanel detail={analytics.selectedStageDetail} />
-        </div>
+        <section className="pipeline-main">
+          <PipelineFunnel stages={analytics.stages} conversions={analytics.conversions} />
+        </section>
       )}
     </>
   );

@@ -132,6 +132,36 @@ describe("TodaySoFarBar", () => {
     expect(opens).not.toHaveTextContent("0 ");
   });
 
+  it("links each today metric to the view that explains it", () => {
+    const { container } = render(<TodaySoFarBar summary={summaryFixture()} />);
+
+    expect(tile(container, "Sent")).toHaveAttribute("href", "/deliverability");
+    expect(tile(container, "Replies")).toHaveAttribute("href", "/replies?filter=all");
+    expect(tile(container, "Bounces")).toHaveAttribute("href", "/deliverability");
+    expect(tile(container, "Unsubscribes")).toHaveAttribute("href", "/leads?unsubscribed=1");
+  });
+
+  it("marks the linked today metrics clickable and leaves untracked opens alone", () => {
+    const { container } = render(<TodaySoFarBar summary={summaryFixture()} />);
+
+    expect(tile(container, "Sent")).toHaveClass("is-clickable");
+    expect(tile(container, "Opens")).not.toHaveClass("is-clickable");
+    expect(tile(container, "Opens")).not.toHaveAttribute("href");
+    expect(tile(container, "Opens")?.tagName).toBe("DIV");
+  });
+
+  it("puts every linked today metric in the tab order as a real link", () => {
+    const { container } = render(<TodaySoFarBar summary={summaryFixture()} />);
+
+    for (const label of ["Sent", "Replies", "Bounces", "Unsubscribes"]) {
+      const card = tile(container, label) as HTMLElement | null;
+      expect(card?.tagName).toBe("A");
+      expect(card).not.toHaveAttribute("tabindex", "-1");
+      card?.focus();
+      expect(document.activeElement).toBe(card);
+    }
+  });
+
   it("says so when the numbers could not be loaded", () => {
     const { container } = render(<TodaySoFarBar summary={null} />);
 

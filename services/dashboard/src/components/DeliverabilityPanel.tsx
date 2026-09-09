@@ -7,6 +7,7 @@ import {
   type MailboxHealth,
   type MetricAvailability,
 } from "@/lib/deliverability";
+import { MetricCardShell } from "./MetricCardShell";
 
 const VERDICT_COPY: Record<HealthVerdict, { headline: string; detail: string }> = {
   critical: {
@@ -65,13 +66,17 @@ export function DeliverabilityPanel({
       {notice ? <div className="deliv-notice">{notice}</div> : null}
 
       <div className="metrics-grid">
-        <div className="metric-card">
+        {/* The limit is changed on the sending page, so that is where a click
+            on the estate total should land. */}
+        <MetricCardShell className="metric-card" href="/sending">
           <div className="metric-label">Estate daily limit</div>
           <div className="metric-value">
             <MetricText metric={report.totalDailyLimit} format={(value) => value.toLocaleString()} />
           </div>
           <div className="metric-delta">Sum of every mailbox limit Instantly reports</div>
-        </div>
+        </MetricCardShell>
+        {/* Sent today and the spam rate stay unlinked: the per mailbox
+            breakdown of both is already further down this same page. */}
         <div className="metric-card">
           <div className="metric-label">Sent today</div>
           <div className="metric-value">
