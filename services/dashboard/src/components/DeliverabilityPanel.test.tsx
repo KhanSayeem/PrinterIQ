@@ -159,6 +159,42 @@ describe("DeliverabilityPanel unavailable metrics", () => {
   });
 });
 
+describe("DeliverabilityPanel estate cards", () => {
+  function estateCard(label: string) {
+    const heading = [...document.querySelectorAll(".metric-label")].find(
+      (node) => node.textContent === label,
+    );
+    return (heading?.closest(".metric-card") ?? null) as HTMLElement | null;
+  }
+
+  it("sends the estate daily limit to the page where the limit is set", () => {
+    renderReport([account()], [day(TODAY, 15, 0)]);
+
+    const card = estateCard("Estate daily limit");
+    expect(card).toHaveAttribute("href", "/sending");
+    expect(card).toHaveClass("is-clickable");
+  });
+
+  it("puts the estate daily limit card in the tab order as a real link", () => {
+    renderReport([account()], [day(TODAY, 15, 0)]);
+
+    const card = estateCard("Estate daily limit");
+    expect(card?.tagName).toBe("A");
+    expect(card).not.toHaveAttribute("tabindex", "-1");
+    card?.focus();
+    expect(document.activeElement).toBe(card);
+  });
+
+  it("leaves the cards whose breakdown is already on this page unlinked", () => {
+    renderReport([account()], [day(TODAY, 15, 0)]);
+
+    expect(estateCard("Sent today")).not.toHaveAttribute("href");
+    expect(estateCard("Sent today")?.tagName).toBe("DIV");
+    expect(estateCard("Spam complaint rate")).not.toHaveAttribute("href");
+    expect(estateCard("Spam complaint rate")?.tagName).toBe("DIV");
+  });
+});
+
 describe("DeliverabilityPanel empty state", () => {
   it("says no sending accounts were returned instead of rendering a healthy estate", () => {
     renderReport([], []);

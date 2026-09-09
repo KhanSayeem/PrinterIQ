@@ -5,6 +5,7 @@ import type { PreviewViewFilter } from "@/lib/lead-list-params";
 type LeadFilterCounts = {
   all: number;
   qualified: number;
+  contacted: number;
   replied: number;
   paid: number;
   archived: number;
@@ -21,6 +22,10 @@ export type LeadFilterSelection = {
 const filters = [
   { label: "All", key: "all", selection: {} },
   { label: "Qualified", key: "qualified", selection: { status: "qualified" } },
+  // "Contacted" is the lead status, not a join onto outreach_sends. The status
+  // machine only moves forward, so a lead that has since replied or paid is no
+  // longer sitting in contacted, exactly like every other pill here.
+  { label: "Contacted", key: "contacted", selection: { status: "contacted" } },
   { label: "Replied", key: "replied", selection: { status: "replied" } },
   { label: "Paid", key: "paid", selection: { status: "paid" } },
   { label: "Archived", key: "archived", selection: { status: "archived" } },

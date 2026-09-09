@@ -1,4 +1,5 @@
 import type { TodayMetricTone, TodaySoFarSummary } from "@/db/queries";
+import { MetricCardShell } from "./MetricCardShell";
 
 type TodaySoFarBarProps = {
   /** Null when the day's numbers could not be read, which is said out loud. */
@@ -15,19 +16,24 @@ function TodayMetric({
   detail,
   tone = "neutral",
   muted = false,
+  href,
 }: {
   label: string;
   value: string;
   detail: string;
   tone?: TodayMetricTone;
   muted?: boolean;
+  /** Where this figure is explained. Omitted when there is nowhere useful to go. */
+  href?: string;
 }) {
+  const className = `today-metric ${tone === "warning" ? "warning" : ""} ${muted ? "muted" : ""}`.trim();
+
   return (
-    <div className={`today-metric ${tone === "warning" ? "warning" : ""} ${muted ? "muted" : ""}`.trim()}>
+    <MetricCardShell className={className} href={href}>
       <div className="today-metric-label">{label}</div>
       <div className="today-metric-value">{value}</div>
       <div className="today-metric-detail">{detail}</div>
-    </div>
+    </MetricCardShell>
   );
 }
 
@@ -48,24 +54,30 @@ export function TodaySoFarBar({ summary }: TodaySoFarBarProps) {
             label="Sent"
             value={summary.sent.toLocaleString()}
             detail={summary.anySent ? "emails out today" : "nothing out today"}
+            href="/deliverability"
           />
+          {/* Open tracking is off for deliverability, so this tile counts
+              nothing and has nothing to drill into. */}
           <TodayMetric label="Opens" value="--" detail="Not tracked" muted />
           <TodayMetric
             label="Replies"
             value={summary.replies.toLocaleString()}
             detail={formatRateOfSent(summary.replyRate)}
+            href="/replies?filter=all"
           />
           <TodayMetric
             label="Bounces"
             value={summary.bounces.toLocaleString()}
             detail={formatRateOfSent(summary.bounceRate)}
             tone={summary.bounceTone}
+            href="/deliverability"
           />
           <TodayMetric
             label="Unsubscribes"
             value={summary.unsubscribes.toLocaleString()}
             detail={formatRateOfSent(summary.unsubscribeRate)}
             tone={summary.unsubscribeTone}
+            href="/leads?unsubscribed=1"
           />
         </div>
       ) : (

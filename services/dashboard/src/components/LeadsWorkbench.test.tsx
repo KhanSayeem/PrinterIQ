@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LeadsWorkbench } from "./LeadsWorkbench";
 import type { LeadListRow } from "./LeadQuickPanel";
 
-const counts = { all: 5, qualified: 2, replied: 1, paid: 1, archived: 1, unsubscribed: 3, previewSeen: 2, previewUnseen: 4 };
+const counts = { all: 5, qualified: 2, contacted: 4, replied: 1, paid: 1, archived: 1, unsubscribed: 3, previewSeen: 2, previewUnseen: 4 };
 
 const leads: LeadListRow[] = [
   {
@@ -374,6 +374,39 @@ describe("LeadsWorkbench", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/leads?status=replied");
     expect(screen.getByText("MJ Electrical · Melbourne")).toBeInTheDocument();
     expect(window.location.search).toBe("?status=replied");
+  });
+
+  it("round-trips the contacted pill through the request and the URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        rows: [leads[1]],
+        counts,
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        pageSize: 25,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<LeadsWorkbench {...baseProps} />);
+
+    fireEvent.click(screen.getByText("Contacted"));
+
+    await waitFor(() => {
+      expect(window.location.search).toBe("?status=contacted");
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/leads?status=contacted");
+    expect(screen.getByText("Contacted").closest("button")).toHaveClass("active");
+  });
+
+  it("restores the contacted pill as active from a status already in the URL", () => {
+    render(<LeadsWorkbench {...baseProps} filters={{ status: "contacted" }} />);
+
+    expect(screen.getByText("Contacted").closest("button")).toHaveClass("active");
+    expect(screen.getByText("All").closest("button")).not.toHaveClass("active");
   });
 
   it("selects the first fetched row when filtering from an empty initial list", async () => {

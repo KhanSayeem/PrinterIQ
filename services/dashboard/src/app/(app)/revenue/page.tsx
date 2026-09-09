@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RevenueMetrics, formatUsd } from "@/components/RevenueMetrics";
 import { getDashboardTenantId } from "@/auth/tenant";
 import {
   getRevenueAnalytics,
@@ -76,33 +77,7 @@ function RevenueView({ analytics }: { analytics: RevenueAnalytics }) {
           </Link>
         ))}
       </div>
-      <div className="metrics-grid">
-        <MetricCard
-          label="Total revenue"
-          value={formatAud(analytics.totalRevenueAud)}
-          delta={
-            analytics.paidCount === 0
-              ? "No payments recorded yet."
-              : `${analytics.paidCount.toLocaleString()} paid payments`
-          }
-          positive={analytics.paidCount > 0}
-        />
-        <MetricCard
-          label="Conversion rate"
-          value={analytics.paidConversionRate === null ? "--" : `${analytics.paidConversionRate.toFixed(2)}%`}
-          delta="paid / imported"
-        />
-        <MetricCard
-          label="Paid payments"
-          value={analytics.paidCount.toLocaleString()}
-          delta={`${analytics.importedCount.toLocaleString()} imported leads`}
-        />
-        <MetricCard
-          label="AI spend"
-          value={formatUsd(analytics.totalAiCostUsd)}
-          delta={analytics.aiCosts.length === 0 ? "No AI spend recorded yet." : `${analytics.aiCosts.length} model rows`}
-        />
-      </div>
+      <RevenueMetrics analytics={analytics} />
       <div className="ai-card">
         <div className="ai-card-title">AI spend breakdown</div>
         <div className="ai-card-sub">Claude API calls logged by model and prompt version</div>
@@ -138,41 +113,4 @@ function RevenueView({ analytics }: { analytics: RevenueAnalytics }) {
       </div>
     </div>
   );
-}
-
-function MetricCard({
-  label,
-  value,
-  delta,
-  positive = false,
-}: {
-  label: string;
-  value: string;
-  delta: string;
-  positive?: boolean;
-}) {
-  return (
-    <div className="metric-card">
-      <div className="metric-label">{label}</div>
-      <div className="metric-value">{value}</div>
-      <div className={`metric-delta ${positive ? "up" : ""}`}>{delta}</div>
-    </div>
-  );
-}
-
-function formatAud(value: number) {
-  return new Intl.NumberFormat("en-AU", {
-    style: "currency",
-    currency: "AUD",
-    maximumFractionDigits: 0,
-  }).format(value);
-}
-
-function formatUsd(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
 }

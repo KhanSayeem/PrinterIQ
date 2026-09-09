@@ -8,6 +8,7 @@ import {
   type SendRateActionState,
   type SendRateSnapshot,
 } from "@/app/actions/send-rate-actions-core";
+import { MetricCardShell } from "./MetricCardShell";
 
 type ApplySendRate = (
   previousState: SendRateActionState,
@@ -60,7 +61,9 @@ export function SendRateControl({
           </div>
           <div className="metric-delta">sum of the mailbox daily limits below</div>
         </div>
-        <div className="metric-card">
+        {/* The mailboxes themselves, with their health, live on the
+            deliverability page. */}
+        <MetricCardShell className="metric-card" href="/deliverability">
           <div className="metric-label">Mailboxes in scope</div>
           <div className="metric-value" aria-label="Mailboxes in scope">
             {snapshot.mailboxCount}
@@ -70,7 +73,7 @@ export function SendRateControl({
               ? "every Instantly account is a PrinterIQ mailbox"
               : `${snapshot.excludedAccountCount} Instantly account${snapshot.excludedAccountCount === 1 ? "" : "s"} outside the PrinterIQ sending domains, left untouched`}
           </div>
-        </div>
+        </MetricCardShell>
         <div className="metric-card">
           <div className="metric-label">Next ramp step</div>
           <div className="metric-value" aria-label="Next ramp step">

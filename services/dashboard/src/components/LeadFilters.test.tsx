@@ -5,6 +5,7 @@ import { LeadFilters } from "./LeadFilters";
 const counts = {
   all: 5,
   qualified: 2,
+  contacted: 4,
   replied: 1,
   paid: 1,
   archived: 1,
@@ -28,12 +29,87 @@ describe("LeadFilters", () => {
 
     expect(screen.getByText("All")).toBeInTheDocument();
     expect(screen.getByText("Qualified")).toHaveClass("active");
+    expect(screen.getByText("Contacted")).toBeInTheDocument();
     expect(screen.getByText("Replied")).toBeInTheDocument();
     expect(screen.getByText("Paid")).toBeInTheDocument();
     expect(screen.getByText("Archived")).toBeInTheDocument();
-    expect(screen.queryByText("imported")).not.toBeInTheDocument();
-    expect(screen.queryByText("enriched")).not.toBeInTheDocument();
-    expect(screen.queryByText("contacted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Imported")).not.toBeInTheDocument();
+    expect(screen.queryByText("Enriched")).not.toBeInTheDocument();
+  });
+
+  it("shows the contacted pill with its own count and reports its status", () => {
+    const onSelect = vi.fn();
+    render(
+      <LeadFilters
+        activeStatus={undefined}
+        searchValue=""
+        counts={counts}
+        onSelect={onSelect}
+        onPreviewSelect={() => {}}
+        onSearchChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("Contacted").closest("button")).toHaveTextContent("4");
+
+    fireEvent.click(screen.getByText("Contacted"));
+    expect(onSelect).toHaveBeenCalledWith({ status: "contacted" });
+  });
+
+  it("marks the contacted pill active only when contacted is the applied status", () => {
+    const { rerender } = render(
+      <LeadFilters
+        activeStatus="contacted"
+        searchValue=""
+        counts={counts}
+        onSelect={() => {}}
+        onPreviewSelect={() => {}}
+        onSearchChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("Contacted").closest("button")).toHaveClass("active");
+    expect(screen.getByText("All").closest("button")).not.toHaveClass("active");
+    expect(screen.getByText("Qualified").closest("button")).not.toHaveClass("active");
+
+    rerender(
+      <LeadFilters
+        activeStatus="contacted"
+        activeUnsubscribed
+        searchValue=""
+        counts={counts}
+        onSelect={() => {}}
+        onPreviewSelect={() => {}}
+        onSearchChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("Contacted").closest("button")).not.toHaveClass("active");
+  });
+
+  it("orders the contacted pill after qualified, matching the lead state machine", () => {
+    const { container } = render(
+      <LeadFilters
+        activeStatus={undefined}
+        searchValue=""
+        counts={counts}
+        onSelect={() => {}}
+        onPreviewSelect={() => {}}
+        onSearchChange={() => {}}
+      />,
+    );
+
+    const labels = [...container.querySelectorAll(".pill")].map(
+      (pill) => pill.firstChild?.textContent,
+    );
+    expect(labels.slice(0, 6)).toEqual([
+      "All",
+      "Qualified",
+      "Contacted",
+      "Replied",
+      "Paid",
+      "Archived",
+    ]);
   });
 
   it("calls onSelect with the pill's status without navigating", () => {
