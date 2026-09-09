@@ -229,6 +229,65 @@ it can present. `nginx.conf` sets `access_log off` on `location ^~ /instantly/`
 specifically to keep that secret out of the access log. Removing either the
 path route or that directive breaks or exposes the integration.
 
+## Change the sending volume (send rate control)
+
+The dashboard has a **Sending** page at `https://dashboard.presciaiq.com/sending`.
+It reads every Instantly sending account, shows each mailbox's daily limit and the
+campaign total, and applies a new total across the mailboxes without leaving the
+dashboard.
+
+It follows the ramp in `docs/adr/005-sending-volume-ramp.md`: 30, 45, 68, 101, 152,
+155 campaign sends per day. The **Use next ramp step** button fills in the next
+documented step, so the ramp is followed rather than guessed.
+
+### Configure the sending domain allowlist first
+
+The Instantly workspace also holds accounts on `adsiqdigital.com` and
+`buildpredictiqdigital.com`. Those belong to a different project and are not
+PrinterIQ capacity. The control therefore refuses to read or change anything until
+`INSTANTLY_SENDING_DOMAINS` names the PrinterIQ mail domains.
+
+It is read by the **dashboard**, so it belongs in
+`services/dashboard/.env.production`:
+
+```bash
+cd /root/printeriq/services/dashboard
+cp .env.production ".env.production.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+echo "INSTANTLY_SENDING_DOMAINS=presciaweb.com" >> .env.production
+pm2 restart dashboard
+pm2 save
+```
+
+Comma separate several domains, for example
+`INSTANTLY_SENDING_DOMAINS=presciaweb.com,second-domain.com`. Any Instantly account
+outside this list is counted separately on the page as out of scope and is never
+written to.
+
+### What it does and does not do
+
+- It writes each in-scope mailbox's `daily_limit` through
+  `PATCH /api/v2/accounts/{email}`. The requested campaign total is split across
+  the mailboxes so the per-mailbox limits sum to exactly that total.
+- It does **not** change the campaign level daily limit inside Instantly. That
+  setting can still cap sending below the mailbox capacity, and it is still edited
+  in the Instantly UI.
+- An increase of more than double the current total is blocked behind an explicit
+  confirmation. Google's guidance for senders increasing volume describes a common
+  daily increase of 25% to 100%
+  (https://support.google.com/mail/answer/15256272), so more than 100% in one step
+  is outside that guidance.
+
+### Read the result, do not assume it
+
+The page reports the outcome per mailbox: which limits changed, which failed and
+with what status code, and what the campaign total actually adds up to afterwards.
+A partial failure is reported as a failure, not a success. If the report says
+`Applied to 6 of 8 mailboxes`, then two mailboxes still hold their old limit and
+the campaign total is not the number that was requested.
+
+If Instantly cannot be read at all, the page shows the read error and no control.
+Nothing is changed in that state.
+
 ## Change the offer price
 
 The price lives in one place, `OFFER_PRICE_AUD` (defaults to 1499), read by

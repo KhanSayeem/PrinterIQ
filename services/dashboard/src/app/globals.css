@@ -558,3 +558,22 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 @media (prefers-reduced-motion: reduce) {
   .sticky-detail-panel, .detail-panel-backdrop { animation: none; }
 }
+
+/* Send rate control, /sending */
+.send-rate-screen { overflow-y: auto; }
+.send-rate-card { margin-bottom: 16px; }
+.send-rate-card:last-child { margin-bottom: 0; }
+.send-rate-form { margin-top: 14px; }
+.send-rate-input-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.send-rate-input { width: 130px; font-family: var(--font-mono); }
+.send-rate-warning { margin-top: 14px; padding: 12px 14px; border: 1px solid #fcd34d; border-radius: var(--radius-md); background: #fffbeb; }
+.send-rate-warning-head { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 500; color: #92400e; }
+.send-rate-warning-copy { margin: 7px 0 11px; font-size: 12px; line-height: 1.55; color: #92400e; }
+.send-rate-outcomes, .send-rate-accounts { margin-top: 14px; border-top: 1px solid var(--border); }
+.send-rate-outcomes th, .send-rate-accounts th { position: static; background: transparent; padding-inline: 0; }
+.send-rate-outcomes td, .send-rate-accounts td { padding-inline: 0; }
+.send-rate-outcomes tbody tr, .send-rate-accounts tbody tr { cursor: default; }
+.send-rate-outcomes tbody tr:hover, .send-rate-accounts tbody tr:hover { background: transparent; }
+.send-rate-outcome-error { display: block; margin-top: 4px; font-size: 11px; color: #9f1239; overflow-wrap: anywhere; }
+  .send-rate-input { width: 100%; }
+  .send-rate-input-row .btn { flex: 1 1 auto; justify-content: center; }

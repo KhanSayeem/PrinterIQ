@@ -29,6 +29,38 @@ export type InstantlyReplyInput = {
  * are declared. Nullable fields are nullable in the spec, so a `null` here is a
  * genuinely absent value and must not be rendered as a zero.
  */
+type InstantlyAccountsPage = {
+  items?: unknown;
+  next_starting_after?: unknown;
+};
+
+const ACCOUNTS_PATH = "/api/v2/accounts";
+
+function toNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export type InstantlySendingAccount = {
+  email: string;
+  dailyLimit: number | null;
+  status: number | null;
+};
+
+function toSendingAccount(raw: unknown): InstantlySendingAccount | null {
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.email !== "string" || record.email.trim() === "") {
+    return null;
+  }
+  return {
+    email: record.email,
+    dailyLimit: toNullableNumber(record.daily_limit),
+    status: toNullableNumber(record.status),
+  };
+}
+
 export type InstantlyAccount = {
   /** Mailbox address. Required in the spec. */
   email: string;
@@ -198,16 +230,79 @@ export class InstantlyHttpClient {
     return Array.isArray(body) ? body : [];
   }
 
-  private async request(path: string, init: Pick<RequestInit, "method" | "body">): Promise<void> {
-    await this.send(path, init);
+  async listSendingAccounts(): Promise<InstantlySendingAccount[]> {
+    const accounts: InstantlySendingAccount[] = [];
+    let startingAfter: string | undefined;
+
+    for (let page = 0; page < MAX_ACCOUNT_PAGES; page += 1) {
+      const query = new URLSearchParams({ limit: String(ACCOUNTS_PAGE_SIZE) });
+      if (startingAfter) {
+        query.set("starting_after", startingAfter);
+      }
+
+      const payload = await this.requestJson<InstantlyAccountsPage>(
+        `${ACCOUNTS_PATH}?${query.toString()}`,
+        { method: "GET" },
+        ACCOUNTS_PATH,
+      );
+
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      for (const item of items) {
+        const account = toSendingAccount(item);
+        if (account) {
+          accounts.push(account);
+        }
+      }
+
+      const cursor = payload.next_starting_after;
+      if (typeof cursor !== "string" || cursor === "" || items.length === 0) {
+        return accounts;
+      }
+      startingAfter = cursor;
+    }
+
+    return accounts;
   }
 
-  private async requestJson<T>(path: string, init: Pick<RequestInit, "method" | "body">): Promise<T> {
-    const response = await this.send(path, init);
+  async updateAccountDailyLimit(email: string, dailyLimit: number): Promise<void> {
+    await this.request(
+      `${ACCOUNTS_PATH}/${encodeURIComponent(email)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ daily_limit: dailyLimit }),
+      },
+      // The mailbox address is kept out of the error text so a failure can be
+      // logged without leaking an address into the logs.
+      `${ACCOUNTS_PATH}/{email}`,
+    );
+  }
+
+  private async request(
+    path: string,
+    init: Pick<RequestInit, "method" | "body">,
+    logPath?: string,
+  ): Promise<void> {
+    await this.send(path, init, logPath);
+  }
+
+  private async requestJson<T>(
+    path: string,
+    init: Pick<RequestInit, "method" | "body">,
+    logPath?: string,
+  ): Promise<T> {
+    const response = await this.send(path, init, logPath);
     return (await response.json()) as T;
   }
 
-  private async send(path: string, init: Pick<RequestInit, "method" | "body">): Promise<Response> {
+  /** `logPath` names the endpoint in the error without the real URL. A PATCH
+   * to an account carries the mailbox address in its path, and a failure
+   * should be loggable without putting an address in the logs.
+   */
+  private async send(
+    path: string,
+    init: Pick<RequestInit, "method" | "body">,
+    logPath?: string,
+  ): Promise<Response> {
     if (!this.apiKey) {
       throw new Error("Missing env var: INSTANTLY_API_KEY");
     }
@@ -222,7 +317,7 @@ export class InstantlyHttpClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Instantly API ${init.method} ${path} failed with ${response.status}; response body omitted`);
+      throw new Error(`Instantly API ${init.method} ${logPath ?? path} failed with ${response.status}; response body omitted`);
     }
 
     return response;
