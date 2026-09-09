@@ -632,3 +632,97 @@ Dead-lettered jobs appear in `queue_jobs` table with `status = 'dead'`. Review t
 ```sql
 SELECT * FROM queue_jobs WHERE status = 'dead' ORDER BY created_at DESC LIMIT 20;
 ```
+
+## Pipeline stall alarm
+
+### Why it exists
+
+On 2026-08-25 the pipeline worker deadlocked and nobody noticed for two weeks.
+PM2 reported `online` with 0 unstable restarts, CPU 0%, memory normal.
+`bull:pipeline:wait` sat at 3,321 jobs and `bull:pipeline:active` at exactly 5,
+one per concurrency slot, from the moment it died. The database still shows the
+hole: 5,035 jobs completed on 2026-08-25, then nothing at all until 2026-09-09.
+
+`pm2 status` cannot catch that, and neither can queue depth on its own. The
+alarm watches one thing instead: whether any queue job has reached a terminal
+state recently, given there is work waiting.
+
+### What it does
+
+`pipeline-stall-monitor` runs every 5 minutes under PM2 and sends an SMS to
+`ESCALATION_PHONE` when nothing has completed for 20 minutes while jobs are
+either waiting in Redis or holding every concurrency slot. It sends at most one
+SMS an hour while a stall persists, and one more when it recovers.
+
+The pipeline worker itself now cancels any job that outruns its watchdog
+budget: 15 minutes for lead-scoped work, 4 hours for discovery batch jobs. The
+cancelled job goes back on the queue for another attempt and its slot is freed,
+so a single hung job can no longer wedge the worker. The worker also sweeps
+`bull:pipeline:active` every minute for items orphaned by a dead process,
+rather than only at startup.
+
+### One-time setup on the VPS
+
+1. Add two variables to `/root/printeriq/.env`:
+
+   ```env
+   OPS_ALERT_SECRET=<openssl rand -hex 32>
+   REPLY_AGENT_INTERNAL_URL=http://127.0.0.1:3001
+   ```
+
+2. Confirm `ESCALATION_PHONE` is the number you want paged, and that
+   `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER` are set.
+   The stall alarm sends through the same SMS client as reply escalation, so if
+   escalation SMS works, this works.
+
+3. Restart the reply agent so it picks up `OPS_ALERT_SECRET` and registers
+   `/internal/ops-alert`, then start the monitor:
+
+   ```bash
+   cd /root/printeriq
+   pm2 restart reply-agent
+   pm2 start ecosystem.config.js --only pipeline-stall-monitor
+   pm2 save
+   ```
+
+4. Prove it is armed, without sending an SMS:
+
+   ```bash
+   cd /root/printeriq/services/pipeline
+   PYTHONPATH=src /root/printeriq/.venv/bin/python -m ops.stall_monitor --once --dry-run
+   ```
+
+   A healthy pipeline prints `PrinterIQ pipeline healthy: last completion 3s
+   ago. 2893 waiting, 5/5 slots busy, 183 delayed.` If it prints a missing env
+   var instead, the alarm is not armed.
+
+`pm2 status` shows `pipeline-stall-monitor` as `stopped` between cron ticks.
+That is correct: it is a one-shot process, not a daemon. `errored` means the
+check itself failed, which is different from finding a stall.
+
+### When you get a stall SMS
+
+1. Read the numbers in the message. It carries how long nothing has completed,
+   how many jobs are waiting and how many slots are busy.
+2. Confirm from the box:
+
+   ```bash
+   redis-cli LLEN bull:pipeline:wait
+   redis-cli LLEN bull:pipeline:active
+   pm2 logs pipeline --lines 50
+   ```
+
+   Run the two `LLEN` commands twice, 20 seconds apart. If `wait` is falling,
+   the pipeline is draining and the alarm has already cleared or is about to.
+3. If nothing is moving, restart the worker: `pm2 restart pipeline`. Startup
+   recovery returns everything in `bull:pipeline:active` to the wait list, and
+   in-flight jobs are retried rather than lost.
+4. Look for the cause in `queue_jobs` afterwards. Jobs killed by the watchdog
+   say so:
+
+   ```sql
+   SELECT job_type, error_message, started_at
+   FROM queue_jobs
+   WHERE error_message LIKE '%watchdog%'
+   ORDER BY started_at DESC LIMIT 20;
+   ```

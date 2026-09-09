@@ -8,6 +8,7 @@ import { stripePayments } from "./stripe.js";
 import { queries as defaultQueries } from "./db/queries.js";
 import { REPLIES_QUEUE_NAME, REPLY_JOB_OPTIONS } from "./queue.js";
 import { recordPreviewView, type PreviewViewConfig } from "./preview_view.js";
+import { buildOpsAlertConfig, sendOpsAlert, type OpsAlertConfig } from "./ops_alert.js";
 
 export type ReplyQueue = {
   add(name: string, payload: ProcessReplyJob): Promise<unknown>;
@@ -33,6 +34,14 @@ type BuildServerOptions = {
    * nothing is the exact failure this feature exists to detect elsewhere.
    */
   previewView?: PreviewViewConfig;
+  /** Omit to leave the ops alert route unregistered.
+   *
+   * The pipeline stall monitor posts here because Python workers are not
+   * allowed to call an SMS provider directly. With no configuration the route
+   * 404s, which the monitor reports as a delivery failure, rather than
+   * accepting alerts it has no credentials to deliver.
+   */
+  opsAlert?: OpsAlertConfig;
 };
 
 const webhookPayloadSchema = z.record(z.unknown());
@@ -368,8 +377,57 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
     });
   }
 
+  const opsAlert = options.opsAlert;
+  if (opsAlert) {
+    /** Operational alert from the pipeline stall monitor.
+     *
+     * CLAUDE.md forbids the Python pipeline from calling an SMS provider, and
+     * this service already owns the only outbound SMS path in the system, so
+     * the monitor posts its message here and `escalate()`'s client sends it.
+     *
+     * The status codes are load-bearing. The monitor claims a Redis cooldown
+     * before it posts and releases it when delivery fails, so answering 202
+     * on a failed send would silence the alarm for an hour having paged
+     * nobody. Every failure path answers with an error on purpose.
+     */
+    server.post("/internal/ops-alert", async (request, reply) => {
+      if (!secretsMatch(readHeader(request, "x-ops-alert-secret"), opsAlert.secret)) {
+        console.warn("ops alert rejected: reason=invalid_secret");
+        return reply.code(403).send();
+      }
+
+      const parsed = opsAlertSchema.safeParse(request.body);
+      if (!parsed.success) {
+        console.warn("ops alert rejected: reason=invalid_payload");
+        return reply.code(400).send({ error: "invalid ops alert payload" });
+      }
+
+      try {
+        await sendOpsAlert(
+          { subject: parsed.data.subject ?? "", body: parsed.data.body },
+          opsAlert.sms,
+        );
+      } catch (error) {
+        console.error(
+          `ops alert delivery failed: source=${parsed.data.source ?? "unknown"} error=${
+            error instanceof Error ? error.name : "UnknownError"
+          }`,
+        );
+        return reply.code(502).send({ error: "ops alert delivery failed" });
+      }
+
+      return reply.code(202).send({ ok: true });
+    });
+  }
+
   return server;
 }
+
+const opsAlertSchema = z.object({
+  source: z.string().optional(),
+  subject: z.string().optional(),
+  body: z.string().min(1),
+});
 
 function createQueue(): Queue<ProcessReplyJob> {
   const connectionUrl = process.env.REDIS_URL ?? "redis://127.0.0.1:6379";
@@ -435,6 +493,7 @@ async function main(): Promise<void> {
     instantlyWebhookSecrets: instantlyWebhookSecrets as { reply: string; bounced: string; unsubbed: string },
     queue,
     previewView: buildPreviewViewConfig(),
+    opsAlert: buildOpsAlertConfig(),
   });
   const port = Number.parseInt(process.env.PORT ?? "3001", 10);
 

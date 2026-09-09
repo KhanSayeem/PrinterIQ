@@ -2,6 +2,16 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+# How many jobs the pipeline worker runs at once.
+#
+# It lives here rather than in workers.orchestrator so that the ops stall
+# monitor can know the slot count without importing the whole worker module,
+# and its Playwright, Anthropic and Instantly clients, into a process whose
+# only job is to read two Redis keys and one database row.
+#
+# workers.orchestrator re-exports it, so existing imports keep working.
+PIPELINE_CONCURRENCY = 5
+
 
 class QueueName(StrEnum):
     PIPELINE = "pipeline"

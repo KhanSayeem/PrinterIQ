@@ -48,7 +48,7 @@ class MissingEnvError extends Error {}
  * load, so a PM2 restart picks up a change. The constant remains as a fallback
  * so an unset or blank variable cannot page an empty number.
  */
-function operatorEscalationPhone(): string {
+export function operatorEscalationPhone(): string {
   const configured = process.env.ESCALATION_PHONE?.trim();
   return configured ? configured : DEFAULT_OPERATOR_ESCALATION_PHONE;
 }
