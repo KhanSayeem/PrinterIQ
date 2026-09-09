@@ -124,6 +124,42 @@ describe("LeadsWorkbench", () => {
     expect(mayaRow).not.toHaveClass("selected");
   });
 
+  it("puts the today so far bar directly under the page header", () => {
+    const { container } = render(
+      <LeadsWorkbench
+        {...baseProps}
+        todaySummary={{
+          dayLabel: "Mon 15 Jun",
+          sent: 200,
+          opens: null,
+          opensTracked: false,
+          replies: 7,
+          bounces: 4,
+          unsubscribes: 1,
+          replyRate: 3.5,
+          bounceRate: 2,
+          unsubscribeRate: 0.5,
+          bounceTone: "neutral",
+          unsubscribeTone: "neutral",
+          anySent: true,
+          hasActivity: true,
+        }}
+      />,
+    );
+
+    const header = container.querySelector(".page-header");
+    expect(header?.nextElementSibling).toHaveClass("today-bar");
+    expect(screen.getByText("Today so far")).toBeInTheDocument();
+    expect(screen.getByText(/Mon 15 Jun/)).toBeInTheDocument();
+  });
+
+  it("says the day could not be read rather than hiding the bar", () => {
+    const { container } = render(<LeadsWorkbench {...baseProps} todaySummary={null} />);
+
+    expect(container.querySelector(".today-bar")).toBeInTheDocument();
+    expect(screen.getByText(/Today so far could not be loaded/)).toBeInTheDocument();
+  });
+
   it("does not reserve the side-panel column until a lead is selected", () => {
     render(<LeadsWorkbench {...baseProps} leads={[]} total={0} totalPages={1} />);
 

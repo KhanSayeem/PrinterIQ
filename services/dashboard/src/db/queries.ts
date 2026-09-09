@@ -1,8 +1,14 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { PreviewViewFilter } from "@/lib/lead-list-params";
+import {
+  DEFAULT_REPLY_INBOX_FILTER,
+  type ReplyInboxFilter,
+  type ReplyIntent,
+} from "@/lib/reply-inbox-params";
+import { formatSydneyDayLabel, getSydneyDayRange } from "@/lib/sydney-day";
 import { getDb } from "./client";
 import {
   conversations,
@@ -291,6 +297,47 @@ export type RevenueAnalytics = {
   totalAiCostUsd: number;
 };
 
+/**
+ * Deliverability limits the operator has to react to before a sending domain
+ * is burned. Both are read as strictly above: a day sitting exactly on the
+ * line is not yet an alarm.
+ */
+export const BOUNCE_RATE_WARNING_PERCENT = 3;
+export const UNSUBSCRIBE_RATE_WARNING_PERCENT = 0.5;
+
+export type TodayMetricTone = "neutral" | "warning";
+
+export type TodaySoFarCounts = {
+  dayLabel: string;
+  sent: unknown;
+  replies: unknown;
+  bounces: unknown;
+  unsubscribes: unknown;
+};
+
+export type TodaySoFarSummary = {
+  dayLabel: string;
+  sent: number;
+  /**
+   * Always null. Nothing in this system writes `outreach_sends.opened`: there
+   * is no Instantly open webhook and no analytics poller, so the column has
+   * been false on every row since it was created. Reporting null keeps the
+   * gap visible instead of drawing a zero that reads like a bad send day.
+   */
+  opens: number | null;
+  opensTracked: boolean;
+  replies: number;
+  bounces: number;
+  unsubscribes: number;
+  replyRate: number | null;
+  bounceRate: number | null;
+  unsubscribeRate: number | null;
+  bounceTone: TodayMetricTone;
+  unsubscribeTone: TodayMetricTone;
+  anySent: boolean;
+  hasActivity: boolean;
+};
+
 export type AiCostByModel = {
   modelFamily: "Haiku" | "Sonnet";
   modelName: string;
@@ -322,7 +369,7 @@ function labelForStatus(status: PipelineStatus) {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-function normalizeLeadPagination(filters: LeadListFilters) {
+function normalizeLeadPagination(filters: { page?: number; pageSize?: number }) {
   return {
     page: Math.max(filters.page ?? 1, 1),
     pageSize: Math.min(Math.max(filters.pageSize ?? 25, 1), 100),
@@ -1420,6 +1467,135 @@ export function buildAiCostByModelQuery(
     .groupBy(qualifications.modelHaiku, qualifications.modelSonnet, qualifications.promptVersion);
 }
 
+export function buildTodaySendCountQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; dayStart: Date; dayEnd: Date },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      sentCount: sql<string>`count(*)`,
+    })
+    .from(outreachSends)
+    .where(
+      and(
+        eq(outreachSends.tenantId, identity.tenantId),
+        gte(outreachSends.sentAt, identity.dayStart),
+        lt(outreachSends.sentAt, identity.dayEnd),
+      ),
+    );
+}
+
+export function buildTodayReplyCountQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; dayStart: Date; dayEnd: Date },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      replyCount: sql<string>`count(*)`,
+    })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.tenantId, identity.tenantId),
+        eq(conversations.direction, "inbound"),
+        gte(conversations.createdAt, identity.dayStart),
+        lt(conversations.createdAt, identity.dayEnd),
+      ),
+    );
+}
+
+/**
+ * Bounces and unsubscribes today, as closely as the schema allows.
+ *
+ * `outreach_sends` carries no `bounced_at` or `unsubscribed_at`. The reply
+ * agent flips the boolean and stamps `updated_at`, so `updated_at` is the only
+ * time signal the suppression webhooks leave behind. It is the row's last
+ * write, not the event's own timestamp, so a row that bounces and later
+ * unsubscribes lands both counts on the later day.
+ */
+export function buildTodaySuppressionCountsQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; dayStart: Date; dayEnd: Date },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({
+      bounceCount: sql<string>`count(*) filter (where ${outreachSends.bounced})`,
+      unsubscribeCount: sql<string>`count(*) filter (where ${outreachSends.unsubscribed})`,
+    })
+    .from(outreachSends)
+    .where(
+      and(
+        eq(outreachSends.tenantId, identity.tenantId),
+        gte(outreachSends.updatedAt, identity.dayStart),
+        lt(outreachSends.updatedAt, identity.dayEnd),
+      ),
+    );
+}
+
+function rateAgainstSent(count: number, sent: number) {
+  return sent === 0 ? null : (count / sent) * 100;
+}
+
+function toneForRate(rate: number | null, warnAbove: number): TodayMetricTone {
+  return rate !== null && rate > warnAbove ? "warning" : "neutral";
+}
+
+export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary {
+  const sent = toNumber(counts.sent);
+  const replies = toNumber(counts.replies);
+  const bounces = toNumber(counts.bounces);
+  const unsubscribes = toNumber(counts.unsubscribes);
+
+  const bounceRate = rateAgainstSent(bounces, sent);
+  const unsubscribeRate = rateAgainstSent(unsubscribes, sent);
+
+  return {
+    dayLabel: counts.dayLabel,
+    sent,
+    opens: null,
+    opensTracked: false,
+    replies,
+    bounces,
+    unsubscribes,
+    replyRate: rateAgainstSent(replies, sent),
+    bounceRate,
+    unsubscribeRate,
+    bounceTone: toneForRate(bounceRate, BOUNCE_RATE_WARNING_PERCENT),
+    unsubscribeTone: toneForRate(unsubscribeRate, UNSUBSCRIBE_RATE_WARNING_PERCENT),
+    anySent: sent > 0,
+    hasActivity: sent + replies + bounces + unsubscribes > 0,
+  };
+}
+
+export async function getTodaySoFarSummary(identity: { tenantId: string; now?: Date }) {
+  requireTenantId(identity.tenantId);
+
+  const db = getDb();
+  const now = identity.now ?? new Date();
+  const { start: dayStart, end: dayEnd } = getSydneyDayRange(now);
+  const window = { tenantId: identity.tenantId, dayStart, dayEnd };
+
+  const [sendRows, replyRows, suppressionRows] = await Promise.all([
+    buildTodaySendCountQuery(db, window),
+    buildTodayReplyCountQuery(db, window),
+    buildTodaySuppressionCountsQuery(db, window),
+  ]);
+
+  return normalizeTodaySoFar({
+    dayLabel: formatSydneyDayLabel(now),
+    sent: sendRows[0]?.sentCount,
+    replies: replyRows[0]?.replyCount,
+    bounces: suppressionRows[0]?.bounceCount,
+    unsubscribes: suppressionRows[0]?.unsubscribeCount,
+  });
+}
+
 export async function getLeadList(filters: LeadListFilters) {
   const db = getDb();
   const rows = await buildLeadListQuery(db, filters);
@@ -1903,4 +2079,221 @@ export function normalizeWebsitePreview(preview: {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+// ---------------------------------------------------------------------------
+// Reply inbox
+//
+// Every inbound reply Instantly delivers is persisted by the reply agent as a
+// `conversations` row with direction = 'inbound' (see
+// services/reply-agent/src/db/queries.ts insertInboundConversation). The
+// classification columns (intent, intent_confidence, agent_action, escalated)
+// are filled in afterwards by the same worker, so a row can legitimately exist
+// with a null intent: the reply landed and Claude has not answered yet, or the
+// classification call failed.
+//
+// There is no read/unread column on `conversations`, and nothing in the
+// pipeline writes one, so "unread" cannot be queried. `needs_attention` is the
+// honest substitute: unclassified, interested, or escalated.
+// ---------------------------------------------------------------------------
+
+export type ReplyInboxFilters = {
+  tenantId: string;
+  filter?: ReplyInboxFilter;
+  page?: number;
+  pageSize?: number;
+};
+
+export type ReplyInboxRow = {
+  id: string;
+  leadId: string;
+  body: string;
+  channel: string;
+  intent: string | null;
+  intentConfidence: number | null;
+  agentAction: string | null;
+  escalated: boolean;
+  escalationReason: string | null;
+  createdAt: Date;
+  firstName: string | null;
+  lastName: string | null;
+  businessName: string | null;
+  email: string;
+};
+
+export type ReplyInboxFilterCounts = Record<ReplyInboxFilter, number>;
+
+function replyNeedsAttentionCondition() {
+  return or(
+    isNull(conversations.intent),
+    eq(conversations.intent, "interested"),
+    eq(conversations.escalated, true),
+  );
+}
+
+function replyInboxFilterCondition(filter: ReplyInboxFilter) {
+  if (filter === "all") return undefined;
+  if (filter === "needs_attention") return replyNeedsAttentionCondition();
+
+  return eq(conversations.intent, filter);
+}
+
+function buildReplyInboxWhere(filters: ReplyInboxFilters) {
+  return [
+    eq(conversations.tenantId, filters.tenantId),
+    eq(conversations.direction, "inbound"),
+    eq(leads.isDeleted, false),
+    replyInboxFilterCondition(filters.filter ?? DEFAULT_REPLY_INBOX_FILTER),
+  ].filter(Boolean);
+}
+
+function joinReplyInboxLead(tenantId: string) {
+  return and(eq(leads.id, conversations.leadId), eq(leads.tenantId, tenantId));
+}
+
+export function buildReplyInboxQuery(db: DashboardDb, filters: ReplyInboxFilters) {
+  requireTenantId(filters.tenantId);
+
+  const { page, pageSize } = normalizeLeadPagination(filters);
+
+  return db
+    .select({
+      id: conversations.id,
+      leadId: conversations.leadId,
+      body: conversations.body,
+      channel: conversations.channel,
+      intent: conversations.intent,
+      intentConfidence: conversations.intentConfidence,
+      agentAction: conversations.agentAction,
+      escalated: conversations.escalated,
+      escalationReason: conversations.escalationReason,
+      createdAt: conversations.createdAt,
+      firstName: leads.firstName,
+      lastName: leads.lastName,
+      businessName: leads.businessName,
+      email: leads.email,
+    })
+    .from(conversations)
+    .innerJoin(leads, joinReplyInboxLead(filters.tenantId))
+    .where(and(...buildReplyInboxWhere(filters)))
+    .orderBy(desc(conversations.createdAt), desc(conversations.id))
+    .limit(pageSize)
+    .offset((page - 1) * pageSize);
+}
+
+export function buildReplyInboxCountQuery(db: DashboardDb, filters: ReplyInboxFilters) {
+  requireTenantId(filters.tenantId);
+
+  return db
+    .select({ total: sql<string>`count(*)` })
+    .from(conversations)
+    .innerJoin(leads, joinReplyInboxLead(filters.tenantId))
+    .where(and(...buildReplyInboxWhere(filters)));
+}
+
+export function buildReplyInboxFilterCountsQuery(db: DashboardDb, identity: { tenantId: string }) {
+  requireTenantId(identity.tenantId);
+
+  const intentTally = (intent: ReplyIntent) =>
+    sql<string>`count(*) filter (where ${conversations.intent} = ${intent})`;
+
+  return db
+    .select({
+      all: sql<string>`count(*)`,
+      needsAttention: sql<string>`count(*) filter (where ${replyNeedsAttentionCondition()})`,
+      interested: intentTally("interested"),
+      question: intentTally("question"),
+      objection: intentTally("objection"),
+      notInterested: intentTally("not_interested"),
+      unsubscribe: intentTally("unsubscribe"),
+      abusive: intentTally("abusive"),
+    })
+    .from(conversations)
+    .innerJoin(leads, joinReplyInboxLead(identity.tenantId))
+    .where(
+      and(
+        eq(conversations.tenantId, identity.tenantId),
+        eq(conversations.direction, "inbound"),
+        eq(leads.isDeleted, false),
+      ),
+    );
+}
+
+export function normalizeReplyInboxFilterCounts(
+  rows: Array<{
+    all?: number | string | null;
+    needsAttention?: number | string | null;
+    interested?: number | string | null;
+    question?: number | string | null;
+    objection?: number | string | null;
+    notInterested?: number | string | null;
+    unsubscribe?: number | string | null;
+    abusive?: number | string | null;
+  }>,
+): ReplyInboxFilterCounts {
+  const row = rows[0];
+
+  return {
+    all: toNumber(row?.all ?? 0),
+    needs_attention: toNumber(row?.needsAttention ?? 0),
+    interested: toNumber(row?.interested ?? 0),
+    question: toNumber(row?.question ?? 0),
+    objection: toNumber(row?.objection ?? 0),
+    not_interested: toNumber(row?.notInterested ?? 0),
+    unsubscribe: toNumber(row?.unsubscribe ?? 0),
+    abusive: toNumber(row?.abusive ?? 0),
+  };
+}
+
+export function normalizeReplyInboxRow(row: {
+  id: string;
+  leadId: string;
+  body: string;
+  channel: string;
+  intent: string | null;
+  intentConfidence: number | string | null;
+  agentAction: string | null;
+  escalated: boolean | null;
+  escalationReason: string | null;
+  createdAt: Date | string;
+  firstName: string | null;
+  lastName: string | null;
+  businessName: string | null;
+  email: string;
+}): ReplyInboxRow {
+  return {
+    id: row.id,
+    leadId: row.leadId,
+    body: row.body,
+    channel: row.channel,
+    intent: row.intent,
+    intentConfidence: row.intentConfidence === null ? null : toNumber(row.intentConfidence),
+    agentAction: row.agentAction,
+    escalated: row.escalated === true,
+    escalationReason: row.escalationReason,
+    createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt),
+    firstName: row.firstName,
+    lastName: row.lastName,
+    businessName: row.businessName,
+    email: row.email,
+  };
+}
+
+export async function getReplyInboxPage(filters: ReplyInboxFilters) {
+  const db = getDb();
+  const { page, pageSize } = normalizeLeadPagination(filters);
+  const totalRows = await buildReplyInboxCountQuery(db, filters);
+  const total = toNumber(totalRows[0]?.total);
+  const meta = normalizeLeadListPageMeta({ total, page, pageSize });
+  const pageRows = await buildReplyInboxQuery(db, { ...filters, page: meta.page, pageSize });
+
+  return {
+    rows: pageRows.map(normalizeReplyInboxRow),
+    ...meta,
+  };
+}
+
+export async function getReplyInboxFilterCounts(identity: { tenantId: string }) {
+  const db = getDb();
+  return normalizeReplyInboxFilterCounts(await buildReplyInboxFilterCountsQuery(db, identity));
 }

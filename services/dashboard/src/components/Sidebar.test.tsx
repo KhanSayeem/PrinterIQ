@@ -20,9 +20,31 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Macauley")).not.toBeInTheDocument();
   });
 
+  it("links to the reply inbox", () => {
+    render(<Sidebar operatorName="Daniel Marsi" />);
+
+    expect(screen.getByRole("link", { name: /Replies/i })).toHaveAttribute("href", "/replies");
+    expect(screen.getByRole("link", { name: /Replies/i })).not.toHaveClass("active");
+  });
+
+  it("links to the deliverability health area", () => {
+    render(<Sidebar operatorName="Daniel Marsi" />);
+
+    expect(screen.getByRole("link", { name: /Deliverability/i })).toHaveAttribute(
+      "href",
+      "/deliverability",
+    );
+  });
+
   it("does not link to the retired prospects area", () => {
     render(<Sidebar operatorName="Daniel Marsi" />);
 
     expect(screen.queryByRole("link", { name: /Prospects/i })).not.toBeInTheDocument();
+  });
+
+  it("links to the sending controls so the kill switch is one click away", () => {
+    render(<Sidebar operatorName="Daniel Marsi" />);
+
+    expect(screen.getByRole("link", { name: /Sending/i })).toHaveAttribute("href", "/sending");
   });
 });

@@ -19,6 +19,12 @@ import {
   buildPipelineWeaknessRowsQuery,
   buildRelatedLeadDataQueries,
   buildRevenueImportedCountQuery,
+  buildTodayReplyCountQuery,
+  buildTodaySendCountQuery,
+  buildTodaySuppressionCountsQuery,
+  normalizeTodaySoFar,
+  BOUNCE_RATE_WARNING_PERCENT,
+  UNSUBSCRIBE_RATE_WARNING_PERCENT,
   buildRevenuePaymentsSummaryQuery,
   buildUpdateLeadStatusQuery,
   buildDeleteOperatorNoteQuery,
@@ -764,5 +770,183 @@ describe("dashboard D2 analytics queries", () => {
     expect(query.sql).toContain('"qualifications"."tenant_id" =');
     expect(query.params).toContain(tenantId);
     expect(query.params).toContain("qualified");
+  });
+});
+
+describe("today so far queries", () => {
+  const dayStart = new Date("2026-06-14T14:00:00.000Z");
+  const dayEnd = new Date("2026-06-15T14:00:00.000Z");
+  const dayLabel = "Mon 15 Jun";
+
+  it("counts sends inside the Sydney day and scopes them by tenant_id", () => {
+    const query = buildTodaySendCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
+
+    expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
+    expect(query.sql).toContain('"outreach_sends"."sent_at" >=');
+    expect(query.sql).toContain('"outreach_sends"."sent_at" <');
+    expect(query.sql).not.toContain('"outreach_sends"."sent_at" <=');
+    expect(query.params).toContain(tenantId);
+  });
+
+  it("counts inbound replies inside the Sydney day and scopes them by tenant_id", () => {
+    const query = buildTodayReplyCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
+
+    expect(query.sql).toContain('"conversations"."tenant_id" =');
+    expect(query.sql).toContain('"conversations"."direction" =');
+    expect(query.sql).toContain('"conversations"."created_at" >=');
+    expect(query.sql).toContain('"conversations"."created_at" <');
+    expect(query.params).toContain(tenantId);
+    expect(query.params).toContain("inbound");
+  });
+
+  it("counts bounces and unsubscribes separately from the same suppression window", () => {
+    const query = buildTodaySuppressionCountsQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
+
+    expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
+    expect(query.sql).toContain('"outreach_sends"."updated_at" >=');
+    expect(query.sql).toContain('"outreach_sends"."updated_at" <');
+    expect(query.sql).toContain('count(*) filter (where "bounced")');
+    expect(query.sql).toContain('count(*) filter (where "unsubscribed")');
+    expect(query.params).toContain(tenantId);
+  });
+
+  it("divides each rate by sends, not by the pipeline total", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: 200,
+      replies: 7,
+      bounces: 4,
+      unsubscribes: 1,
+    });
+
+    expect(summary.sent).toBe(200);
+    expect(summary.replies).toBe(7);
+    expect(summary.replyRate).toBeCloseTo(3.5, 10);
+    expect(summary.bounceRate).toBeCloseTo(2, 10);
+    expect(summary.unsubscribeRate).toBeCloseTo(0.5, 10);
+  });
+
+  it("reads count columns that postgres returns as strings", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: "40",
+      replies: "2",
+      bounces: "1",
+      unsubscribes: "0",
+    });
+
+    expect(summary.sent).toBe(40);
+    expect(summary.replies).toBe(2);
+    expect(summary.bounces).toBe(1);
+    expect(summary.unsubscribes).toBe(0);
+    expect(summary.replyRate).toBeCloseTo(5, 10);
+  });
+
+  it("warns only once a bounce rate is above three percent", () => {
+    const atThreshold = normalizeTodaySoFar({
+      dayLabel,
+      sent: 100,
+      replies: 0,
+      bounces: 3,
+      unsubscribes: 0,
+    });
+    const overThreshold = normalizeTodaySoFar({
+      dayLabel,
+      sent: 100,
+      replies: 0,
+      bounces: 4,
+      unsubscribes: 0,
+    });
+
+    expect(atThreshold.bounceRate).toBeCloseTo(3, 10);
+    expect(atThreshold.bounceTone).toBe("neutral");
+    expect(overThreshold.bounceRate).toBeCloseTo(4, 10);
+    expect(overThreshold.bounceTone).toBe("warning");
+  });
+
+  it("warns only once an unsubscribe rate is above half a percent", () => {
+    const atThreshold = normalizeTodaySoFar({
+      dayLabel,
+      sent: 200,
+      replies: 0,
+      bounces: 0,
+      unsubscribes: 1,
+    });
+    const overThreshold = normalizeTodaySoFar({
+      dayLabel,
+      sent: 200,
+      replies: 0,
+      bounces: 0,
+      unsubscribes: 2,
+    });
+
+    expect(atThreshold.unsubscribeRate).toBeCloseTo(0.5, 10);
+    expect(atThreshold.unsubscribeTone).toBe("neutral");
+    expect(overThreshold.unsubscribeRate).toBeCloseTo(1, 10);
+    expect(overThreshold.unsubscribeTone).toBe("warning");
+  });
+
+  it("keeps a bounce below the threshold neutral even when unsubscribes are hot", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: 100,
+      replies: 0,
+      bounces: 1,
+      unsubscribes: 3,
+    });
+
+    expect(summary.bounceTone).toBe("neutral");
+    expect(summary.unsubscribeTone).toBe("warning");
+  });
+
+  it("leaves rates unmeasured rather than zero when nothing has been sent", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: 0,
+      replies: 0,
+      bounces: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.anySent).toBe(false);
+    expect(summary.hasActivity).toBe(false);
+    expect(summary.replyRate).toBeNull();
+    expect(summary.bounceRate).toBeNull();
+    expect(summary.unsubscribeRate).toBeNull();
+    expect(summary.bounceTone).toBe("neutral");
+    expect(summary.unsubscribeTone).toBe("neutral");
+  });
+
+  it("counts a reply to yesterday's send as activity even with no sends today", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: 0,
+      replies: 2,
+      bounces: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.anySent).toBe(false);
+    expect(summary.hasActivity).toBe(true);
+    expect(summary.replies).toBe(2);
+    expect(summary.replyRate).toBeNull();
+  });
+
+  it("reports opens as untracked rather than as zero", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: 120,
+      replies: 3,
+      bounces: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.opensTracked).toBe(false);
+    expect(summary.opens).toBeNull();
+  });
+
+  it("publishes the thresholds a sender has to react to", () => {
+    expect(BOUNCE_RATE_WARNING_PERCENT).toBe(3);
+    expect(UNSUBSCRIBE_RATE_WARNING_PERCENT).toBe(0.5);
   });
 });
