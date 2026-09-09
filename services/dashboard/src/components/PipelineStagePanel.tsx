@@ -2,6 +2,8 @@ import Link from "next/link";
 import type { PipelineStageDetail } from "@/db/queries";
 
 export function PipelineStagePanel({ detail }: { detail: PipelineStageDetail }) {
+  const metrics = buildStageMetrics(detail);
+
   return (
     <aside className="pipeline-detail-panel" aria-label={`${detail.label} stage details`}>
       <div className="dp-header">
@@ -9,15 +11,13 @@ export function PipelineStagePanel({ detail }: { detail: PipelineStageDetail }) 
         <div className="dp-sub">{detail.count.toLocaleString()} leads currently in this stage</div>
       </div>
       <div className="pipeline-detail-body">
-        <div className="pipeline-metric-grid">
-          <Metric label="Share of imported" value={`${detail.shareOfImported.toFixed(1)}%`} />
-          <Metric label="Previous conversion" value={detail.previousConversionLabel} />
-          <Metric label="Dropped from previous" value={detail.droppedFromPrevious.toLocaleString()} />
-          <Metric
-            label="Avg score"
-            value={detail.averageScore === null ? "No score data yet." : detail.averageScore.toFixed(1)}
-          />
-        </div>
+        {metrics.length ? (
+          <div className="pipeline-metric-grid">
+            {metrics.map((metric) => (
+              <Metric key={metric.label} label={metric.label} value={metric.value} />
+            ))}
+          </div>
+        ) : null}
 
         <section className="dp-section">
           <div className="dp-section-title">Top weaknesses</div>
@@ -63,6 +63,33 @@ export function PipelineStagePanel({ detail }: { detail: PipelineStageDetail }) 
       </div>
     </aside>
   );
+}
+
+type StageMetric = { label: string; value: string };
+
+/**
+ * The first stage has no stage before it, so its share, previous conversion and
+ * drop-off are always 100%, "Starting stage" and 0. Only surface metrics that
+ * can actually differ, and drop the ones with nothing behind them yet.
+ */
+function buildStageMetrics(detail: PipelineStageDetail): StageMetric[] {
+  const metrics: StageMetric[] = [];
+  const hasPreviousStage = detail.status !== "imported" && detail.previousConversionLabel !== "--";
+
+  if (detail.status !== "imported") {
+    metrics.push({ label: "Share of imported", value: `${detail.shareOfImported.toFixed(1)}%` });
+  }
+
+  if (hasPreviousStage) {
+    metrics.push({ label: "Previous conversion", value: detail.previousConversionLabel });
+    metrics.push({ label: "Dropped from previous", value: detail.droppedFromPrevious.toLocaleString() });
+  }
+
+  if (detail.averageScore !== null) {
+    metrics.push({ label: "Avg score", value: detail.averageScore.toFixed(1) });
+  }
+
+  return metrics;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

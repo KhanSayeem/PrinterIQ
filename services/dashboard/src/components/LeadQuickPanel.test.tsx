@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { LeadQuickPanel } from "./LeadQuickPanel";
+import { LeadQuickPanel, LeadQuickPanelWithClose } from "./LeadQuickPanel";
 
 const lead = {
   id: "lead-123",
@@ -127,5 +127,26 @@ describe("LeadQuickPanel", () => {
     expect(screen.getByText("Note")).toHaveClass("dp-message-badge");
     expect(screen.getByText("27 May, 12:15 pm")).toHaveClass("dp-message-time");
     expect(screen.getByText("Asked to follow up next week.").tagName).toBe("BLOCKQUOTE");
+  });
+
+  it("keeps a long email readable instead of hiding it behind the header buttons", () => {
+    const longEmail = "ben@canberracustomkitchensandjoinery.com.au";
+
+    render(
+      <LeadQuickPanelWithClose
+        tenantId="tenant-1"
+        lead={{ ...lead, firstName: null, lastName: null, email: longEmail }}
+        onClose={() => {}}
+      />,
+    );
+
+    const heading = screen.getByTitle(longEmail);
+    expect(heading).toHaveClass("dp-name");
+
+    const contactEmail = screen.getByText(longEmail, { selector: ".dp-row-value" });
+    expect(contactEmail).toHaveClass("wrap");
+
+    expect(screen.getByLabelText("Open full lead page")).toBeInTheDocument();
+    expect(screen.getByLabelText("Close quick panel")).toBeInTheDocument();
   });
 });

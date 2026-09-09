@@ -120,8 +120,8 @@ function LeadQuickPanelContent({
           <div className="dp-identity">
             <div className="dp-avatar" aria-hidden="true">{initials(lead)}</div>
             <div className="dp-identity-copy">
-              <div className="dp-name">{displayName(lead)}</div>
-              <div className="dp-sub">{locationText(lead)}</div>
+              <div className="dp-name" title={displayName(lead)}>{displayName(lead)}</div>
+              <div className="dp-sub" title={locationText(lead)}>{locationText(lead)}</div>
               <div className="dp-chip-row">
                 <span className="dp-chip">{lead.vertical ?? "tradies"}</span>
                 <span className="dp-chip">{lead.state ?? "State unknown"}</span>
@@ -162,7 +162,7 @@ function LeadQuickPanelContent({
       <div className="dp-body">
         <div className="dp-section">
           <div className="dp-section-title">CONTACT</div>
-          <div className="dp-row"><span className="dp-row-label">Email</span><span className="dp-row-value">{lead.email}</span></div>
+          <div className="dp-row"><span className="dp-row-label">Email</span><span className="dp-row-value wrap">{lead.email}</span></div>
           <div className="dp-row"><span className="dp-row-label">Phone</span><span className={lead.phone ? "dp-row-value" : "dp-row-value muted-placeholder"}>{lead.phone ?? "No phone on record"}</span></div>
         </div>
         <div className="dp-section">
