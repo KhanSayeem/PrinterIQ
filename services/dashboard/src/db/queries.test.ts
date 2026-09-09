@@ -13,10 +13,7 @@ import {
   buildLeadStatusTransitionCheckQuery,
   buildLatestInstantlyLeadIdQuery,
   buildLatestInstantlyReplyMetadataQuery,
-  buildPipelineStageSampleLeadsQuery,
-  buildPipelineStageScoreSummaryQuery,
   buildPipelineStatusCountsQuery,
-  buildPipelineWeaknessRowsQuery,
   buildRelatedLeadDataQueries,
   buildRevenueImportedCountQuery,
   buildTodayReplyCountQuery,
@@ -40,7 +37,6 @@ import {
   normalizeLeadFilterCounts,
   normalizeLeadListPageMeta,
   normalizePipelineAnalytics,
-  normalizePipelineStage,
 } from "./queries";
 
 const sql = postgres("postgres://user:pass@localhost:5432/printeriq", { prepare: false });
@@ -135,6 +131,7 @@ describe("dashboard lead queries", () => {
     ).toEqual({
       all: 6,
       qualified: 2,
+      contacted: 0,
       replied: 0,
       paid: 1,
       archived: 0,
@@ -142,6 +139,15 @@ describe("dashboard lead queries", () => {
       previewSeen: 0,
       previewUnseen: 0,
     });
+  });
+
+  it("counts the contacted status group for the contacted filter pill", () => {
+    expect(
+      normalizeLeadFilterCounts([
+        { status: "contacted", count: "4" },
+        { status: "replied", count: 2 },
+      ]),
+    ).toMatchObject({ all: 6, contacted: 4, replied: 2 });
   });
 
   it("sums the unsubscribed and preview tallies across every status group", () => {
@@ -153,6 +159,7 @@ describe("dashboard lead queries", () => {
     ).toEqual({
       all: 6,
       qualified: 0,
+      contacted: 4,
       replied: 0,
       paid: 0,
       archived: 2,
@@ -707,12 +714,6 @@ describe("dashboard D2 analytics queries", () => {
     });
   });
 
-  it("normalizes selected pipeline stages to a valid default", () => {
-    expect(normalizePipelineStage("qualified")).toBe("qualified");
-    expect(normalizePipelineStage("not-real")).toBe("imported");
-    expect(normalizePipelineStage(undefined)).toBe("imported");
-  });
-
   it("adds non-negative drop-off counts to conversion rows", () => {
     const analytics = normalizePipelineAnalytics([
       { status: "imported", count: 2 },
@@ -732,45 +733,6 @@ describe("dashboard D2 analytics queries", () => {
     });
   });
 
-  it("scopes pipeline stage score summaries by tenant_id and stage", () => {
-    const query = buildPipelineStageScoreSummaryQuery(db, {
-      tenantId,
-      selectedStage: "qualified",
-    }).toSQL();
-
-    expect(query.sql).toContain('"leads"."tenant_id" =');
-    expect(query.sql).toContain('"qualifications"."tenant_id" =');
-    expect(query.sql).toContain('"leads"."status" =');
-    expect(query.params).toContain(tenantId);
-    expect(query.params).toContain("qualified");
-  });
-
-  it("scopes pipeline weakness rows by tenant_id and stage", () => {
-    const query = buildPipelineWeaknessRowsQuery(db, {
-      tenantId,
-      selectedStage: "qualified",
-    }).toSQL();
-
-    expect(query.sql).toContain('"leads"."tenant_id" =');
-    expect(query.sql).toContain('"enrichments"."tenant_id" =');
-    expect(query.sql).toContain('"leads"."status" =');
-    expect(query.params).toContain(tenantId);
-    expect(query.params).toContain("qualified");
-  });
-
-  it("scopes pipeline sample leads by tenant_id and stage", () => {
-    const query = buildPipelineStageSampleLeadsQuery(db, {
-      tenantId,
-      selectedStage: "qualified",
-      limit: 5,
-    }).toSQL();
-
-    expect(query.sql).toContain('"leads"."tenant_id" =');
-    expect(query.sql).toContain('"leads"."status" =');
-    expect(query.sql).toContain('"qualifications"."tenant_id" =');
-    expect(query.params).toContain(tenantId);
-    expect(query.params).toContain("qualified");
-  });
 });
 
 describe("today so far queries", () => {

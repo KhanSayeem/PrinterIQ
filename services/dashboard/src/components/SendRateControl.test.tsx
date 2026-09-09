@@ -36,6 +36,28 @@ describe("SendRateControl", () => {
     expect(screen.getByText(/1 Instantly account outside/i)).toBeInTheDocument();
   });
 
+  it("sends the mailboxes in scope card to the mailbox health list", () => {
+    renderControl();
+
+    const card = screen.getByLabelText("Mailboxes in scope").closest(".metric-card");
+    expect(card).toHaveAttribute("href", "/deliverability");
+    expect(card).toHaveClass("is-clickable");
+    expect((card as HTMLElement).tagName).toBe("A");
+    (card as HTMLElement).focus();
+    expect(document.activeElement).toBe(card);
+  });
+
+  it("leaves the cards with nowhere useful to go unlinked", () => {
+    renderControl();
+
+    const total = screen.getByLabelText("Campaign daily total").closest(".metric-card");
+    const ramp = screen.getByLabelText("Next ramp step").closest(".metric-card");
+    expect(total).not.toHaveAttribute("href");
+    expect((total as HTMLElement).tagName).toBe("DIV");
+    expect(ramp).not.toHaveAttribute("href");
+    expect((ramp as HTMLElement).tagName).toBe("DIV");
+  });
+
   it("prefills the next ramp step when the operator asks for it", () => {
     renderControl();
 

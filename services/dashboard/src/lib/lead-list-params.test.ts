@@ -49,6 +49,11 @@ describe("parseLeadListParams", () => {
     expect(parseLeadListParams({ preview: "maybe" }).previewView).toBeUndefined();
   });
 
+  it("reads the contacted status back out of the URL", () => {
+    expect(parseLeadListParams({ status: "contacted" }).status).toBe("contacted");
+    expect(parseLeadListParams({ status: "contacted", page: "2" }).page).toBe(2);
+  });
+
   it("ignores invalid numeric params and clamps page to at least 1", () => {
     const result = parseLeadListParams({ score_min: "not-a-number", page: "0" });
 

@@ -83,6 +83,14 @@ describe("LeadsPage", () => {
     );
   });
 
+  it("passes a contacted status from the URL into the server-rendered lead query", async () => {
+    await LeadsPage({ searchParams: Promise.resolve({ status: "contacted" }) });
+
+    expect(getLeadListPageMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "contacted", page: 1 }),
+    );
+  });
+
   it("hands the workbench today's numbers for the operator's own day", async () => {
     render(await LeadsPage({ searchParams: Promise.resolve({}) }));
 

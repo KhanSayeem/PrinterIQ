@@ -69,6 +69,7 @@ export type LeadListFilters = {
 export type LeadFilterCounts = {
   all: number;
   qualified: number;
+  contacted: number;
   replied: number;
   paid: number;
   archived: number;
@@ -253,37 +254,6 @@ export type PipelineAnalytics = {
   stages: PipelineStage[];
   conversions: PipelineConversion[];
   total: number;
-  selectedStage: PipelineStatus;
-  selectedStageDetail: PipelineStageDetail;
-};
-
-export type PipelineSampleLead = {
-  id: string;
-  firstName: string | null;
-  lastName: string | null;
-  businessName: string | null;
-  city: string | null;
-  state: string | null;
-  status: string;
-  score: number | null;
-  updatedAt: Date | string | null;
-};
-
-export type PipelineTopWeakness = {
-  label: string;
-  count: number;
-};
-
-export type PipelineStageDetail = {
-  status: PipelineStatus;
-  label: string;
-  count: number;
-  shareOfImported: number;
-  previousConversionLabel: string;
-  droppedFromPrevious: number;
-  averageScore: number | null;
-  topWeaknesses: PipelineTopWeakness[];
-  sampleLeads: PipelineSampleLead[];
 };
 
 export type RevenueAnalytics = {
@@ -439,13 +409,8 @@ function buildLeadListWhere(filters: LeadListFilters) {
   ].filter(Boolean);
 }
 
-export function normalizePipelineStage(stage: string | undefined): PipelineStatus {
-  return PIPELINE_STATUSES.includes(stage as PipelineStatus) ? (stage as PipelineStatus) : "imported";
-}
-
 export function normalizePipelineAnalytics(
   rows: Array<{ status: string; count: number | string }>,
-  detail?: Partial<Pick<PipelineAnalytics, "selectedStage" | "selectedStageDetail">>,
 ): PipelineAnalytics {
   const counts = new Map(rows.map((row) => [row.status, toNumber(row.count)]));
   const total = PIPELINE_STATUSES.reduce((sum, status) => sum + (counts.get(status) ?? 0), 0);
@@ -477,19 +442,7 @@ export function normalizePipelineAnalytics(
     };
   });
 
-  const selectedStage = detail?.selectedStage ?? "imported";
-  const selectedStageDetail =
-    detail?.selectedStageDetail ??
-    buildPipelineStageDetail({
-      selectedStage,
-      stages,
-      conversions,
-      averageScore: null,
-      weaknessRows: [],
-      sampleLeads: [],
-    });
-
-  return { stages, conversions, total, selectedStage, selectedStageDetail };
+  return { stages, conversions, total };
 }
 
 export function normalizeRevenuePeriod(period: string | undefined): RevenuePeriod {
@@ -813,65 +766,6 @@ export function buildPipelineStatusCountsQuery(db: DashboardDb, identity: { tena
     .from(leads)
     .where(and(eq(leads.tenantId, identity.tenantId), eq(leads.isDeleted, false)))
     .groupBy(leads.status);
-}
-
-export function buildPipelineStageScoreSummaryQuery(
-  db: DashboardDb,
-  identity: { tenantId: string; selectedStage: PipelineStatus },
-) {
-  requireTenantId(identity.tenantId);
-
-  return db
-    .select({
-      averageScore: sql<string>`avg(${qualifications.score})`,
-    })
-    .from(leads)
-    .leftJoin(
-      qualifications,
-      and(eq(qualifications.leadId, leads.id), eq(qualifications.tenantId, identity.tenantId)),
-    )
-    .where(
-      and(
-        eq(leads.tenantId, identity.tenantId),
-        eq(leads.isDeleted, false),
-        eq(leads.status, identity.selectedStage),
-      ),
-    );
-}
-
-export function buildPipelineWeaknessRowsQuery(
-  db: DashboardDb,
-  identity: { tenantId: string; selectedStage: PipelineStatus },
-) {
-  requireTenantId(identity.tenantId);
-
-  return db
-    .select({
-      weaknesses: enrichments.weaknesses,
-    })
-    .from(leads)
-    .leftJoin(
-      enrichments,
-      and(eq(enrichments.leadId, leads.id), eq(enrichments.tenantId, identity.tenantId)),
-    )
-    .where(
-      and(
-        eq(leads.tenantId, identity.tenantId),
-        eq(leads.isDeleted, false),
-        eq(leads.status, identity.selectedStage),
-      ),
-    );
-}
-
-export function buildPipelineStageSampleLeadsQuery(
-  db: DashboardDb,
-  identity: { tenantId: string; selectedStage: PipelineStatus; limit?: number },
-) {
-  return buildLeadListQuery(db, {
-    tenantId: identity.tenantId,
-    status: identity.selectedStage,
-    pageSize: identity.limit ?? 5,
-  });
 }
 
 export function buildRevenuePaymentsSummaryQuery(
@@ -1742,6 +1636,7 @@ export function normalizeLeadFilterCounts(
   return {
     all,
     qualified: counts.get("qualified") ?? 0,
+    contacted: counts.get("contacted") ?? 0,
     replied: counts.get("replied") ?? 0,
     paid: counts.get("paid") ?? 0,
     archived: counts.get("archived") ?? 0,
@@ -1751,32 +1646,11 @@ export function normalizeLeadFilterCounts(
   };
 }
 
-export async function getPipelineAnalytics(identity: { tenantId: string; selectedStage?: string }) {
+export async function getPipelineAnalytics(identity: { tenantId: string }) {
   requireTenantId(identity.tenantId);
 
   const db = getDb();
-  const selectedStage = normalizePipelineStage(identity.selectedStage);
-  const [statusRows, scoreRows, weaknessRows, sampleRows] = await Promise.all([
-    buildPipelineStatusCountsQuery(db, identity),
-    buildPipelineStageScoreSummaryQuery(db, { tenantId: identity.tenantId, selectedStage }),
-    buildPipelineWeaknessRowsQuery(db, { tenantId: identity.tenantId, selectedStage }),
-    buildPipelineStageSampleLeadsQuery(db, { tenantId: identity.tenantId, selectedStage, limit: 5 }),
-  ]);
-
-  const base = normalizePipelineAnalytics(statusRows, { selectedStage });
-  const selectedStageDetail = buildPipelineStageDetail({
-    selectedStage,
-    stages: base.stages,
-    conversions: base.conversions,
-    averageScore: toNullableNumber(scoreRows[0]?.averageScore),
-    weaknessRows,
-    sampleLeads: sampleRows.map(normalizePipelineSampleLead),
-  });
-
-  return {
-    ...base,
-    selectedStageDetail,
-  };
+  return normalizePipelineAnalytics(await buildPipelineStatusCountsQuery(db, identity));
 }
 
 export async function getRevenueAnalytics(identity: { tenantId: string; period: RevenuePeriod }) {
@@ -1889,82 +1763,6 @@ function normalizeAiCostRows(
       };
     })
     .sort((left, right) => right.costUsd - left.costUsd);
-}
-
-function buildPipelineStageDetail({
-  selectedStage,
-  stages,
-  conversions,
-  averageScore,
-  weaknessRows,
-  sampleLeads,
-}: {
-  selectedStage: PipelineStatus;
-  stages: PipelineStage[];
-  conversions: PipelineConversion[];
-  averageScore: number | null;
-  weaknessRows: Array<{ weaknesses: unknown }>;
-  sampleLeads: PipelineSampleLead[];
-}): PipelineStageDetail {
-  const stage = stages.find((row) => row.status === selectedStage) ?? stages[0];
-  const previousConversion = conversions.find((conversion) => conversion.to === selectedStage);
-
-  return {
-    status: selectedStage,
-    label: labelForStatus(selectedStage),
-    count: stage?.count ?? 0,
-    shareOfImported: stage?.totalRate ?? 0,
-    previousConversionLabel:
-      selectedStage === "imported" ? "Starting stage" : (previousConversion?.label ?? "--"),
-    droppedFromPrevious: previousConversion?.droppedCount ?? 0,
-    averageScore,
-    topWeaknesses: summarizeWeaknessRows(weaknessRows),
-    sampleLeads,
-  };
-}
-
-function normalizePipelineSampleLead(row: {
-  id: string;
-  firstName: string | null;
-  lastName: string | null;
-  businessName: string | null;
-  city: string | null;
-  state: string | null;
-  status: string;
-  score: number | null;
-  updatedAt: Date | string | null;
-}): PipelineSampleLead {
-  return {
-    id: row.id,
-    firstName: row.firstName,
-    lastName: row.lastName,
-    businessName: row.businessName,
-    city: row.city,
-    state: row.state,
-    status: row.status,
-    score: row.score,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function summarizeWeaknessRows(rows: Array<{ weaknesses: unknown }>) {
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    for (const weakness of normalizeWeaknesses(row.weaknesses)) {
-      counts.set(weakness, (counts.get(weakness) ?? 0) + 1);
-    }
-  }
-
-  return [...counts.entries()]
-    .map(([label, count]) => ({ label, count }))
-    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
-    .slice(0, 5);
-}
-
-function normalizeWeaknesses(value: unknown) {
-  return Array.isArray(value)
-    ? value.filter((weakness): weakness is string => typeof weakness === "string" && weakness.trim().length > 0)
-    : [];
 }
 
 function toNullableNumber(value: unknown) {
