@@ -20,6 +20,12 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Macauley")).not.toBeInTheDocument();
   });
 
+  it("links to the sending rate control", () => {
+    render(<Sidebar operatorName="Daniel Marsi" />);
+
+    expect(screen.getByRole("link", { name: /Sending/i })).toHaveAttribute("href", "/sending");
+  });
+
   it("does not link to the retired prospects area", () => {
     render(<Sidebar operatorName="Daniel Marsi" />);
 
