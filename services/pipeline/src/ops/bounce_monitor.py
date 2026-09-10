@@ -57,7 +57,12 @@ from ops.bounce_detector import (
     CampaignBounceCounts,
     evaluate_bounce_rate,
 )
-from ops.stall_monitor import AlertSink, AlertThrottle, RedisAlertThrottle, build_alert_sink
+from ops.stall_monitor import (
+    AlertSink,
+    AlertThrottle,
+    build_alert_sink,
+    build_alert_throttle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -347,8 +352,12 @@ async def _run_checks(*, once: bool, dry_run: bool) -> BounceCheckResult:
             result = await run_bounce_check(
                 reader=reader,
                 sink=sink,
-                elevated_throttle=RedisAlertThrottle(redis=redis_client, key=ELEVATED_STATE_KEY),
-                critical_throttle=RedisAlertThrottle(redis=redis_client, key=CRITICAL_STATE_KEY),
+                elevated_throttle=build_alert_throttle(
+                    redis=redis_client, key=ELEVATED_STATE_KEY, dry_run=dry_run
+                ),
+                critical_throttle=build_alert_throttle(
+                    redis=redis_client, key=CRITICAL_STATE_KEY, dry_run=dry_run
+                ),
                 threshold=threshold,
                 catastrophic_threshold=catastrophic_threshold,
                 minimum_sends=minimum_sends,
