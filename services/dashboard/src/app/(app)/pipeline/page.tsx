@@ -39,7 +39,9 @@ export default async function PipelinePage() {
       <div className="page-header">
         <div className="page-title-wrap">
           <div className="page-title">Funnel</div>
-          <div className="page-subtitle">Pipeline stage breakdown · all time</div>
+          <div className="page-subtitle">
+            Leads that ever reached each stage, counted from milestone records
+          </div>
         </div>
       </div>
       {analytics.total === 0 ? (
