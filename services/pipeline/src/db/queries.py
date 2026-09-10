@@ -1928,6 +1928,15 @@ async def insert_outreach_send(
     connection: DatabaseConnection,
     send: OutreachSendInsert,
 ) -> UUID:
+    """Record an outreach send.
+
+    sent_at is set to NOW() at the moment Instantly accepts the lead, so it
+    marks the handoff to Instantly and not the moment the email actually left
+    a mailbox. Instantly queues the lead and sends it later, inside the
+    campaign schedule and its own sending limits, and it never tells us when
+    that happened. Anything that reads sent_at as a send time, a per-day sent
+    count for instance, is counting handoffs.
+    """
     raw_id = await connection.fetchval(
         """
         WITH existing_send AS (
@@ -2034,6 +2043,11 @@ async def complete_outreach_send(
     connection: DatabaseConnection,
     send: OutreachSendInsert,
 ) -> UUID:
+    """Attach the Instantly lead id to a reserved send.
+
+    sent_at means the same thing here as in insert_outreach_send: the handoff
+    to Instantly, not the actual send.
+    """
     raw_id = await connection.fetchval(
         """
         UPDATE outreach_sends

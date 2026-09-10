@@ -1,16 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { pathToFileURL } from "node:url";
 import { buildServer, shouldStartWebhookServer, type ReplyQueue } from "../src/webhook.js";
-import { queries as defaultQueries } from "../src/db/queries.js";
 
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const leadId = "22222222-2222-4222-8222-222222222222";
+const otherTenantId = "33333333-3333-4333-8333-333333333333";
+const instantlyLeadId = "instantly-lead-123";
+const leadEmail = "owner@stonebuilders.com.au";
 
 const webhookSecrets = {
   reply: "reply-token",
   bounced: "bounced-token",
   unsubbed: "unsubbed-token",
 };
+
+type WebhookQueries = NonNullable<Parameters<typeof buildServer>[0]["queries"]>;
 
 function createQueue(): ReplyQueue {
   return {
@@ -19,10 +23,31 @@ function createQueue(): ReplyQueue {
   };
 }
 
-function createQueries(): Pick<typeof defaultQueries, "recordInstantlyBounce" | "recordInstantlyUnsubscribe"> {
+/** Our own database, standing in for one lead we handed to Instantly once.
+ *
+ * The lookups behave the way the SQL behaves: the Instantly lead id is unique
+ * across the table and may be read unscoped, the email address is only ever
+ * matched inside one tenant.
+ */
+function createQueries(overrides: Partial<WebhookQueries> = {}): WebhookQueries {
+  const target = { tenant_id: tenantId, lead_id: leadId, instantly_lead_id: instantlyLeadId };
+
   return {
     recordInstantlyBounce: vi.fn().mockResolvedValue(undefined),
     recordInstantlyUnsubscribe: vi.fn().mockResolvedValue(undefined),
+    findOutreachTargetByInstantlyLeadId: vi.fn(
+      async (candidate: string, scopedTenantId: string | null = null) =>
+        candidate === instantlyLeadId && (scopedTenantId === null || scopedTenantId === tenantId)
+          ? target
+          : null,
+    ),
+    findOutreachTargetByEmail: vi.fn(async (scopedTenantId: string, email: string) =>
+      scopedTenantId === tenantId && email.toLowerCase() === leadEmail ? target : null,
+    ),
+    findOutreachTargetByLeadId: vi.fn(async (scopedTenantId: string, candidateLeadId: string) =>
+      scopedTenantId === tenantId && candidateLeadId === leadId ? target : null,
+    ),
+    ...overrides,
   };
 }
 
@@ -31,6 +56,7 @@ function createServer(options: Partial<Parameters<typeof buildServer>[0]> = {}) 
     instantlyWebhookSecrets: webhookSecrets,
     queue: createQueue(),
     queries: createQueries(),
+    tenantId,
     ...options,
   });
 }
@@ -380,7 +406,13 @@ describe("Instantly webhook", () => {
     expect(queue.add).toHaveBeenCalledOnce();
   });
 
-  it("rejects payloads without canonical lead metadata", async () => {
+  // Was "rejects payloads without canonical lead metadata".
+  //
+  // metadata.tenant_id and metadata.lead_id were treated as mandatory, and
+  // the pipeline has never sent them: schedule_outreach puts lead_id in
+  // custom_variables. Every reply, bounce and unsubscribe therefore failed
+  // the mapper and 400'd, unlogged. Rejecting this payload was the bug.
+  it("accepts a reply whose identifiers arrive in custom_variables", async () => {
     const queue = createQueue();
     const server = createServer({ queue });
 
@@ -393,14 +425,21 @@ describe("Instantly webhook", () => {
       payload: {
         custom_variables: { tenant_id: tenantId, lead_id: leadId },
         text: "Interested",
-        lead: { id: "instantly-lead-123" },
+        lead: { id: instantlyLeadId },
         email: { id: "email-uuid-123", eaccount: "sender@presciaiq.com" },
       },
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "invalid webhook payload" });
-    expect(queue.add).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(200);
+    expect(queue.add).toHaveBeenCalledWith(
+      "process_reply",
+      expect.objectContaining({
+        tenant_id: tenantId,
+        lead_id: leadId,
+        body: "Interested",
+        instantly_lead_id: instantlyLeadId,
+      }),
+    );
   });
 
   it("returns a generic error when queueing fails", async () => {
@@ -493,7 +532,10 @@ describe("Instantly webhook", () => {
     expect(queries.recordInstantlyBounce).not.toHaveBeenCalled();
   });
 
-  it("rejects bounced or unsubscribed payloads without canonical lead metadata", async () => {
+  // Was "rejects bounced or unsubscribed payloads without canonical lead
+  // metadata". Same inversion as the reply case above: this is the shape the
+  // pipeline produces, and dropping it lost three real bounces.
+  it("accepts an unsubscribe whose identifiers arrive in custom_variables", async () => {
     const queries = createQueries();
     const server = createServer({ queries });
 
@@ -505,13 +547,12 @@ describe("Instantly webhook", () => {
       },
       payload: {
         custom_variables: { tenant_id: tenantId, lead_id: leadId },
-        lead: { id: "instantly-lead-123" },
+        lead: { id: instantlyLeadId },
       },
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "invalid webhook payload" });
-    expect(queries.recordInstantlyUnsubscribe).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(200);
+    expect(queries.recordInstantlyUnsubscribe).toHaveBeenCalledWith(tenantId, leadId, instantlyLeadId);
   });
 });
 
@@ -521,6 +562,475 @@ describe("webhook server startup", () => {
 
     expect(shouldStartWebhookServer("/usr/lib/node_modules/pm2/lib/ProcessContainerFork.js", "0", moduleUrl)).toBe(
       true,
+    );
+  });
+});
+
+/** Resolution of a webhook to one of our leads.
+ *
+ * Instantly's docs do not publish exhaustive payload examples and tell
+ * integrators to log the real JSON, so nothing here may depend on a payload
+ * shape being echoed back. The two identifiers that must be there are the
+ * Instantly lead id, which we stored on every send, and the lead's own email
+ * address, which is the thing the event happened to.
+ */
+describe("Instantly webhook lead resolution", () => {
+  it("resolves a bounce from the Instantly lead id when the payload carries no ids of ours", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: {
+        event_type: "email_bounced",
+        campaign_id: "campaign-456",
+        lead_id: instantlyLeadId,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queries.findOutreachTargetByInstantlyLeadId).toHaveBeenCalledWith(instantlyLeadId, null);
+    expect(queries.recordInstantlyBounce).toHaveBeenCalledWith(tenantId, leadId, instantlyLeadId);
+  });
+
+  it("resolves an Instantly lead id nested under lead", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: {
+        event_type: "email_bounced",
+        lead: { id: instantlyLeadId, first_name: "Brett" },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queries.recordInstantlyBounce).toHaveBeenCalledWith(tenantId, leadId, instantlyLeadId);
+  });
+
+  it("resolves an Instantly lead id sent at the top level as id", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/unsubbed/unsubbed-token",
+      payload: { event_type: "lead_unsubscribed", id: instantlyLeadId },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queries.recordInstantlyUnsubscribe).toHaveBeenCalledWith(tenantId, leadId, instantlyLeadId);
+  });
+
+  // The fallback that has to hold when every id assumption fails. Whatever
+  // else an Instantly bounce, unsubscribe or reply carries, it is about an
+  // email address.
+  it("resolves a bounce from the lead email when no id in the payload matches", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: {
+        event_type: "email_bounced",
+        lead_email: leadEmail,
+        campaign_name: "Tradies May",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queries.findOutreachTargetByEmail).toHaveBeenCalledWith(tenantId, leadEmail);
+    expect(queries.recordInstantlyBounce).toHaveBeenCalledWith(tenantId, leadId, instantlyLeadId);
+  });
+
+  it("resolves a lead email nested under lead", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: {
+        event_type: "email_bounced",
+        lead: { email: leadEmail.toUpperCase(), company_name: "Stone Builders" },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queries.recordInstantlyBounce).toHaveBeenCalledWith(tenantId, leadId, instantlyLeadId);
+  });
+
+  // Our own sending address is in the reply payload too, under eaccount. It
+  // is not a lead and must never be used to resolve one.
+  it("never resolves a lead from our own sending address", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: {
+        event_type: "email_bounced",
+        email: { eaccount: "sender@presciaiq.com", from: "sender@presciaiq.com" },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(queries.findOutreachTargetByEmail).not.toHaveBeenCalled();
+  });
+
+  // Instantly may one day start echoing metadata. The old fast path stays,
+  // and it stays a fast path: it answers without touching the database.
+  it("keeps the metadata fast path and does not query the database for it", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: {
+        metadata: { tenant_id: tenantId, lead_id: leadId },
+        lead: { id: instantlyLeadId },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queries.recordInstantlyBounce).toHaveBeenCalledWith(tenantId, leadId, instantlyLeadId);
+    expect(queries.findOutreachTargetByInstantlyLeadId).not.toHaveBeenCalled();
+    expect(queries.findOutreachTargetByEmail).not.toHaveBeenCalled();
+    expect(queries.findOutreachTargetByLeadId).not.toHaveBeenCalled();
+  });
+
+  // Our own ids echoed back without an Instantly lead id still have to be
+  // turned into a send row, because both suppression writes match on
+  // outreach_sends.instantly_lead_id.
+  it("resolves our own echoed ids through the send row when no Instantly lead id is present", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: { metadata: { tenant_id: tenantId, lead_id: leadId } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queries.findOutreachTargetByLeadId).toHaveBeenCalledWith(tenantId, leadId);
+    expect(queries.recordInstantlyBounce).toHaveBeenCalledWith(tenantId, leadId, instantlyLeadId);
+  });
+
+  // The mutation this whole suite exists to kill: a handler that answers 200
+  // and writes nothing looks healthy in every log and dashboard we have.
+  it("answers 404 and records nothing when the payload resolves to no lead", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: {
+        event_type: "email_bounced",
+        lead_id: "instantly-lead-we-never-sent",
+        lead_email: "stranger@example.com",
+      },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "lead not found" });
+    expect(queries.recordInstantlyBounce).not.toHaveBeenCalled();
+  });
+
+  it("answers 404 and queues nothing when a reply resolves to no lead", async () => {
+    const queue = createQueue();
+    const server = createServer({ queue });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/reply/reply-token",
+      payload: {
+        event_type: "reply_received",
+        lead_id: "instantly-lead-we-never-sent",
+        reply_text: "Yeah go on then",
+      },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "lead not found" });
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  // "We cannot read this" and "this is about a lead we do not have" call for
+  // different responses from us: one is a code change, the other is data.
+  // Collapsing them into one status hides whichever is rarer.
+  it("distinguishes a payload it cannot read from a lead it cannot find", async () => {
+    const server = createServer();
+
+    const unreadable = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: { event_type: "email_bounced", campaign_id: "campaign-456" },
+    });
+
+    const notFound = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: { event_type: "email_bounced", lead_id: "instantly-lead-we-never-sent" },
+    });
+
+    expect(unreadable.statusCode).toBe(400);
+    expect(unreadable.json()).toEqual({ error: "invalid webhook payload" });
+    expect(notFound.statusCode).toBe(404);
+    expect(notFound.json()).toEqual({ error: "lead not found" });
+    expect(unreadable.statusCode).not.toBe(notFound.statusCode);
+  });
+
+  it("answers 400 for a payload that is not an object", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify("email_bounced"),
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "invalid webhook payload" });
+    expect(queries.recordInstantlyBounce).not.toHaveBeenCalled();
+  });
+
+  it("answers 400 when a resolvable reply carries no reply body", async () => {
+    const queue = createQueue();
+    const server = createServer({ queue });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/reply/reply-token",
+      payload: { event_type: "reply_received", lead_id: instantlyLeadId },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "invalid webhook payload" });
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  // A lookup that throws is our outage, not an unknown lead. Reporting it as
+  // 404 would tell Instantly the delivery was handled.
+  it("answers 500, not 404, when a resolution lookup fails", async () => {
+    const queries = createQueries({
+      findOutreachTargetByInstantlyLeadId: vi.fn().mockRejectedValue(new Error("db down")),
+    });
+    const server = createServer({ queries });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: { event_type: "email_bounced", lead_id: instantlyLeadId },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: "webhook processing failed" });
+    expect(queries.recordInstantlyBounce).not.toHaveBeenCalled();
+  });
+
+  // Two tenants in the same trade will hold the same lead. An email lookup
+  // that escaped its tenant would archive, or reply to, the wrong company's
+  // lead.
+  it("does not resolve an email belonging to another tenant", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries, tenantId: otherTenantId });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: { event_type: "email_bounced", lead_email: leadEmail },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(queries.findOutreachTargetByEmail).toHaveBeenCalledWith(otherTenantId, leadEmail);
+    expect(queries.findOutreachTargetByEmail).not.toHaveBeenCalledWith(tenantId, leadEmail);
+    expect(queries.recordInstantlyBounce).not.toHaveBeenCalled();
+  });
+
+  it("scopes the email lookup to the tenant the payload names, not the configured one", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries, tenantId: otherTenantId });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: {
+        custom_variables: { tenant_id: tenantId },
+        lead_email: leadEmail,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queries.findOutreachTargetByEmail).toHaveBeenCalledWith(tenantId, leadEmail);
+  });
+
+  // With no tenant from the payload and none configured, an email lookup
+  // would have to search every tenant. Not resolving is the correct answer.
+  it("does not attempt an email lookup when no tenant is known", async () => {
+    const queries = createQueries();
+    const server = createServer({ queries, tenantId: undefined });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/bounced/bounced-token",
+      payload: { event_type: "email_bounced", lead_email: leadEmail },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(queries.findOutreachTargetByEmail).not.toHaveBeenCalled();
+    expect(queries.recordInstantlyBounce).not.toHaveBeenCalled();
+  });
+
+  // The reason this ran undetected for a whole campaign is that the payload
+  // failure path logged nothing at all. A 400 storm produced no signal.
+  it("warns with the route and the payload shape, and no payload values, when it cannot resolve", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const server = createServer();
+
+      const response = await server.inject({
+        method: "POST",
+        url: "/instantly/bounced/bounced-token",
+        payload: {
+          event_type: "email_bounced",
+          lead_email: "stranger@example.com",
+          lead: { first_name: "Brett", company_name: "Stone Builders" },
+          reply_text: "please take me off your list",
+        },
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(warn).toHaveBeenCalled();
+
+      const logged = warn.mock.calls.map((args) => args.join(" ")).join(" ");
+      // Names the route, so the line says which of the three hooks broke.
+      expect(logged).toContain("bounced");
+      // Describes the shape: top level key names, and which lookups missed.
+      expect(logged).toContain("event_type");
+      expect(logged).toContain("lead_email");
+      // Carries no values: no addresses, no names, no reply text, no ids.
+      expect(logged).not.toContain("stranger@example.com");
+      expect(logged).not.toContain("stranger");
+      expect(logged).not.toContain("Brett");
+      expect(logged).not.toContain("Stone Builders");
+      expect(logged).not.toContain("please take me off your list");
+      expect(logged).not.toContain(tenantId);
+      expect(logged).not.toContain(leadId);
+      expect(logged).not.toContain(instantlyLeadId);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("names the lookups it tried and missed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const server = createServer();
+
+      await server.inject({
+        method: "POST",
+        url: "/instantly/unsubbed/unsubbed-token",
+        payload: {
+          event_type: "lead_unsubscribed",
+          lead_id: "instantly-lead-we-never-sent",
+          lead_email: "stranger@example.com",
+        },
+      });
+
+      const logged = warn.mock.calls.map((args) => args.join(" ")).join(" ");
+      expect(logged).toContain("unsubbed");
+      expect(logged).toContain("instantly_lead_id");
+      expect(logged).toContain("email");
+      expect(logged).toContain("missed");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns when a payload carries no identifier it could look anything up by", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const server = createServer();
+
+      await server.inject({
+        method: "POST",
+        url: "/instantly/bounced/bounced-token",
+        payload: { event_type: "email_bounced", campaign_id: "campaign-456" },
+      });
+
+      const logged = warn.mock.calls.map((args) => args.join(" ")).join(" ");
+      expect(logged).toContain("bounced");
+      expect(logged).toContain("no_lead_identifier");
+      expect(logged).not.toContain("campaign-456");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("queues a reply resolved by email alone with the ids read from our own send row", async () => {
+    const queue = createQueue();
+    const server = createServer({ queue });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/reply/reply-token",
+      payload: {
+        event_type: "reply_received",
+        lead_email: leadEmail,
+        reply_text: "Yeah mate how much is it?",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queue.add).toHaveBeenCalledWith(
+      "process_reply",
+      expect.objectContaining({
+        job_type: "process_reply",
+        tenant_id: tenantId,
+        lead_id: leadId,
+        channel: "email",
+        direction: "inbound",
+        body: "Yeah mate how much is it?",
+        instantly_lead_id: instantlyLeadId,
+      }),
+    );
+  });
+
+  // The Instantly email id and sending account are stored as nullable
+  // metadata on the conversation. Requiring them cost us whole replies.
+  it("queues a reply that carries no Instantly email id or sending account", async () => {
+    const queue = createQueue();
+    const server = createServer({ queue });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/instantly/reply/reply-token",
+      payload: {
+        event_type: "reply_received",
+        lead_id: instantlyLeadId,
+        reply_text: "Sounds good",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queue.add).toHaveBeenCalledWith(
+      "process_reply",
+      expect.objectContaining({
+        body: "Sounds good",
+        instantly_lead_id: instantlyLeadId,
+        instantly_email_id: null,
+        instantly_account_id: null,
+      }),
     );
   });
 });

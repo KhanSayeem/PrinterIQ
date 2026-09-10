@@ -153,6 +153,7 @@ async def schedule_outreach(
             lead=lead,
             qualification=qualification,
             opener=opener,
+            tenant_id=tenant_id,
             lead_id=lead_id,
             preview_url=preview_url,
         )
@@ -257,15 +258,21 @@ def _instantly_payload(
     lead: dict[str, object],
     qualification: dict[str, object],
     opener: str,
+    tenant_id: UUID,
     lead_id: UUID,
     preview_url: str | None,
 ) -> dict[str, object]:
+    # tenant_id travels with lead_id because Instantly echoes custom variables
+    # back on reply, bounce and unsubscribe webhooks, and every lookup the
+    # reply-agent makes is tenant scoped. Sending lead_id without tenant_id
+    # left the echoed pair unusable on its own.
     custom_variables = {
         "opener": opener,
         "weakness": str(qualification.get("top_weakness", "")),
         "weakness_sentence": str(qualification.get("weakness_sentence") or ""),
         "followup_1": str(qualification.get("followup_1", "")),
         "followup_2": str(qualification.get("followup_2", "")),
+        "tenant_id": str(tenant_id),
         "lead_id": str(lead_id),
         "website_preview_url": preview_url or "",
     }

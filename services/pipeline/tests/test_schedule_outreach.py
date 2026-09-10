@@ -212,6 +212,7 @@ def test_successful_job_adds_instantly_lead_writes_outreach_and_marks_contacted(
                             ),
                             "followup_1": "Worth fixing before the next batch of quote requests.",
                             "followup_2": "Happy to show what a fast tradie site can look like.",
+                            "tenant_id": str(TENANT_ID),
                             "lead_id": str(LEAD_ID),
                             "website_preview_url": PREVIEW_URL,
                             "preview_url": PREVIEW_URL,
@@ -588,5 +589,31 @@ def test_missing_created_leads_in_instantly_response_fails_clearly() -> None:
         assert repo.completed == []
         assert repo.updates == []
         assert repo.lock_released is True
+
+    asyncio.run(scenario())
+
+
+def test_custom_variables_carry_the_tenant_id_alongside_the_lead_id() -> None:
+    """Instantly echoes custom variables back on reply, bounce and unsubscribe
+    webhooks, and the reply-agent needs a tenant to scope its lookups by. We
+    sent lead_id and never sent tenant_id, so a lead that could otherwise be
+    identified from the echoed pair alone could not be."""
+
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+        instantly = FakeInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]})
+
+        await schedule_outreach(
+            _payload(),
+            lead_fetcher=FakeLeadFetcher(_lead()),
+            qualification_fetcher=FakeQualificationFetcher(_qualification()),
+            outreach_repo=repo,
+            instantly_client=instantly,
+        )
+
+        custom_variables = instantly.calls[0]["leads"][0]["custom_variables"]
+        assert isinstance(custom_variables, dict)
+        assert custom_variables["tenant_id"] == str(TENANT_ID)
+        assert custom_variables["lead_id"] == str(LEAD_ID)
 
     asyncio.run(scenario())
