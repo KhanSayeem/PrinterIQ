@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ReplyInbox } from "./ReplyInbox";
 import type { ReplyInboxFilterCounts, ReplyInboxRow } from "@/db/queries";
+import { REPLY_INGEST_UNKNOWN_MESSAGE } from "@/lib/reply-ingest-health";
 
 const now = new Date("2026-09-09T12:00:00.000Z");
 
@@ -46,6 +47,7 @@ function renderInbox(props: Partial<Parameters<typeof ReplyInbox>[0]> = {}) {
       totalPages={1}
       total={1}
       now={now}
+      ingestHealth={{ status: "recent", message: "No inbound reply has been recorded since yesterday." }}
       {...props}
     />,
   );
@@ -121,11 +123,28 @@ describe("ReplyInbox", () => {
     expect(within(items[2]).getByText("first")).toBeInTheDocument();
   });
 
-  it("explains an empty inbox as normal before launch", () => {
-    renderInbox({ replies: [], counts: emptyCounts, total: 0 });
+  it("reports the inbound reply path's own health instead of reassuring the operator", () => {
+    renderInbox({
+      replies: [],
+      counts: emptyCounts,
+      total: 0,
+      ingestHealth: {
+        status: "stale",
+        message: "No inbound reply has been recorded since 01 Sept 2026, 9 days ago.",
+      },
+    });
 
-    expect(screen.getByText(/No replies yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No inbound reply has been recorded since 01 Sept 2026/)).toBeInTheDocument();
+    expect(screen.queryByText(/correct number/i)).toBeNull();
+    expect(screen.queryByText(/not a fault/i)).toBeNull();
+    expect(screen.queryByText(/posts every inbound reply/i)).toBeNull();
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
+  });
+
+  it("says the health of the inbound path could not be read rather than nothing", () => {
+    renderInbox({ replies: [], counts: emptyCounts, total: 0, ingestHealth: null });
+
+    expect(screen.getByText(REPLY_INGEST_UNKNOWN_MESSAGE)).toBeInTheDocument();
   });
 
   it("distinguishes an empty filter from an empty inbox", () => {
@@ -134,10 +153,11 @@ describe("ReplyInbox", () => {
       counts: { ...emptyCounts, all: 4, not_interested: 4 },
       filter: "interested",
       total: 0,
+      ingestHealth: { status: "recent", message: "No inbound reply has been recorded since yesterday." },
     });
 
     expect(screen.getByText(/No replies match this filter/i)).toBeInTheDocument();
-    expect(screen.queryByText(/No replies yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No inbound reply has been recorded/i)).toBeNull();
   });
 
   it("offers the needs-a-human filter and marks the active one", () => {

@@ -26,8 +26,7 @@ import {
   buildRelatedLeadDataQueries,
   buildRevenueImportedCountQuery,
   buildTodayReplyCountQuery,
-  buildTodaySendCountQuery,
-  buildTodaySuppressionCountsQuery,
+  buildTodayUnsubscribeCountQuery,
   normalizeTodaySoFar,
   BOUNCE_RATE_WARNING_PERCENT,
   UNSUBSCRIBE_RATE_WARNING_PERCENT,
@@ -47,6 +46,8 @@ import {
   normalizeLeadListPageMeta,
   normalizePipelineAnalytics,
 } from "./queries";
+import * as queryModule from "./queries";
+import type { MetricAvailability } from "@/lib/deliverability";
 
 const sql = postgres("postgres://user:pass@localhost:5432/printeriq", { prepare: false });
 const db = drizzle(sql);
@@ -956,15 +957,10 @@ describe("today so far queries", () => {
   const dayEnd = new Date("2026-06-15T14:00:00.000Z");
   const dayLabel = "Mon 15 Jun";
 
-  it("counts sends inside the Sydney day and scopes them by tenant_id", () => {
-    const query = buildTodaySendCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
-
-    expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
-    expect(query.sql).toContain('"outreach_sends"."sent_at" >=');
-    expect(query.sql).toContain('"outreach_sends"."sent_at" <');
-    expect(query.sql).not.toContain('"outreach_sends"."sent_at" <=');
-    expect(query.params).toContain(tenantId);
-  });
+  const sent = (value: number): MetricAvailability<number> => ({ available: true, value });
+  const missing = (
+    reason = "Instantly daily analytics did not load.",
+  ): MetricAvailability<number> => ({ available: false, reason });
 
   it("counts inbound replies inside the Sydney day and scopes them by tenant_id", () => {
     const query = buildTodayReplyCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
@@ -977,99 +973,134 @@ describe("today so far queries", () => {
     expect(query.params).toContain("inbound");
   });
 
-  it("counts bounces and unsubscribes separately from the same suppression window", () => {
-    const query = buildTodaySuppressionCountsQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
+  it("counts unsubscribes inside the Sydney day and scopes them by tenant_id", () => {
+    const query = buildTodayUnsubscribeCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
 
     expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
     expect(query.sql).toContain('"outreach_sends"."updated_at" >=');
     expect(query.sql).toContain('"outreach_sends"."updated_at" <');
-    expect(query.sql).toContain('count(*) filter (where "bounced")');
     expect(query.sql).toContain('count(*) filter (where "unsubscribed")');
     expect(query.params).toContain(tenantId);
   });
 
-  it("divides each rate by sends, not by the pipeline total", () => {
+  it("no longer answers sends or bounces from outreach_sends", () => {
+    // sent_at is stamped when a lead is handed to Instantly, not when the email
+    // is sent, so no query in this module may answer either figure.
+    expect(Object.keys(queryModule)).not.toContain("buildTodaySendCountQuery");
+    expect(Object.keys(queryModule)).not.toContain("buildTodaySuppressionCountsQuery");
+
+    const query = buildTodayUnsubscribeCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
+    expect(query.sql).not.toContain("sent_at");
+    expect(query.sql).not.toContain("bounced");
+  });
+
+  it("takes sends and bounces from Instantly and leaves replies and unsubscribes on the database", () => {
     const summary = normalizeTodaySoFar({
       dayLabel,
-      sent: 200,
+      sent: sent(200),
+      bounces: sent(4),
       replies: 7,
-      bounces: 4,
       unsubscribes: 1,
     });
 
-    expect(summary.sent).toBe(200);
+    expect(summary.sent).toEqual({ available: true, value: 200 });
+    expect(summary.bounces).toEqual({ available: true, value: 4 });
     expect(summary.replies).toBe(7);
-    expect(summary.replyRate).toBeCloseTo(3.5, 10);
-    expect(summary.bounceRate).toBeCloseTo(2, 10);
-    expect(summary.unsubscribeRate).toBeCloseTo(0.5, 10);
+    expect(summary.unsubscribes).toBe(1);
   });
 
-  it("reads count columns that postgres returns as strings", () => {
+  it("divides each rate by the Instantly send count, not by the pipeline total", () => {
     const summary = normalizeTodaySoFar({
       dayLabel,
-      sent: "40",
+      sent: sent(200),
+      bounces: sent(4),
+      replies: 7,
+      unsubscribes: 1,
+    });
+
+    expect(summary.replyRate.available).toBe(true);
+    expect(summary.replyRate.available ? summary.replyRate.value : null).toBeCloseTo(3.5, 10);
+    expect(summary.bounceRate.available ? summary.bounceRate.value : null).toBeCloseTo(2, 10);
+    expect(summary.unsubscribeRate.available ? summary.unsubscribeRate.value : null).toBeCloseTo(
+      0.5,
+      10,
+    );
+  });
+
+  it("reads database count columns that postgres returns as strings", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: sent(40),
+      bounces: sent(1),
       replies: "2",
-      bounces: "1",
       unsubscribes: "0",
     });
 
-    expect(summary.sent).toBe(40);
     expect(summary.replies).toBe(2);
-    expect(summary.bounces).toBe(1);
     expect(summary.unsubscribes).toBe(0);
-    expect(summary.replyRate).toBeCloseTo(5, 10);
+    expect(summary.replyRate.available ? summary.replyRate.value : null).toBeCloseTo(5, 10);
   });
 
   it("warns only once a bounce rate is above three percent", () => {
     const atThreshold = normalizeTodaySoFar({
       dayLabel,
-      sent: 100,
+      sent: sent(100),
+      bounces: sent(3),
       replies: 0,
-      bounces: 3,
       unsubscribes: 0,
     });
     const overThreshold = normalizeTodaySoFar({
       dayLabel,
-      sent: 100,
+      sent: sent(100),
+      bounces: sent(4),
       replies: 0,
-      bounces: 4,
       unsubscribes: 0,
     });
 
-    expect(atThreshold.bounceRate).toBeCloseTo(3, 10);
+    expect(atThreshold.bounceRate.available ? atThreshold.bounceRate.value : null).toBeCloseTo(
+      3,
+      10,
+    );
     expect(atThreshold.bounceTone).toBe("neutral");
-    expect(overThreshold.bounceRate).toBeCloseTo(4, 10);
+    expect(overThreshold.bounceRate.available ? overThreshold.bounceRate.value : null).toBeCloseTo(
+      4,
+      10,
+    );
     expect(overThreshold.bounceTone).toBe("warning");
   });
 
   it("warns only once an unsubscribe rate is above half a percent", () => {
     const atThreshold = normalizeTodaySoFar({
       dayLabel,
-      sent: 200,
+      sent: sent(200),
+      bounces: sent(0),
       replies: 0,
-      bounces: 0,
       unsubscribes: 1,
     });
     const overThreshold = normalizeTodaySoFar({
       dayLabel,
-      sent: 200,
+      sent: sent(200),
+      bounces: sent(0),
       replies: 0,
-      bounces: 0,
       unsubscribes: 2,
     });
 
-    expect(atThreshold.unsubscribeRate).toBeCloseTo(0.5, 10);
+    expect(
+      atThreshold.unsubscribeRate.available ? atThreshold.unsubscribeRate.value : null,
+    ).toBeCloseTo(0.5, 10);
     expect(atThreshold.unsubscribeTone).toBe("neutral");
-    expect(overThreshold.unsubscribeRate).toBeCloseTo(1, 10);
+    expect(
+      overThreshold.unsubscribeRate.available ? overThreshold.unsubscribeRate.value : null,
+    ).toBeCloseTo(1, 10);
     expect(overThreshold.unsubscribeTone).toBe("warning");
   });
 
   it("keeps a bounce below the threshold neutral even when unsubscribes are hot", () => {
     const summary = normalizeTodaySoFar({
       dayLabel,
-      sent: 100,
+      sent: sent(100),
+      bounces: sent(1),
       replies: 0,
-      bounces: 1,
       unsubscribes: 3,
     });
 
@@ -1080,42 +1111,173 @@ describe("today so far queries", () => {
   it("leaves rates unmeasured rather than zero when nothing has been sent", () => {
     const summary = normalizeTodaySoFar({
       dayLabel,
-      sent: 0,
+      sent: sent(0),
+      bounces: sent(0),
       replies: 0,
-      bounces: 0,
       unsubscribes: 0,
     });
 
     expect(summary.anySent).toBe(false);
     expect(summary.hasActivity).toBe(false);
-    expect(summary.replyRate).toBeNull();
-    expect(summary.bounceRate).toBeNull();
-    expect(summary.unsubscribeRate).toBeNull();
+    expect(summary.replyRate.available).toBe(false);
+    expect(summary.bounceRate.available).toBe(false);
+    expect(summary.unsubscribeRate.available).toBe(false);
     expect(summary.bounceTone).toBe("neutral");
     expect(summary.unsubscribeTone).toBe("neutral");
+  });
+
+  it("carries the unavailable send count through instead of reporting zero sends", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: missing(),
+      bounces: missing(),
+      replies: 2,
+      unsubscribes: 0,
+    });
+
+    expect(summary.sent.available).toBe(false);
+    expect(summary.sent.available ? null : summary.sent.reason).toBe(
+      "Instantly daily analytics did not load.",
+    );
+    expect(summary.bounces.available).toBe(false);
+    expect(summary.anySent).toBe(false);
+    // The tiles still have to render, otherwise the failure hides behind the
+    // quiet day note and reads as "nothing went out".
+    expect(summary.hasActivity).toBe(true);
+  });
+
+  /**
+   * The worst case for this bar: Instantly is unreachable and nothing else
+   * happened today either. Every counted figure is zero, so a naive activity
+   * check falls through to the quiet day note and the outage renders as
+   * "nothing has come back", which is the confusion this branch exists to fix.
+   */
+  it("keeps the tiles on screen during an outage with no other activity", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: missing(),
+      bounces: missing(),
+      replies: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.hasActivity).toBe(true);
+    expect(summary.sent.available).toBe(false);
+    expect(summary.anySent).toBe(false);
+  });
+
+  it("refuses to compute a rate against a send count it does not have", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: missing(),
+      bounces: missing(),
+      replies: 7,
+      unsubscribes: 1,
+    });
+
+    expect(summary.replyRate.available).toBe(false);
+    expect(summary.unsubscribeRate.available).toBe(false);
+    expect(summary.bounceRate.available).toBe(false);
+    expect(summary.replies).toBe(7);
+    expect(summary.bounceTone).toBe("neutral");
+    expect(summary.unsubscribeTone).toBe("neutral");
+    expect(summary.replyRate.available ? null : summary.replyRate.reason).toMatch(/send count/i);
+  });
+
+  /**
+   * The denominator, not the numerator, is the one that was faked before. A
+   * real bounce count divided by yesterday's or by a zero would print a
+   * confident percentage that today's data does not support.
+   */
+  it("withholds every rate when the send count is missing but the counts are real", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: missing("Instantly daily analytics did not load."),
+      bounces: sent(3),
+      replies: 7,
+      unsubscribes: 1,
+    });
+
+    expect(summary.bounces).toEqual({ available: true, value: 3 });
+    expect(summary.bounceRate.available).toBe(false);
+    expect(summary.replyRate.available).toBe(false);
+    expect(summary.unsubscribeRate.available).toBe(false);
+    for (const rate of [summary.bounceRate, summary.replyRate, summary.unsubscribeRate]) {
+      expect(rate.available ? null : rate.reason).toMatch(/send count/i);
+    }
+    expect(summary.bounceTone).toBe("neutral");
+    expect(summary.unsubscribeTone).toBe("neutral");
+  });
+
+  it("keeps the bounce rate unavailable when only the bounce count is missing", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: sent(200),
+      bounces: missing("Instantly reported no bounce figure."),
+      replies: 7,
+      unsubscribes: 1,
+    });
+
+    expect(summary.bounceRate.available).toBe(false);
+    expect(summary.bounceRate.available ? null : summary.bounceRate.reason).toBe(
+      "Instantly reported no bounce figure.",
+    );
+    expect(summary.replyRate.available ? summary.replyRate.value : null).toBeCloseTo(3.5, 10);
+  });
+
+  /**
+   * Instantly publishes no bounce figure that can be cut at Sydney midnight, so
+   * the bounce count is permanently unavailable. That must not be read as a
+   * failure: if it forced the tiles open, a genuinely quiet day would never
+   * reach the quiet day note again and the note would be dead code.
+   */
+  it("still shows the quiet day note when only the structurally missing bounce count is absent", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: sent(0),
+      bounces: missing("Instantly reports bounces only as a whole UTC calendar day."),
+      replies: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.hasActivity).toBe(false);
+    expect(summary.anySent).toBe(false);
+  });
+
+  it("keeps the tiles open on a sending day whose bounce count is unavailable", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: sent(30),
+      bounces: missing("Instantly reports bounces only as a whole UTC calendar day."),
+      replies: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.hasActivity).toBe(true);
+    expect(summary.anySent).toBe(true);
   });
 
   it("counts a reply to yesterday's send as activity even with no sends today", () => {
     const summary = normalizeTodaySoFar({
       dayLabel,
-      sent: 0,
+      sent: sent(0),
+      bounces: sent(0),
       replies: 2,
-      bounces: 0,
       unsubscribes: 0,
     });
 
     expect(summary.anySent).toBe(false);
     expect(summary.hasActivity).toBe(true);
     expect(summary.replies).toBe(2);
-    expect(summary.replyRate).toBeNull();
+    expect(summary.replyRate.available).toBe(false);
   });
 
   it("reports opens as untracked rather than as zero", () => {
     const summary = normalizeTodaySoFar({
       dayLabel,
-      sent: 120,
+      sent: sent(120),
+      bounces: sent(0),
       replies: 3,
-      bounces: 0,
       unsubscribes: 0,
     });
 

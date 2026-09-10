@@ -94,11 +94,99 @@ export type InstantlyDailyAnalyticsQuery = {
   endDate: string;
 };
 
+/**
+ * One sent email, narrowed to the two fields a per day send count needs.
+ *
+ * GET /api/v2/emails is the only Instantly endpoint that publishes a per email
+ * instant. `timestamp_created` is when Instantly recorded the email, `Z`
+ * suffixed UTC in the spec, and it is the field the endpoint's own
+ * `min_timestamp_created` and `max_timestamp_created` filters act on. The
+ * sibling `timestamp_email` field is the header date and the spec warns it "is
+ * not always accurate, as it can be manipulated by the sender or the email
+ * server", so it is not read here. Filtering and counting on the same field
+ * means no row can be admitted by one and rejected by the other.
+ */
+export type InstantlySentEmail = {
+  readonly sentAt: Date;
+  /** The mailbox the email went out from. */
+  readonly eaccount: string;
+};
+
+export type InstantlySentEmailsQuery = {
+  /** Mailboxes to ask about. Empty means no request and no rows. */
+  readonly emails: readonly string[];
+  /** Lower bound of the window of interest, as a UTC instant. */
+  readonly createdAtOrAfter: Date;
+  /** Upper bound of the window of interest, as a UTC instant. */
+  readonly createdBefore: Date;
+};
+
+export type InstantlySentEmailsResult = {
+  readonly emails: readonly InstantlySentEmail[];
+  /**
+   * False when the page cap stopped the walk while Instantly still had rows.
+   * A caller counting sends has to report the count as unavailable in that
+   * case: a short count published as a day total is the exact failure this
+   * endpoint was reached for in the first place.
+   */
+  readonly complete: boolean;
+};
+
 /** The list endpoint caps `limit` at 100, so paging is bounded rather than open ended. */
 const ACCOUNTS_PAGE_SIZE = 100;
 const MAX_ACCOUNT_PAGES = 20;
 /** GET /api/v2/accounts/analytics/daily accepts at most 200 unique accounts. */
 const MAX_ANALYTICS_EMAILS = 200;
+
+const EMAILS_PATH = "/api/v2/emails";
+/** GET /api/v2/emails caps `limit` at 100 in the spec. */
+const EMAILS_PAGE_SIZE = 100;
+/**
+ * 10 pages is 1,000 sent emails in one window. The endpoint carries its own
+ * rate limit of 20 requests per minute, lower than the rest of the API, and
+ * this walk runs on a page render, so the cap keeps one render well inside it.
+ * Hitting the cap is reported rather than swallowed.
+ */
+const MAX_EMAIL_PAGES = 10;
+/**
+ * The spec describes `min_timestamp_created` as "after this timestamp" and
+ * `max_timestamp_created` as "before this timestamp" without saying whether
+ * either end is inclusive. Widening both ends by a second demotes the server
+ * side filter to a payload reduction: which day a row belongs to is then
+ * decided only by the caller comparing the instants it gets back.
+ */
+const EMAILS_WINDOW_SLACK_MS = 1000;
+
+/**
+ * Throws rather than returning null. `toSendingAccount` above may skip a row it
+ * cannot read because the deliverability panel lists whatever it can; a send
+ * count may not, because a skipped row silently shortens a figure the today bar
+ * presents as exact. The values themselves are kept out of the messages so a
+ * failure can be logged without putting a mailbox address in the logs.
+ */
+function toSentEmail(raw: unknown): InstantlySentEmail {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error(`Instantly API GET ${EMAILS_PATH} returned a row that is not an object`);
+  }
+
+  const record = raw as Record<string, unknown>;
+  if (typeof record.timestamp_created !== "string") {
+    throw new Error(`Instantly API GET ${EMAILS_PATH} returned a row with no timestamp_created`);
+  }
+
+  const sentAt = new Date(record.timestamp_created);
+  if (Number.isNaN(sentAt.getTime())) {
+    throw new Error(
+      `Instantly API GET ${EMAILS_PATH} returned a row whose timestamp_created could not be parsed`,
+    );
+  }
+
+  if (typeof record.eaccount !== "string" || record.eaccount.trim() === "") {
+    throw new Error(`Instantly API GET ${EMAILS_PATH} returned a row with no eaccount`);
+  }
+
+  return { sentAt, eaccount: record.eaccount };
+}
 
 export class InstantlyHttpClient {
   private readonly apiKey?: string;
@@ -228,6 +316,63 @@ export class InstantlyHttpClient {
     );
 
     return Array.isArray(body) ? body : [];
+  }
+
+  /**
+   * Read only. Every campaign email these mailboxes sent in the window, one row
+   * per email, each carrying the UTC instant Instantly recorded it at.
+   *
+   * `eaccount` takes a comma separated list per the spec, but the caller is
+   * still expected to check each returned row against its own mailbox list: the
+   * workspace is shared with other projects, and a filter that silently stopped
+   * working would otherwise inflate a PrinterIQ figure with another project's
+   * sends.
+   */
+  async listSentEmails(query: InstantlySentEmailsQuery): Promise<InstantlySentEmailsResult> {
+    if (!query.emails.length) {
+      return { emails: [], complete: true };
+    }
+
+    const sent: InstantlySentEmail[] = [];
+    let startingAfter: string | undefined;
+
+    for (let page = 0; page < MAX_EMAIL_PAGES; page += 1) {
+      const params = new URLSearchParams({
+        limit: String(EMAILS_PAGE_SIZE),
+        email_type: "sent",
+        eaccount: query.emails.join(","),
+        min_timestamp_created: new Date(
+          query.createdAtOrAfter.getTime() - EMAILS_WINDOW_SLACK_MS,
+        ).toISOString(),
+        max_timestamp_created: new Date(
+          query.createdBefore.getTime() + EMAILS_WINDOW_SLACK_MS,
+        ).toISOString(),
+      });
+      if (startingAfter) {
+        params.set("starting_after", startingAfter);
+      }
+
+      // The query string carries every mailbox address, so the error text names
+      // the endpoint on its own.
+      const body = await this.requestJson<{ items?: unknown; next_starting_after?: unknown }>(
+        `${EMAILS_PATH}?${params.toString()}`,
+        { method: "GET" },
+        EMAILS_PATH,
+      );
+
+      const items = Array.isArray(body.items) ? body.items : [];
+      for (const item of items) {
+        sent.push(toSentEmail(item));
+      }
+
+      const cursor = body.next_starting_after;
+      if (typeof cursor !== "string" || cursor === "" || items.length === 0) {
+        return { emails: sent, complete: true };
+      }
+      startingAfter = cursor;
+    }
+
+    return { emails: sent, complete: false };
   }
 
   async listSendingAccounts(): Promise<InstantlySendingAccount[]> {

@@ -5,9 +5,18 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { ClaudeReplyClassification, ConversationHistoryItem, LeadContext } from "./types.js";
 import { offerPriceDisplay } from "./offer.js";
+import { estimateCostUsd } from "./model_pricing.js";
 
 const promptVersion = "reply-agent-v1";
-const defaultModel = "claude-3-5-sonnet-latest";
+/** Fallback when CLAUDE_REPLY_MODEL is unset.
+ *
+ * This was claude-3-5-sonnet-latest, two generations behind, on the path that
+ * classifies an inbound sales reply and drafts the auto-reply that is then
+ * queued and sent to the prospect. Production sets CLAUDE_REPLY_MODEL
+ * explicitly; this value is what runs if that is ever missing, so it should
+ * not be the oldest model in the family.
+ */
+const defaultModel = "claude-opus-5";
 
 const claudeSchema = z.object({
   intent: z.enum(["interested", "question", "objection", "not_interested", "unsubscribe", "abusive"]),
@@ -41,13 +50,6 @@ function fillPrompt(template: string, input: ClassifyInput): string {
     .replace("{conversation_history}", JSON.stringify(input.conversationHistory, null, 2))
     .replace("{price_aud}", offerPriceDisplay())
     .replace("{inbound_body}", input.inboundBody);
-}
-
-function estimateCostUsd(inputTokens: number, outputTokens: number): number {
-  const inputCost = (inputTokens / 1_000_000) * 3;
-  const outputCost = (outputTokens / 1_000_000) * 15;
-
-  return Number((inputCost + outputCost).toFixed(6));
 }
 
 export async function classifyReply(input: ClassifyInput): Promise<ClaudeReplyClassification> {
@@ -86,7 +88,7 @@ export async function classifyReply(input: ClassifyInput): Promise<ClaudeReplyCl
     ...parsed,
     prompt_version: promptVersion,
     model_used: model,
-    cost_usd: estimateCostUsd(usage.input_tokens, usage.output_tokens),
+    cost_usd: estimateCostUsd(model, usage.input_tokens, usage.output_tokens),
   };
 }
 

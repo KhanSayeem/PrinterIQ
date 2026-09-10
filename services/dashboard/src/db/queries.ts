@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, max, min, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { MetricAvailability } from "@/lib/deliverability";
 import type { PreviewViewFilter } from "@/lib/lead-list-params";
@@ -16,6 +16,8 @@ import {
   type PipelineStageKey,
 } from "@/lib/pipeline-funnel";
 import { readQualificationScoreThreshold } from "@/lib/qualification-threshold";
+import type { ReplyIngestSignal } from "@/lib/reply-ingest-health";
+import type { TodaySendTotals } from "@/lib/today-sends";
 import { formatSydneyDayLabel, getSydneyDayRange } from "@/lib/sydney-day";
 import { getDb } from "./client";
 import {
@@ -260,15 +262,22 @@ export type TodayMetricTone = "neutral" | "warning";
 
 export type TodaySoFarCounts = {
   dayLabel: string;
-  sent: unknown;
+  /**
+   * Sends and bounces come from Instantly, which is the only system that knows
+   * whether an email left a mailbox. `outreach_sends.sent_at` records the
+   * handoff to Instantly, not the send, so it cannot answer either figure.
+   */
+  sent: MetricAvailability<number>;
+  bounces: MetricAvailability<number>;
+  /** Database counts, written by the Instantly reply and unsubscribe webhooks. */
   replies: unknown;
-  bounces: unknown;
   unsubscribes: unknown;
 };
 
 export type TodaySoFarSummary = {
   dayLabel: string;
-  sent: number;
+  /** Not available rather than zero when Instantly could not be read. */
+  sent: MetricAvailability<number>;
   /**
    * Always null. Nothing in this system writes `outreach_sends.opened`: there
    * is no Instantly open webhook and no analytics poller, so the column has
@@ -278,11 +287,16 @@ export type TodaySoFarSummary = {
   opens: number | null;
   opensTracked: boolean;
   replies: number;
-  bounces: number;
+  bounces: MetricAvailability<number>;
   unsubscribes: number;
-  replyRate: number | null;
-  bounceRate: number | null;
-  unsubscribeRate: number | null;
+  /**
+   * Percentages of today's sends. A rate is only available when the count and
+   * the send count it divides by are both available, so a rate is never
+   * reported against a denominator it did not come from.
+   */
+  replyRate: MetricAvailability<number>;
+  bounceRate: MetricAvailability<number>;
+  unsubscribeRate: MetricAvailability<number>;
   bounceTone: TodayMetricTone;
   unsubscribeTone: TodayMetricTone;
   anySent: boolean;
@@ -1549,26 +1563,6 @@ export function buildAiCostByModelQuery(
     .groupBy(qualifications.modelHaiku, qualifications.modelSonnet, qualifications.promptVersion);
 }
 
-export function buildTodaySendCountQuery(
-  db: DashboardDb,
-  identity: { tenantId: string; dayStart: Date; dayEnd: Date },
-) {
-  requireTenantId(identity.tenantId);
-
-  return db
-    .select({
-      sentCount: sql<string>`count(*)`,
-    })
-    .from(outreachSends)
-    .where(
-      and(
-        eq(outreachSends.tenantId, identity.tenantId),
-        gte(outreachSends.sentAt, identity.dayStart),
-        lt(outreachSends.sentAt, identity.dayEnd),
-      ),
-    );
-}
-
 export function buildTodayReplyCountQuery(
   db: DashboardDb,
   identity: { tenantId: string; dayStart: Date; dayEnd: Date },
@@ -1591,15 +1585,20 @@ export function buildTodayReplyCountQuery(
 }
 
 /**
- * Bounces and unsubscribes today, as closely as the schema allows.
+ * Unsubscribes today, as closely as the schema allows.
  *
- * `outreach_sends` carries no `bounced_at` or `unsubscribed_at`. The reply
- * agent flips the boolean and stamps `updated_at`, so `updated_at` is the only
- * time signal the suppression webhooks leave behind. It is the row's last
- * write, not the event's own timestamp, so a row that bounces and later
- * unsubscribes lands both counts on the later day.
+ * `outreach_sends` carries no `unsubscribed_at`. The reply agent flips the
+ * boolean and stamps `updated_at`, so `updated_at` is the only time signal the
+ * unsubscribe webhook leaves behind. It is the row's last write, not the
+ * event's own timestamp.
+ *
+ * Bounces are deliberately not counted here any more. The bounce boolean is
+ * only as complete as the webhook deliveries, and `updated_at` is the row's
+ * last write rather than the bounce's own time, so a row that bounces and later
+ * unsubscribes would land the bounce on the wrong day. Instantly has no
+ * same-day bounce figure to replace it with either: see `today-sends.ts`.
  */
-export function buildTodaySuppressionCountsQuery(
+export function buildTodayUnsubscribeCountQuery(
   db: DashboardDb,
   identity: { tenantId: string; dayStart: Date; dayEnd: Date },
 ) {
@@ -1607,7 +1606,6 @@ export function buildTodaySuppressionCountsQuery(
 
   return db
     .select({
-      bounceCount: sql<string>`count(*) filter (where ${outreachSends.bounced})`,
       unsubscribeCount: sql<string>`count(*) filter (where ${outreachSends.unsubscribed})`,
     })
     .from(outreachSends)
@@ -1620,22 +1618,63 @@ export function buildTodaySuppressionCountsQuery(
     );
 }
 
-function rateAgainstSent(count: number, sent: number) {
-  return sent === 0 ? null : (count / sent) * 100;
+/** No sends today is a different answer from no send count today, and both are stated. */
+const NO_SENDS_TODAY = "no sends today";
+const NO_SEND_COUNT =
+  "no rate without today's send count from Instantly";
+
+/**
+ * A rate is only reported when the count and the send count it divides by both
+ * came back. Dividing a real count by a stale or assumed denominator would
+ * print a confident percentage that no data supports.
+ */
+function rateAgainstSent(
+  count: MetricAvailability<number>,
+  sent: MetricAvailability<number>,
+): MetricAvailability<number> {
+  if (!count.available) {
+    return { available: false, reason: count.reason };
+  }
+  if (!sent.available) {
+    return { available: false, reason: NO_SEND_COUNT };
+  }
+  if (sent.value === 0) {
+    return { available: false, reason: NO_SENDS_TODAY };
+  }
+
+  return { available: true, value: (count.value / sent.value) * 100 };
 }
 
-function toneForRate(rate: number | null, warnAbove: number): TodayMetricTone {
-  return rate !== null && rate > warnAbove ? "warning" : "neutral";
+function toneForRate(rate: MetricAvailability<number>, warnAbove: number): TodayMetricTone {
+  return rate.available && rate.value > warnAbove ? "warning" : "neutral";
 }
 
 export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary {
-  const sent = toNumber(counts.sent);
+  const sent = counts.sent;
+  const bounces = counts.bounces;
   const replies = toNumber(counts.replies);
-  const bounces = toNumber(counts.bounces);
   const unsubscribes = toNumber(counts.unsubscribes);
 
   const bounceRate = rateAgainstSent(bounces, sent);
-  const unsubscribeRate = rateAgainstSent(unsubscribes, sent);
+  const unsubscribeRate = rateAgainstSent({ available: true, value: unsubscribes }, sent);
+
+  /**
+   * A missing send count keeps the tiles on screen. Falling back to the quiet
+   * day note would hide an Instantly outage behind "nothing went out today",
+   * which is the confusion this bar was reporting in the first place.
+   *
+   * Only the send count is read for this, deliberately. The bounce count is
+   * unavailable by construction rather than by failure: Instantly publishes
+   * bounces only summed into a UTC calendar day, and a UTC day cannot be cut at
+   * Sydney midnight. Letting that force the tiles open would mean a genuinely
+   * quiet day never reached the quiet day note again.
+   */
+  const sendCountUnavailable = !sent.available;
+  const countedActivity =
+    (sent.available ? sent.value : 0) +
+    (bounces.available ? bounces.value : 0) +
+    replies +
+    unsubscribes;
 
   return {
     dayLabel: counts.dayLabel,
@@ -1645,17 +1684,25 @@ export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary
     replies,
     bounces,
     unsubscribes,
-    replyRate: rateAgainstSent(replies, sent),
+    replyRate: rateAgainstSent({ available: true, value: replies }, sent),
     bounceRate,
     unsubscribeRate,
     bounceTone: toneForRate(bounceRate, BOUNCE_RATE_WARNING_PERCENT),
     unsubscribeTone: toneForRate(unsubscribeRate, UNSUBSCRIBE_RATE_WARNING_PERCENT),
-    anySent: sent > 0,
-    hasActivity: sent + replies + bounces + unsubscribes > 0,
+    anySent: sent.available && sent.value > 0,
+    hasActivity: sendCountUnavailable || countedActivity > 0,
   };
 }
 
-export async function getTodaySoFarSummary(identity: { tenantId: string; now?: Date }) {
+/**
+ * `sendTotals` is passed in rather than fetched here: this module owns database
+ * access, and today's sends and bounces are read from Instantly by the caller.
+ */
+export async function getTodaySoFarSummary(identity: {
+  tenantId: string;
+  sendTotals: TodaySendTotals;
+  now?: Date;
+}) {
   requireTenantId(identity.tenantId);
 
   const db = getDb();
@@ -1663,18 +1710,17 @@ export async function getTodaySoFarSummary(identity: { tenantId: string; now?: D
   const { start: dayStart, end: dayEnd } = getSydneyDayRange(now);
   const window = { tenantId: identity.tenantId, dayStart, dayEnd };
 
-  const [sendRows, replyRows, suppressionRows] = await Promise.all([
-    buildTodaySendCountQuery(db, window),
+  const [replyRows, unsubscribeRows] = await Promise.all([
     buildTodayReplyCountQuery(db, window),
-    buildTodaySuppressionCountsQuery(db, window),
+    buildTodayUnsubscribeCountQuery(db, window),
   ]);
 
   return normalizeTodaySoFar({
     dayLabel: formatSydneyDayLabel(now),
-    sent: sendRows[0]?.sentCount,
+    sent: identity.sendTotals.sent,
+    bounces: identity.sendTotals.bounces,
     replies: replyRows[0]?.replyCount,
-    bounces: suppressionRows[0]?.bounceCount,
-    unsubscribes: suppressionRows[0]?.unsubscribeCount,
+    unsubscribes: unsubscribeRows[0]?.unsubscribeCount,
   });
 }
 
@@ -2319,4 +2365,67 @@ export async function getReplyInboxPage(filters: ReplyInboxFilters) {
 export async function getReplyInboxFilterCounts(identity: { tenantId: string }) {
   const db = getDb();
   return normalizeReplyInboxFilterCounts(await buildReplyInboxFilterCountsQuery(db, identity));
+}
+
+// ---------------------------------------------------------------------------
+// Inbound reply ingest health
+//
+// The two timestamps behind the /replies empty state. Neither is a health
+// check Instantly answers, so see src/lib/reply-ingest-health.ts for what each
+// one does and does not prove.
+// ---------------------------------------------------------------------------
+
+/** The last inbound write of any kind, so deleted leads are counted too.
+ *
+ * The inbox itself hides replies whose lead was deleted, but a write against
+ * a since-deleted lead is still proof the ingest path worked, and this
+ * question is about the path rather than about the pipeline.
+ */
+export function buildLastInboundConversationQuery(db: DashboardDb, identity: { tenantId: string }) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({ lastInboundAt: max(conversations.createdAt) })
+    .from(conversations)
+    .where(
+      and(eq(conversations.tenantId, identity.tenantId), eq(conversations.direction, "inbound")),
+    );
+}
+
+/** The earliest handoff to Instantly, which is the earliest a reply could exist. */
+export function buildFirstOutreachHandoffQuery(db: DashboardDb, identity: { tenantId: string }) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({ firstHandoffAt: min(outreachSends.sentAt) })
+    .from(outreachSends)
+    .where(and(eq(outreachSends.tenantId, identity.tenantId), isNotNull(outreachSends.sentAt)));
+}
+
+export function normalizeReplyIngestSignal(
+  inboundRows: Array<{ lastInboundAt?: Date | string | null }>,
+  handoffRows: Array<{ firstHandoffAt?: Date | string | null }>,
+): ReplyIngestSignal {
+  return {
+    lastInboundAt: toDateOrNull(inboundRows[0]?.lastInboundAt),
+    firstHandoffAt: toDateOrNull(handoffRows[0]?.firstHandoffAt),
+  };
+}
+
+export async function getReplyIngestSignal(identity: { tenantId: string }): Promise<ReplyIngestSignal> {
+  const db = getDb();
+  const [inboundRows, handoffRows] = await Promise.all([
+    buildLastInboundConversationQuery(db, identity),
+    buildFirstOutreachHandoffQuery(db, identity),
+  ]);
+
+  return normalizeReplyIngestSignal(inboundRows, handoffRows);
+}
+
+function toDateOrNull(value: Date | string | null | undefined): Date | null {
+  if (value instanceof Date) return value;
+  if (typeof value !== "string" || value.trim() === "") return null;
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }

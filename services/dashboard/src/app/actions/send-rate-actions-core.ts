@@ -1,4 +1,5 @@
 import type { InstantlySendingAccount } from "@/clients/instantly";
+import { MISSING_SENDING_DOMAINS_MESSAGE } from "@/lib/sending-domains";
 import {
   distributeDailyLimit,
   exceedsGoogleRampGuidance,
@@ -58,18 +59,10 @@ export type SendRateActionDeps = {
   revalidatePath: (path: string) => void;
 };
 
-const MISSING_DOMAINS_MESSAGE =
-  "INSTANTLY_SENDING_DOMAINS is not configured, so the PrinterIQ mailboxes cannot be told apart from other projects' mailboxes in the same Instantly workspace. Set it before using this control.";
+const MISSING_DOMAINS_MESSAGE = `${MISSING_SENDING_DOMAINS_MESSAGE} Nothing was read or changed.`;
 
-export function parseSendingDomains(raw: string | undefined | null): string[] {
-  if (!raw) {
-    return [];
-  }
-  return raw
-    .split(",")
-    .map((domain) => domain.trim().toLowerCase())
-    .filter((domain) => domain !== "");
-}
+/** Re-exported so existing importers keep one implementation between them. */
+export { parseSendingDomains, resolveSendingDomains } from "@/lib/sending-domains";
 
 function accountDomain(email: string): string {
   const at = email.lastIndexOf("@");
