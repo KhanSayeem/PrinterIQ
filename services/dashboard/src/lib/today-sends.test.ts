@@ -209,16 +209,32 @@ describe("loadTodayInstantlySendTotals", () => {
     expect(client.getDailyAccountAnalytics).not.toHaveBeenCalled();
   });
 
-  it("never writes to Instantly", async () => {
-    const client = fakeClient();
+  /**
+   * Two live campaigns are sending while this runs. The loader is handed a
+   * client that also carries the mutating methods and must touch none of them,
+   * so a later edit cannot quietly turn a read into a pause or a move.
+   */
+  it("never calls a mutating Instantly method", async () => {
+    const pauseLead = vi.fn(async () => {});
+    const pauseCampaign = vi.fn(async () => {});
+    const sendReply = vi.fn(async () => {});
+    const client = {
+      ...fakeClient(),
+      pauseLead,
+      pauseCampaign,
+      sendReply,
+    } as TodaySendsClient;
 
-    await loadTodayInstantlySendTotals({
+    const totals = await loadTodayInstantlySendTotals({
       now: NOW,
       client,
       apiKey: "test-key",
       sendingDomains: ["printeriq-mail.com"],
     });
 
-    expect(Object.keys(client)).toEqual(["listAccounts", "getDailyAccountAnalytics"]);
+    expect(totals.sent).toEqual({ available: true, value: 40 });
+    expect(pauseLead).not.toHaveBeenCalled();
+    expect(pauseCampaign).not.toHaveBeenCalled();
+    expect(sendReply).not.toHaveBeenCalled();
   });
 });

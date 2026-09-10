@@ -80,7 +80,7 @@ export function TodaySoFarBar({ summary }: TodaySoFarBarProps) {
                 ? summary.anySent
                   ? "emails out today"
                   : "nothing out today"
-                : "emails out today, per Instantly"
+                : "Instantly reports the count, and it did not answer"
             }
             href="/deliverability"
           />

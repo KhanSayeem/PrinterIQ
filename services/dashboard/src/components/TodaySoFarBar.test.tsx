@@ -205,6 +205,19 @@ describe("TodaySoFarBar", () => {
     expect(sentTile?.textContent).not.toMatch(/\d/);
   });
 
+  /**
+   * "emails out today" under a tile that has no count reads as a caption for a
+   * number that is not there. The detail line has to name the missing source
+   * instead.
+   */
+  it("does not caption the missing send count as though a count were shown", () => {
+    const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
+
+    const detail = tile(container, "Sent")?.querySelector(".today-metric-detail");
+    expect(detail).not.toHaveTextContent("emails out today");
+    expect(detail).toHaveTextContent(/Instantly/);
+  });
+
   it("says the bounce count is not available rather than drawing a zero", () => {
     const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
 

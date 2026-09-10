@@ -51,9 +51,16 @@ function available(value: number): MetricAvailability<number> {
   return { available: true, value };
 }
 
-function unavailableTotals(reason: string): TodaySendTotals {
+/**
+ * Both figures unavailable, with one reason. Exported so a caller that has to
+ * defend against this module throwing at all can still render the bar with a
+ * stated reason instead of a zero or a blank panel.
+ */
+export function unavailableTodaySendTotals(reason: string): TodaySendTotals {
   return { sent: { available: false, reason }, bounces: { available: false, reason } };
 }
+
+const unavailableTotals = unavailableTodaySendTotals;
 
 /**
  * Sums the rows Instantly stamped with today's date. Rows for other days are
@@ -125,6 +132,15 @@ export async function loadTodayInstantlySendTotals(
     return unavailableTotals(NO_MATCHING_MAILBOX);
   }
 
+  /**
+   * Open question, deliberately not assumed: Instantly stamps each analytics
+   * row with a plain `date` and publishes no statement of which timezone it
+   * buckets by. Asking for the Sydney date is the closest this dashboard can
+   * get, but if Instantly buckets in UTC then sends made between Sydney
+   * midnight and 10:00 or 11:00 AEST land in the previous bucket and today's
+   * count reads low until they roll over. This cannot be settled without
+   * calling the live API, so it stays a named limitation rather than a claim.
+   */
   try {
     const rows = await client.getDailyAccountAnalytics({
       emails: mailboxes.map((mailbox) => mailbox.email),

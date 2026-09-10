@@ -873,6 +873,9 @@ describe("today so far queries", () => {
       atThreshold.unsubscribeRate.available ? atThreshold.unsubscribeRate.value : null,
     ).toBeCloseTo(0.5, 10);
     expect(atThreshold.unsubscribeTone).toBe("neutral");
+    expect(
+      overThreshold.unsubscribeRate.available ? overThreshold.unsubscribeRate.value : null,
+    ).toBeCloseTo(1, 10);
     expect(overThreshold.unsubscribeTone).toBe("warning");
   });
 
@@ -927,6 +930,26 @@ describe("today so far queries", () => {
     expect(summary.hasActivity).toBe(true);
   });
 
+  /**
+   * The worst case for this bar: Instantly is unreachable and nothing else
+   * happened today either. Every counted figure is zero, so a naive activity
+   * check falls through to the quiet day note and the outage renders as
+   * "nothing has come back", which is the confusion this branch exists to fix.
+   */
+  it("keeps the tiles on screen during an outage with no other activity", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: missing(),
+      bounces: missing(),
+      replies: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.hasActivity).toBe(true);
+    expect(summary.sent.available).toBe(false);
+    expect(summary.anySent).toBe(false);
+  });
+
   it("refuses to compute a rate against a send count it does not have", () => {
     const summary = normalizeTodaySoFar({
       dayLabel,
@@ -943,6 +966,31 @@ describe("today so far queries", () => {
     expect(summary.bounceTone).toBe("neutral");
     expect(summary.unsubscribeTone).toBe("neutral");
     expect(summary.replyRate.available ? null : summary.replyRate.reason).toMatch(/send count/i);
+  });
+
+  /**
+   * The denominator, not the numerator, is the one that was faked before. A
+   * real bounce count divided by yesterday's or by a zero would print a
+   * confident percentage that today's data does not support.
+   */
+  it("withholds every rate when the send count is missing but the counts are real", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: missing("Instantly daily analytics did not load."),
+      bounces: sent(3),
+      replies: 7,
+      unsubscribes: 1,
+    });
+
+    expect(summary.bounces).toEqual({ available: true, value: 3 });
+    expect(summary.bounceRate.available).toBe(false);
+    expect(summary.replyRate.available).toBe(false);
+    expect(summary.unsubscribeRate.available).toBe(false);
+    for (const rate of [summary.bounceRate, summary.replyRate, summary.unsubscribeRate]) {
+      expect(rate.available ? null : rate.reason).toMatch(/send count/i);
+    }
+    expect(summary.bounceTone).toBe("neutral");
+    expect(summary.unsubscribeTone).toBe("neutral");
   });
 
   it("keeps the bounce rate unavailable when only the bounce count is missing", () => {

@@ -3,7 +3,7 @@ import type { LeadListRow } from "@/components/LeadQuickPanel";
 import { LeadsWorkbench } from "@/components/LeadsWorkbench";
 import { getDashboardTenantId } from "@/auth/tenant";
 import { parseLeadListParams } from "@/lib/lead-list-params";
-import { loadTodayInstantlySendTotals } from "@/lib/today-sends";
+import { loadTodayInstantlySendTotals, unavailableTodaySendTotals } from "@/lib/today-sends";
 
 /**
  * Today's numbers are a side panel on the lead list, not a precondition for
@@ -11,12 +11,26 @@ import { loadTodayInstantlySendTotals } from "@/lib/today-sends";
  *
  * Sends and bounces are read from Instantly rather than from `outreach_sends`,
  * whose `sent_at` records the handoff to Instantly and not the send itself.
- * That loader never throws: an Instantly failure comes back as an unavailable
- * figure, so the bar can say which number is missing and why, instead of
- * showing a zero that reads as a quiet sending day.
+ * That loader is written not to throw: an Instantly failure comes back as an
+ * unavailable figure, so the bar can say which number is missing and why,
+ * instead of showing a zero that reads as a quiet sending day. It is still
+ * guarded here. An unhandled rejection from it would reject through the page's
+ * own Promise.all and render "Failed to load leads. Check DATABASE_URL", which
+ * blames the database for an Instantly problem and takes the whole list down
+ * with it.
  */
 async function loadTodaySoFar(tenantId: string, now: Date): Promise<TodaySoFarSummary | null> {
-  const sendTotals = await loadTodayInstantlySendTotals({ now });
+  let sendTotals;
+  try {
+    sendTotals = await loadTodayInstantlySendTotals({ now });
+  } catch (error) {
+    console.error("Failed to load today's Instantly send totals", {
+      message: error instanceof Error ? error.message : "Unknown Instantly send totals error",
+    });
+    sendTotals = unavailableTodaySendTotals(
+      "Today's send count could not be read from Instantly.",
+    );
+  }
 
   try {
     return await getTodaySoFarSummary({ tenantId, sendTotals, now });

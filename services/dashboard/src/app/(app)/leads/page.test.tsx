@@ -49,7 +49,13 @@ vi.mock("@/db/queries", () => ({
   getTodaySoFarSummary: getTodaySoFarSummaryMock,
 }));
 
-vi.mock("@/lib/today-sends", () => ({
+/**
+ * Only the network call is faked. `unavailableTodaySendTotals` is a pure
+ * shape helper and the page's fallback depends on the real one, so a stub
+ * would prove nothing about what the bar receives.
+ */
+vi.mock("@/lib/today-sends", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/today-sends")>()),
   loadTodayInstantlySendTotals: loadTodayInstantlySendTotalsMock,
 }));
 
@@ -142,6 +148,36 @@ describe("LeadsPage", () => {
     expect(leadsWorkbenchMock.mock.calls[0]?.[0]).toMatchObject({
       todaySummary: expect.objectContaining({ sent: unavailable.sent }),
     });
+  });
+
+  /**
+   * The loader is written not to throw, but the lead list must not depend on
+   * that promise holding. An unexpected throw used to reject through the page's
+   * own Promise.all and render "Failed to load leads. Check DATABASE_URL",
+   * which blames the database for an Instantly problem and hides the whole
+   * list.
+   */
+  it("keeps the lead list and the rest of the bar when the Instantly loader throws", async () => {
+    loadTodayInstantlySendTotalsMock.mockRejectedValue(new Error("fetch failed"));
+
+    render(await LeadsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(leadsWorkbenchMock).toHaveBeenCalledTimes(1);
+    const sendTotalsArg = getTodaySoFarSummaryMock.mock.calls[0]?.[0]?.sendTotals as {
+      sent: { available: boolean; reason?: string };
+      bounces: { available: boolean };
+    };
+    expect(sendTotalsArg.sent.available).toBe(false);
+    expect(sendTotalsArg.bounces.available).toBe(false);
+    expect(sendTotalsArg.sent.reason).toMatch(/Instantly/);
+  });
+
+  it("does not blame the database when only Instantly failed", async () => {
+    loadTodayInstantlySendTotalsMock.mockRejectedValue(new Error("fetch failed"));
+
+    const { container } = render(await LeadsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(container.querySelector(".error-state")).toBeNull();
   });
 
   it("still renders the lead list when today's numbers cannot be read", async () => {
