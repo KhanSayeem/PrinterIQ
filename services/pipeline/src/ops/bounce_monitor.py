@@ -95,7 +95,30 @@ ALERT_SUBJECT = "PrinterIQ bounce alarm"
 # The cost is that every window starts empty. Until the day has produced 30
 # sends the verdict is `insufficient_volume`, so the alarm arms as the send
 # window fills rather than at midnight.
-DEFAULT_WINDOW_DAYS = 1
+# Two UTC dates, because one cannot contain an Australian sending day.
+#
+# Instantly buckets its analytics by UTC. The campaigns send 09:00 to 17:00
+# Australia/Melbourne, which in AEST is 23:00 to 07:00 UTC, so a single
+# Australian sending day always straddles UTC midnight and always lands in two
+# different UTC dates.
+#
+# Measured against production on 2026-09-10, for a day that really sent 30 and
+# bounced 3: asking for `2026-09-10` alone returned 2 sent, while `2026-09-09`
+# to `2026-09-10` returned 30 and 3. With a one day window and a floor of 30
+# the monitor reported "not enough volume to judge" and would have done so
+# every day for ever, never once judging the rate.
+#
+# The cost of the wider span, stated plainly: the earlier UTC date also holds
+# the previous Australian day's afternoon, so both counts carry up to half a
+# day of older traffic. A bounce *rate* over that span is still a real rate,
+# which is why this is acceptable, but it is not "today" and nothing may call
+# it that. See _format_window.
+#
+# Sub-day bounding is not available: verified that a one hour range on this
+# endpoint, 2026-09-10T13:00:00Z to T14:00:00Z with zero sends inside it, still
+# returned the whole 2026-09-10 UTC day. The endpoint truncates its range to
+# calendar dates and sums every day it touches.
+DEFAULT_WINDOW_DAYS = 2
 
 Clock = Callable[[], datetime]
 

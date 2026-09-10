@@ -9,7 +9,7 @@ import pytest
 
 from clients.instantly_client import InstantlyClient
 from ops.alerting import OpsAlert
-from ops.bounce_detector import BounceSnapshot, CampaignBounceCounts
+from ops.bounce_detector import BounceSnapshot, CampaignBounceCounts, _format_window
 from ops.bounce_monitor import (
     BOUNCE_ALERT_COOLDOWN_SECONDS,
     BounceCheckResult,
@@ -650,3 +650,89 @@ def test_dry_run_entrypoint_refuses_to_run_without_campaign_ids(monkeypatch) -> 
 
     with pytest.raises(RuntimeError, match="INSTANTLY_CAMPAIGN_ID"):
         asyncio.run(bounce_monitor._run_checks(once=True, dry_run=True))
+
+
+def test_default_window_spans_the_utc_dates_one_australian_sending_day_lands_in() -> None:
+    """A one UTC day window can never see a whole Australian sending day.
+
+    Instantly buckets its analytics by UTC. The campaigns send 09:00 to 17:00
+    Australia/Melbourne, which in AEST is 23:00 to 07:00 UTC, so one Australian
+    sending day always straddles UTC midnight and always lands in two different
+    UTC dates.
+
+    Measured against production on 2026-09-10, for a day that really sent 30
+    emails and bounced 3: asking for `2026-09-10` alone returned 2 sent, while
+    asking for `2026-09-09` to `2026-09-10` returned 30 sent and 3 bounced. The
+    monitor's floor is 30 sends, so with a one day window it reported "not
+    enough volume to judge" and would have done so every day, for ever, never
+    once judging the bounce rate. An alarm that cannot fire is worse than no
+    alarm because it manufactures confidence.
+
+    This test pins the default window to the span, not the arithmetic, so
+    reverting the default is caught here rather than in production silence.
+    """
+
+    async def scenario() -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            # The same 28 / 2 split production showed, expressed as the totals
+            # the endpoint returns for a range covering both UTC dates.
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "campaign_id": CAMPAIGN_WITH_WEBSITE,
+                        "campaign_name": "PrinterIQ AU with website",
+                        "emails_sent_count": 15,
+                        "bounced_count": 1,
+                    },
+                    {
+                        "campaign_id": CAMPAIGN_NO_WEBSITE,
+                        "campaign_name": "PrinterIQ AU no website",
+                        "emails_sent_count": 15,
+                        "bounced_count": 2,
+                    },
+                ],
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            reader = CampaignAnalyticsReader(
+                client=InstantlyClient(api_key="secret-key", http_client=http_client),
+                campaign_ids=(CAMPAIGN_WITH_WEBSITE, CAMPAIGN_NO_WEBSITE),
+                clock=lambda: FIRST_SENDING_DAY,
+            )
+
+            snapshot = await reader.read_bounces()
+
+        request = requests[0]
+        start = request.url.params.get("start_date")
+        end = request.url.params.get("end_date")
+
+        # FIRST_SENDING_DAY is 2026-09-10T18:00Z, so the UTC date is the 10th
+        # and the Australian sending day it belongs to also touched the 9th.
+        assert end == "2026-09-10"
+        assert start == "2026-09-09", (
+            "a single UTC date cannot contain an Australian sending day: "
+            f"asked for {start} to {end}"
+        )
+        assert snapshot.emails_sent == 30
+        assert snapshot.bounced == 3
+
+    asyncio.run(scenario())
+
+
+def test_the_window_is_never_described_as_today() -> None:
+    """"Today" is a claim about a calendar day in Melbourne, and this is not one.
+
+    The window is a span of UTC dates chosen to contain an Australian sending
+    day, so it also carries the tail of the previous Australian day. A bounce
+    rate over that span is still a real rate, but calling it "today" would be a
+    second false claim of exactly the kind this dashboard has just been audited
+    for.
+    """
+    assert "today" not in _format_window(1).lower()
+    assert "today" not in _format_window(2).lower()
+    assert "utc" in _format_window(2).lower()
