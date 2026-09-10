@@ -4,6 +4,9 @@ import {
   archiveLeadForSuppression,
   fetchCheckoutSession,
   fetchEscalationContext,
+  findOutreachTargetByEmail,
+  findOutreachTargetByInstantlyLeadId,
+  findOutreachTargetByLeadId,
   hasCompletedPayment,
   insertInboundConversation,
   markConversationEscalated,
@@ -400,5 +403,125 @@ describe("reply-agent DB queries", () => {
     await expect(fetchEscalationContext("tenant-id", "lead-id", { query })).rejects.toThrow(
       "escalation context not found for tenant or missing Instantly lead id",
     );
+  });
+});
+
+// Instantly does not echo our tenant_id and lead_id on every webhook, so a
+// bounce, unsubscribe or reply has to be traced back to one of our leads from
+// the identifiers Instantly certainly does send. These three queries are that
+// route back. Before them, three real bounces were dropped on the floor.
+describe("Instantly webhook lead resolution queries", () => {
+  const target = {
+    tenant_id: "tenant-id",
+    lead_id: "lead-id",
+    instantly_lead_id: "instantly-lead-123",
+  };
+
+  it("resolves a lead from the Instantly lead id stored at send time", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [target] });
+
+    const result = await findOutreachTargetByInstantlyLeadId("instantly-lead-123", null, { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("FROM outreach_sends");
+    expect(sql).toContain("outreach_sends.instantly_lead_id = $1");
+    expect(sql).toContain("JOIN leads");
+    expect(params).toEqual(["instantly-lead-123", null]);
+    expect(result).toEqual(target);
+  });
+
+  // The Instantly lead id is ours and unique across the table, so an unscoped
+  // lookup is safe. Passing a tenant still has to narrow the query, because a
+  // caller that knows the tenant is asserting the row must belong to it.
+  it("narrows the Instantly lead id lookup to a tenant when one is known", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [target] });
+
+    await findOutreachTargetByInstantlyLeadId("instantly-lead-123", "tenant-id", { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("outreach_sends.tenant_id = $2");
+    expect(params).toEqual(["instantly-lead-123", "tenant-id"]);
+  });
+
+  it("returns null when no send carries that Instantly lead id", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    expect(await findOutreachTargetByInstantlyLeadId("unknown", null, { query })).toBeNull();
+  });
+
+  // The email address is the one identifier every one of these events must
+  // carry, which also makes it the one that could reach across tenants. Two
+  // tenants working the same trade in the same city will share leads.
+  it("scopes the email lookup to a single tenant", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [target] });
+
+    const result = await findOutreachTargetByEmail("tenant-id", "owner@example.com", { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("leads.tenant_id = $1");
+    expect(params).toEqual(["tenant-id", "owner@example.com"]);
+    expect(result).toEqual(target);
+  });
+
+  it("matches an email address without regard to case", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [target] });
+
+    await findOutreachTargetByEmail("tenant-id", "Owner@Example.com", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toContain("LOWER(leads.email) = LOWER($2)");
+  });
+
+  // Only a lead we actually handed to Instantly can have bounced or
+  // unsubscribed, and the row is also where the Instantly lead id comes from
+  // when the payload does not carry one.
+  it("only resolves an email that belongs to a lead we sent to", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [target] });
+
+    await findOutreachTargetByEmail("tenant-id", "owner@example.com", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toContain("JOIN outreach_sends");
+    expect(sql).toContain("outreach_sends.tenant_id = leads.tenant_id");
+    expect(sql).toContain("outreach_sends.lead_id = leads.id");
+    expect(sql).toContain("outreach_sends.instantly_lead_id IS NOT NULL");
+  });
+
+  // Nothing stops one tenant holding the same address on two leads. Guessing
+  // which one bounced would archive the wrong lead, so the answer is neither.
+  it("refuses to resolve an email that matches more than one lead", async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows: [target, { ...target, lead_id: "other-lead-id" }],
+    });
+
+    expect(await findOutreachTargetByEmail("tenant-id", "owner@example.com", { query })).toBeNull();
+  });
+
+  it("returns null when no lead in the tenant holds that email", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    expect(await findOutreachTargetByEmail("tenant-id", "nobody@example.com", { query })).toBeNull();
+  });
+
+  // For the case where Instantly echoes our own tenant_id and lead_id but no
+  // Instantly lead id: the ids are known, the send row still has to be found.
+  it("resolves the latest send for a tenant and lead", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [target] });
+
+    const result = await findOutreachTargetByLeadId("tenant-id", "lead-id", { query });
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("outreach_sends.tenant_id = $1");
+    expect(sql).toContain("outreach_sends.lead_id = $2");
+    expect(sql).toContain("outreach_sends.instantly_lead_id IS NOT NULL");
+    expect(sql).toContain("outreach_sends.sent_at DESC NULLS LAST");
+    expect(params).toEqual(["tenant-id", "lead-id"]);
+    expect(result).toEqual(target);
+  });
+
+  it("returns null when a tenant and lead have no completed send", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    expect(await findOutreachTargetByLeadId("tenant-id", "lead-id", { query })).toBeNull();
   });
 });

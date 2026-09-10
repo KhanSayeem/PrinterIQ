@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import type { ProcessReplyJob } from "./types.js";
+import type { OutreachTarget, ProcessReplyJob } from "./types.js";
 import { stripePayments } from "./stripe.js";
 import { queries as defaultQueries } from "./db/queries.js";
 import { REPLIES_QUEUE_NAME, REPLY_JOB_OPTIONS } from "./queue.js";
@@ -22,7 +22,23 @@ type BuildServerOptions = {
     unsubbed: string;
   };
   queue: ReplyQueue;
-  queries?: Pick<typeof defaultQueries, "recordInstantlyBounce" | "recordInstantlyUnsubscribe">;
+  queries?: Pick<
+    typeof defaultQueries,
+    | "recordInstantlyBounce"
+    | "recordInstantlyUnsubscribe"
+    | "findOutreachTargetByInstantlyLeadId"
+    | "findOutreachTargetByEmail"
+    | "findOutreachTargetByLeadId"
+  >;
+  /** Tenant to scope an email lookup by when a webhook payload names none.
+   *
+   * Instantly sends no tenant of ours, and an email address is only unique
+   * inside one tenant, so without this the email fallback cannot run at all.
+   * Absent rather than required because the other resolution routes do not
+   * need it, and a missing TENANT_ID must not take the reply route down with
+   * it. When it is absent the log line says the lookup was skipped.
+   */
+  tenantId?: string;
   stripeWebhookSecret?: string;
   stripe?: {
     handleWebhook(rawBody: string | Buffer, signature: string, options?: { webhookSecret?: string }): Promise<unknown>;
@@ -136,52 +152,453 @@ function secretsMatch(actual: string | null, expected: string): boolean {
   return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
-function mapInstantlyPayload(payload: Record<string, unknown>): ProcessReplyJob {
-  const tenantId = readNestedString(payload, ["metadata", "tenant_id"]);
-  const leadId = readNestedString(payload, ["metadata", "lead_id"]);
-  const body = readString(payload, ["reply_text", "body", "text", "message"]);
-  const instantlyLeadId = readNestedString(payload, ["lead", "id"]);
-  const instantlyEmailId = readNestedString(payload, ["email", "id"]);
-  const instantlyAccountId = readNestedString(payload, ["email", "eaccount"]);
-
-  if (!tenantId || !leadId || !body || !instantlyLeadId || !instantlyEmailId || !instantlyAccountId) {
-    throw new Error("missing required webhook fields");
-  }
-
-  return {
-    job_type: "process_reply",
-    tenant_id: tenantId,
-    lead_id: leadId,
-    channel: "email",
-    direction: "inbound",
-    body,
-    raw_webhook: payload,
-    instantly_lead_id: instantlyLeadId,
-    instantly_email_id: instantlyEmailId,
-    instantly_account_id: instantlyAccountId,
-  };
-}
-
-function mapInstantlyLeadEventPayload(payload: Record<string, unknown>): {
+/** The ids needed to act on an Instantly event, once we know whose it is. */
+type InstantlyLeadReference = {
   tenantId: string;
   leadId: string;
   instantlyLeadId: string;
-} {
-  const tenantId = readNestedString(payload, ["metadata", "tenant_id"]);
-  const leadId = readNestedString(payload, ["metadata", "lead_id"]);
-  const instantlyLeadId = readNestedString(payload, ["lead", "id"]);
+};
 
-  if (!tenantId || !leadId || !instantlyLeadId) {
-    throw new Error("missing required webhook fields");
+type ResolutionQueries = Pick<
+  typeof defaultQueries,
+  "findOutreachTargetByInstantlyLeadId" | "findOutreachTargetByEmail" | "findOutreachTargetByLeadId"
+>;
+
+type ResolutionDeps = {
+  queries: ResolutionQueries;
+  /** Tenant to scope an email lookup by when the payload names none. */
+  tenantId?: string;
+};
+
+type Resolution =
+  | { resolved: true; reference: InstantlyLeadReference }
+  | { resolved: false; identifierFound: boolean; attempts: string[] };
+
+/** Containers holding identifiers of ours rather than Instantly's.
+ *
+ * `metadata` is the shape the mappers used to demand. `custom_variables` is
+ * the shape `schedule_outreach._instantly_payload` actually sends, and
+ * Instantly echoes custom variables back on lead events.
+ */
+const OWN_IDENTIFIER_CONTAINERS = ["metadata", "custom_variables"];
+
+/** Keys whose string value could be Instantly's own lead id.
+ *
+ * Ordered by how likely the value is to be that id rather than something
+ * else. Instantly's docs do not publish exhaustive payload examples and tell
+ * integrators to log the real JSON, so this scans for the id instead of
+ * asserting where it sits. Every candidate is checked against
+ * `outreach_sends.instantly_lead_id`, so a wrong guess costs one indexed
+ * lookup and resolves nothing.
+ */
+const INSTANTLY_LEAD_ID_KEYS = ["instantly_lead_id", "lead_id", "id"];
+
+/** Keys whose string value could be the lead's own email address. */
+const LEAD_EMAIL_KEYS = [
+  "lead_email",
+  "email",
+  "email_address",
+  "recipient_email",
+  "recipient",
+  "to_email",
+  "to",
+  "contact_email",
+  "prospect_email",
+];
+
+/** Keys holding an address that is ours, not the lead's.
+ *
+ * `eaccount` is the sending mailbox on every reply payload. Resolving a lead
+ * from it would attribute the event to whichever lead happens to share our
+ * own address, so these are never candidates and neither is anything nested
+ * under them.
+ */
+const SENDER_EMAIL_KEYS = [
+  "eaccount",
+  "email_account",
+  "from",
+  "from_email",
+  "from_address",
+  "sender",
+  "sender_email",
+  "reply_to",
+  "reply_to_email",
+];
+
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s.]+\.[^@\s]+$/;
+
+const PAYLOAD_SCAN_MAX_DEPTH = 5;
+const PAYLOAD_SCAN_MAX_NODES = 400;
+const MAX_INSTANTLY_LEAD_ID_CANDIDATES = 6;
+const MAX_EMAIL_CANDIDATES = 4;
+const MAX_IDENTIFIER_LENGTH = 320;
+
+type ScannedString = {
+  key: string;
+  parentKey: string | null;
+  value: string;
+  /** True when the value sits inside `metadata` or `custom_variables`. */
+  ownContainer: boolean;
+};
+
+/** Every non-empty string in the payload, with the key it arrived under.
+ *
+ * Bounded in both depth and node count because the payload is attacker
+ * shaped in principle: the route authenticates a shared secret, not a schema.
+ */
+function scanPayloadStrings(payload: Record<string, unknown>): ScannedString[] {
+  const found: ScannedString[] = [];
+  let visited = 0;
+
+  const walk = (
+    node: unknown,
+    key: string,
+    parentKey: string | null,
+    depth: number,
+    ownContainer: boolean,
+  ): void => {
+    if (depth > PAYLOAD_SCAN_MAX_DEPTH || visited >= PAYLOAD_SCAN_MAX_NODES) {
+      return;
+    }
+    visited += 1;
+
+    if (typeof node === "string") {
+      const value = node.trim();
+      if (value.length > 0) {
+        found.push({ key, parentKey, value, ownContainer });
+      }
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        walk(item, key, parentKey, depth + 1, ownContainer);
+      }
+      return;
+    }
+
+    if (node && typeof node === "object") {
+      for (const [childKey, child] of Object.entries(node as Record<string, unknown>)) {
+        const normalisedChildKey = childKey.toLowerCase();
+        walk(
+          child,
+          normalisedChildKey,
+          key,
+          depth + 1,
+          ownContainer || OWN_IDENTIFIER_CONTAINERS.includes(normalisedChildKey),
+        );
+      }
+    }
+  };
+
+  for (const [key, value] of Object.entries(payload)) {
+    const normalisedKey = key.toLowerCase();
+    walk(value, normalisedKey, null, 1, OWN_IDENTIFIER_CONTAINERS.includes(normalisedKey));
   }
 
-  return { tenantId, leadId, instantlyLeadId };
+  return found;
+}
+
+function rankedCandidates(
+  scanned: ScannedString[],
+  keys: string[],
+  limit: number,
+  accept: (entry: ScannedString) => boolean,
+): string[] {
+  const ranked = scanned
+    .map((entry, index) => ({ entry, index, keyRank: keys.indexOf(entry.key) }))
+    .filter(({ entry, keyRank }) => keyRank >= 0 && accept(entry))
+    .sort((left, right) => {
+      const leftScore =
+        (left.entry.ownContainer ? 100 : 0) +
+        left.keyRank * 10 +
+        (left.entry.parentKey === "lead" ? 0 : 1);
+      const rightScore =
+        (right.entry.ownContainer ? 100 : 0) +
+        right.keyRank * 10 +
+        (right.entry.parentKey === "lead" ? 0 : 1);
+      return leftScore - rightScore || left.index - right.index;
+    });
+
+  const unique: string[] = [];
+  for (const { entry } of ranked) {
+    if (!unique.includes(entry.value)) {
+      unique.push(entry.value);
+    }
+    if (unique.length >= limit) {
+      break;
+    }
+  }
+
+  return unique;
+}
+
+function collectInstantlyLeadIdCandidates(scanned: ScannedString[], ownIds: string[]): string[] {
+  return rankedCandidates(
+    scanned,
+    INSTANTLY_LEAD_ID_KEYS,
+    MAX_INSTANTLY_LEAD_ID_CANDIDATES,
+    (entry) =>
+      entry.value.length <= MAX_IDENTIFIER_LENGTH &&
+      !EMAIL_PATTERN.test(entry.value) &&
+      // Our own tenant and lead ids are echoed under the same key names. They
+      // are handled by their own lookup and are never Instantly lead ids.
+      !ownIds.includes(entry.value),
+  );
+}
+
+function collectLeadEmailCandidates(scanned: ScannedString[]): string[] {
+  return rankedCandidates(
+    scanned,
+    LEAD_EMAIL_KEYS,
+    MAX_EMAIL_CANDIDATES,
+    (entry) =>
+      entry.value.length <= MAX_IDENTIFIER_LENGTH &&
+      EMAIL_PATTERN.test(entry.value) &&
+      !SENDER_EMAIL_KEYS.includes(entry.key) &&
+      !(entry.parentKey !== null && SENDER_EMAIL_KEYS.includes(entry.parentKey)),
+  );
+}
+
+/** Our own tenant and lead id, if Instantly echoed both back together. */
+function readOwnIdentifierPair(
+  payload: Record<string, unknown>,
+): { tenantId: string; leadId: string } | null {
+  for (const container of OWN_IDENTIFIER_CONTAINERS) {
+    const tenantId = readNestedString(payload, [container, "tenant_id"]);
+    const leadId = readNestedString(payload, [container, "lead_id"]);
+    if (tenantId && leadId) {
+      return { tenantId, leadId };
+    }
+  }
+
+  return null;
+}
+
+function readOwnTenantId(payload: Record<string, unknown>): string | null {
+  for (const container of OWN_IDENTIFIER_CONTAINERS) {
+    const tenantId = readNestedString(payload, [container, "tenant_id"]);
+    if (tenantId) {
+      return tenantId;
+    }
+  }
+
+  return null;
+}
+
+function toReference(target: OutreachTarget): InstantlyLeadReference {
+  return {
+    tenantId: target.tenant_id,
+    leadId: target.lead_id,
+    instantlyLeadId: target.instantly_lead_id,
+  };
+}
+
+/** Work out which of our leads an Instantly event is about.
+ *
+ * The mappers this replaces required `metadata.tenant_id`,
+ * `metadata.lead_id` and `lead.id`, none of which the pipeline has ever sent:
+ * `schedule_outreach` puts `lead_id` in `custom_variables` and sent no tenant
+ * at all. Every reply, bounce and unsubscribe therefore threw, 400'd and was
+ * discarded without a log line.
+ *
+ * So resolution now works from what is certainly there, in order:
+ *
+ *  1. `metadata.tenant_id` + `metadata.lead_id` + `lead.id`, the shape the
+ *     old mappers demanded. Kept first and kept free of any database work, so
+ *     a future Instantly change that starts echoing metadata is a fast path
+ *     rather than a behaviour change.
+ *  2. Instantly's own lead id, looked up against
+ *     `outreach_sends.instantly_lead_id`, which is populated on every send
+ *     and distinct per row. The candidate is scanned for rather than read
+ *     from a fixed path, because Instantly does not publish exhaustive
+ *     payload examples.
+ *  3. Our own tenant and lead id echoed back without an Instantly lead id,
+ *     turned into a send row, since both suppression writes match on it.
+ *  4. The lead's email address, tenant scoped. Slowest and last, but the one
+ *     identifier a bounce, unsubscribe or reply must carry.
+ *
+ * A lookup that throws is left to propagate. A database outage is not the
+ * same answer as "no such lead" and must not be reported as one.
+ */
+async function resolveInstantlyLead(
+  payload: Record<string, unknown>,
+  deps: ResolutionDeps,
+): Promise<Resolution> {
+  const attempts: string[] = [];
+
+  const metadataTenantId = readNestedString(payload, ["metadata", "tenant_id"]);
+  const metadataLeadId = readNestedString(payload, ["metadata", "lead_id"]);
+  const metadataInstantlyLeadId = readNestedString(payload, ["lead", "id"]);
+
+  if (metadataTenantId && metadataLeadId && metadataInstantlyLeadId) {
+    return {
+      resolved: true,
+      reference: {
+        tenantId: metadataTenantId,
+        leadId: metadataLeadId,
+        instantlyLeadId: metadataInstantlyLeadId,
+      },
+    };
+  }
+  attempts.push(
+    `metadata_fast_path:${metadataTenantId && metadataLeadId ? "no_instantly_lead_id" : "absent"}`,
+  );
+
+  const ownPair = readOwnIdentifierPair(payload);
+  const knownTenantId = readOwnTenantId(payload);
+  const scanned = scanPayloadStrings(payload);
+  const instantlyLeadIds = collectInstantlyLeadIdCandidates(
+    scanned,
+    [knownTenantId, ownPair?.leadId].filter((value): value is string => Boolean(value)),
+  );
+  const emails = collectLeadEmailCandidates(scanned);
+  const identifierFound = instantlyLeadIds.length > 0 || ownPair !== null || emails.length > 0;
+
+  if (instantlyLeadIds.length === 0) {
+    attempts.push("instantly_lead_id:absent");
+  } else {
+    for (const candidate of instantlyLeadIds) {
+      const target = await deps.queries.findOutreachTargetByInstantlyLeadId(
+        candidate,
+        knownTenantId,
+      );
+      if (target) {
+        return { resolved: true, reference: toReference(target) };
+      }
+    }
+    attempts.push(`instantly_lead_id:missed(${instantlyLeadIds.length})`);
+  }
+
+  if (!ownPair) {
+    attempts.push("own_lead_id:absent");
+  } else {
+    const target = await deps.queries.findOutreachTargetByLeadId(ownPair.tenantId, ownPair.leadId);
+    if (target) {
+      return { resolved: true, reference: toReference(target) };
+    }
+    attempts.push("own_lead_id:missed(1)");
+  }
+
+  const emailTenantId = knownTenantId ?? deps.tenantId ?? null;
+  if (emails.length === 0) {
+    attempts.push("email:absent");
+  } else if (!emailTenantId) {
+    // An unscoped email lookup would have to search every tenant, and two
+    // tenants working the same trade in the same city share leads. Refusing
+    // is the only safe answer, and the log line says so.
+    attempts.push(`email:skipped_no_tenant(${emails.length})`);
+  } else {
+    for (const email of emails) {
+      const target = await deps.queries.findOutreachTargetByEmail(emailTenantId, email);
+      if (target) {
+        return { resolved: true, reference: toReference(target) };
+      }
+    }
+    attempts.push(`email:missed(${emails.length})`);
+  }
+
+  return { resolved: false, identifierFound, attempts };
+}
+
+/** Describe a payload by its top level key names and nothing else.
+ *
+ * Key names are the provider's vocabulary, values are the lead's data. The
+ * project's no-PII-in-logs rule means only the former may be written down,
+ * which is still enough to tell whether Instantly changed shape.
+ */
+function describePayloadKeys(payload: Record<string, unknown>): string {
+  const keys = Object.keys(payload)
+    .map((key) => key.toLowerCase().slice(0, 40))
+    .sort();
+  if (keys.length === 0) {
+    return "keys=none";
+  }
+
+  const shown = keys.slice(0, 24);
+  const omitted = keys.length - shown.length;
+  return `keys=${shown.join("|")}${omitted > 0 ? ` keys_omitted=${omitted}` : ""}`;
+}
+
+type InstantlyRoute = "reply" | "bounced" | "unsubbed";
+
+type LeadEventParse =
+  | {
+      ok: true;
+      payload: Record<string, unknown>;
+      reference: InstantlyLeadReference;
+      body: string | null;
+    }
+  | { ok: false; status: 400 | 404; error: string };
+
+/** Read an Instantly lead event, and make any failure loud.
+ *
+ * The status codes separate the two failures that used to share one 400.
+ * "We cannot find a lead identifier in this" is a shape change on Instantly's
+ * side or a bug on ours, and calls for a code change. "These identifiers
+ * match no lead of ours" is data, and calls for none. Reporting both as 400
+ * hid whichever was rarer, and reporting either as 200 would discard the
+ * delivery exactly the way this incident did.
+ */
+async function parseInstantlyLeadEvent(
+  route: InstantlyRoute,
+  rawBody: unknown,
+  deps: ResolutionDeps,
+  options: { requireReplyBody: boolean },
+): Promise<LeadEventParse> {
+  const parsed = webhookPayloadSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    console.warn(`instantly webhook unparsed: route=${route} reason=payload_not_an_object`);
+    return { ok: false, status: 400, error: "invalid webhook payload" };
+  }
+
+  const payload = parsed.data;
+  const body = readString(payload, ["reply_text", "body", "text", "message"]);
+
+  if (options.requireReplyBody && !body) {
+    console.warn(
+      `instantly webhook unparsed: route=${route} reason=missing_reply_body ${describePayloadKeys(payload)}`,
+    );
+    return { ok: false, status: 400, error: "invalid webhook payload" };
+  }
+
+  const resolution = await resolveInstantlyLead(payload, deps);
+  if (resolution.resolved) {
+    return { ok: true, payload, reference: resolution.reference, body };
+  }
+
+  const lookups = `lookups=${resolution.attempts.join(",")}`;
+  if (!resolution.identifierFound) {
+    console.warn(
+      `instantly webhook unparsed: route=${route} reason=no_lead_identifier ${describePayloadKeys(payload)} ${lookups}`,
+    );
+    return { ok: false, status: 400, error: "invalid webhook payload" };
+  }
+
+  console.warn(
+    `instantly webhook unresolved: route=${route} ${describePayloadKeys(payload)} ${lookups}`,
+  );
+  return { ok: false, status: 404, error: "lead not found" };
+}
+
+/** Report a failed lookup by class name only, never by message.
+ *
+ * A driver error message can carry a connection string, and a query error can
+ * quote the parameters, which here are a lead's own identifiers.
+ */
+function logLookupFailure(route: InstantlyRoute, error: unknown): void {
+  console.error(
+    `instantly webhook lookup failed: route=${route} error=${
+      error instanceof Error ? error.name : "UnknownError"
+    }`,
+  );
 }
 
 export function buildServer(options: BuildServerOptions): FastifyInstance {
   const server = Fastify({ logger: false });
   const stripe = options.stripe ?? stripePayments;
   const queries = options.queries ?? defaultQueries;
+  const resolution: ResolutionDeps = { queries, tenantId: options.tenantId };
 
   server.addContentTypeParser<string>("application/json", { parseAs: "string" }, (request, body, done) => {
     (request as typeof request & { rawBody?: string }).rawBody = body;
@@ -226,17 +643,43 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         return reply.code(400).send({ error: "invalid webhook secret" });
       }
 
-      const parsed = webhookPayloadSchema.safeParse(request.body);
-      if (!parsed.success) {
+      let event: LeadEventParse;
+      try {
+        event = await parseInstantlyLeadEvent("reply", request.body, resolution, {
+          requireReplyBody: true,
+        });
+      } catch (error) {
+        logLookupFailure("reply", error);
+        return reply.code(500).send({ error: "webhook processing failed" });
+      }
+
+      if (!event.ok) {
+        return reply.code(event.status).send({ error: event.error });
+      }
+
+      const body = event.body;
+      if (body === null) {
+        // Unreachable: requireReplyBody rejected an empty body above. Kept so
+        // the job's body is a string without an assertion talking over the
+        // type system.
         return reply.code(400).send({ error: "invalid webhook payload" });
       }
 
-      let job: ProcessReplyJob;
-      try {
-        job = mapInstantlyPayload(parsed.data);
-      } catch {
-        return reply.code(400).send({ error: "invalid webhook payload" });
-      }
+      const job: ProcessReplyJob = {
+        job_type: "process_reply",
+        tenant_id: event.reference.tenantId,
+        lead_id: event.reference.leadId,
+        channel: "email",
+        direction: "inbound",
+        body,
+        raw_webhook: event.payload,
+        instantly_lead_id: event.reference.instantlyLeadId,
+        // Stored as nullable metadata on the conversation. Requiring them, as
+        // the old mapper did, turned a reply that merely lacked them into a
+        // discarded 400.
+        instantly_email_id: readNestedString(event.payload, ["email", "id"]),
+        instantly_account_id: readNestedString(event.payload, ["email", "eaccount"]),
+      };
 
       try {
         await options.queue.add("process_reply", job);
@@ -260,20 +703,26 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         return reply.code(400).send({ error: "invalid webhook secret" });
       }
 
-      const parsed = webhookPayloadSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: "invalid webhook payload" });
+      let event: LeadEventParse;
+      try {
+        event = await parseInstantlyLeadEvent("bounced", request.body, resolution, {
+          requireReplyBody: false,
+        });
+      } catch (error) {
+        logLookupFailure("bounced", error);
+        return reply.code(500).send({ error: "webhook processing failed" });
       }
 
-      let event: { tenantId: string; leadId: string; instantlyLeadId: string };
-      try {
-        event = mapInstantlyLeadEventPayload(parsed.data);
-      } catch {
-        return reply.code(400).send({ error: "invalid webhook payload" });
+      if (!event.ok) {
+        return reply.code(event.status).send({ error: event.error });
       }
 
       try {
-        await queries.recordInstantlyBounce(event.tenantId, event.leadId, event.instantlyLeadId);
+        await queries.recordInstantlyBounce(
+          event.reference.tenantId,
+          event.reference.leadId,
+          event.reference.instantlyLeadId,
+        );
       } catch {
         return reply.code(500).send({ error: "webhook processing failed" });
       }
@@ -294,20 +743,26 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         return reply.code(400).send({ error: "invalid webhook secret" });
       }
 
-      const parsed = webhookPayloadSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: "invalid webhook payload" });
+      let event: LeadEventParse;
+      try {
+        event = await parseInstantlyLeadEvent("unsubbed", request.body, resolution, {
+          requireReplyBody: false,
+        });
+      } catch (error) {
+        logLookupFailure("unsubbed", error);
+        return reply.code(500).send({ error: "webhook processing failed" });
       }
 
-      let event: { tenantId: string; leadId: string; instantlyLeadId: string };
-      try {
-        event = mapInstantlyLeadEventPayload(parsed.data);
-      } catch {
-        return reply.code(400).send({ error: "invalid webhook payload" });
+      if (!event.ok) {
+        return reply.code(event.status).send({ error: event.error });
       }
 
       try {
-        await queries.recordInstantlyUnsubscribe(event.tenantId, event.leadId, event.instantlyLeadId);
+        await queries.recordInstantlyUnsubscribe(
+          event.reference.tenantId,
+          event.reference.leadId,
+          event.reference.instantlyLeadId,
+        );
       } catch {
         return reply.code(500).send({ error: "webhook processing failed" });
       }
@@ -492,6 +947,7 @@ async function main(): Promise<void> {
   const server = buildServer({
     instantlyWebhookSecrets: instantlyWebhookSecrets as { reply: string; bounced: string; unsubbed: string },
     queue,
+    tenantId: process.env.TENANT_ID,
     previewView: buildPreviewViewConfig(),
     opsAlert: buildOpsAlertConfig(),
   });

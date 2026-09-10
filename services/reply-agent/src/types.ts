@@ -1,5 +1,17 @@
 export type ReplyChannel = "email" | "sms";
 
+/** One outreach send, reduced to the ids needed to act on an Instantly event.
+ *
+ * `instantly_lead_id` is non-null in every row this shape is read from: it is
+ * what both suppression writes match on, and a send without it was reserved
+ * and never completed.
+ */
+export type OutreachTarget = {
+  tenant_id: string;
+  lead_id: string;
+  instantly_lead_id: string;
+};
+
 export type ProcessReplyJob = {
   job_type: "process_reply";
   tenant_id: string;
