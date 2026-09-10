@@ -8,6 +8,7 @@ import type {
   ConversationHistoryItem,
   EscalationContext,
   LeadContext,
+  OutreachTarget,
   PreviewViewState,
 } from "../types.js";
 
@@ -757,6 +758,143 @@ export async function fetchPreviewViewStates(
   return result.rows;
 }
 
+/** Find the send an Instantly webhook is about, from Instantly's own lead id.
+ *
+ * `outreach_sends.instantly_lead_id` is written on every completed send and
+ * is the one identifier we can be sure an Instantly event carries, so this is
+ * the primary route from a webhook back to one of our leads. Instantly does
+ * not echo our `tenant_id` or `lead_id`, and depending on it doing so is what
+ * silently discarded every bounce, unsubscribe and reply.
+ *
+ * The id is Instantly's, unique across our table, so an unscoped lookup is
+ * correct: the row it finds is what tells us which tenant the event belongs
+ * to. Passing a tenant narrows the query anyway, because a caller that
+ * already knows the tenant is asserting the row has to be inside it.
+ *
+ * The join to `leads` is not decoration. The lead row is what the callers go
+ * on to archive or attach a conversation to, and a send whose lead has been
+ * hard deleted must resolve to nothing rather than to a dangling id.
+ */
+export async function findOutreachTargetByInstantlyLeadId(
+  instantlyLeadId: string,
+  tenantId: string | null = null,
+  client?: Queryable,
+): Promise<OutreachTarget | null> {
+  const result = await db(client).query<OutreachTarget>(
+    `
+      SELECT
+        outreach_sends.tenant_id,
+        outreach_sends.lead_id,
+        outreach_sends.instantly_lead_id
+      FROM outreach_sends
+      JOIN leads
+        ON leads.tenant_id = outreach_sends.tenant_id
+       AND leads.id = outreach_sends.lead_id
+      WHERE outreach_sends.instantly_lead_id = $1
+        AND (
+          $2::uuid IS NULL
+          OR outreach_sends.tenant_id = $2::uuid
+        )
+      ORDER BY outreach_sends.sent_at DESC NULLS LAST,
+               outreach_sends.created_at DESC,
+               outreach_sends.id DESC
+      LIMIT 1
+    `,
+    [instantlyLeadId, tenantId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+/** Find the send an Instantly webhook is about, from the lead's email address.
+ *
+ * The fallback for a payload that carries no id we recognise. Every bounce,
+ * unsubscribe and reply is an event about an email address, so this is the
+ * identifier most certain to be present whatever shape the payload takes.
+ *
+ * Tenant scoping is mandatory here and the parameter is not optional.
+ * Addresses are not unique across tenants, two operators working the same
+ * trade in the same city will hold the same lead, and an unscoped match would
+ * archive or reply to the wrong company's lead. Nothing in the request may
+ * choose the tenant that is not itself already proven.
+ *
+ * Two leads inside one tenant can also share an address, and there is no
+ * constraint preventing it. Guessing between them would suppress the wrong
+ * lead, so more than one match resolves to nothing and the caller reports the
+ * event as unresolved.
+ *
+ * The join to `outreach_sends` restricts this to leads we actually handed to
+ * Instantly, which is the only population these events can be about, and it
+ * is also where the Instantly lead id comes from when the payload has none.
+ */
+export async function findOutreachTargetByEmail(
+  tenantId: string,
+  email: string,
+  client?: Queryable,
+): Promise<OutreachTarget | null> {
+  const result = await db(client).query<OutreachTarget>(
+    `
+      SELECT DISTINCT ON (leads.id)
+        leads.tenant_id,
+        leads.id AS lead_id,
+        outreach_sends.instantly_lead_id
+      FROM leads
+      JOIN outreach_sends
+        ON outreach_sends.tenant_id = leads.tenant_id
+       AND outreach_sends.lead_id = leads.id
+      WHERE leads.tenant_id = $1
+        AND LOWER(leads.email) = LOWER($2)
+        AND outreach_sends.instantly_lead_id IS NOT NULL
+      ORDER BY leads.id,
+               outreach_sends.sent_at DESC NULLS LAST,
+               outreach_sends.created_at DESC,
+               outreach_sends.id DESC
+      LIMIT 2
+    `,
+    [tenantId, email],
+  );
+
+  if (result.rows.length !== 1) {
+    return null;
+  }
+
+  return result.rows[0] ?? null;
+}
+
+/** Find the latest completed send for a tenant and lead we already know.
+ *
+ * For the case where Instantly echoes our own `tenant_id` and `lead_id`, from
+ * `metadata` or from the custom variables the pipeline attaches, but no
+ * Instantly lead id. Both suppression writes match on
+ * `outreach_sends.instantly_lead_id`, so knowing our own ids is not by itself
+ * enough to record anything, and this is the round trip that completes them.
+ */
+export async function findOutreachTargetByLeadId(
+  tenantId: string,
+  leadId: string,
+  client?: Queryable,
+): Promise<OutreachTarget | null> {
+  const result = await db(client).query<OutreachTarget>(
+    `
+      SELECT
+        outreach_sends.tenant_id,
+        outreach_sends.lead_id,
+        outreach_sends.instantly_lead_id
+      FROM outreach_sends
+      WHERE outreach_sends.tenant_id = $1
+        AND outreach_sends.lead_id = $2
+        AND outreach_sends.instantly_lead_id IS NOT NULL
+      ORDER BY outreach_sends.sent_at DESC NULLS LAST,
+               outreach_sends.created_at DESC,
+               outreach_sends.id DESC
+      LIMIT 1
+    `,
+    [tenantId, leadId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
 export const queries = {
   insertInboundConversation,
   fetchLeadContext,
@@ -771,6 +909,9 @@ export const queries = {
   archiveLeadForSuppression,
   recordInstantlyBounce,
   recordInstantlyUnsubscribe,
+  findOutreachTargetByInstantlyLeadId,
+  findOutreachTargetByEmail,
+  findOutreachTargetByLeadId,
   conversationExists,
   fetchCheckoutLead,
   fetchEscalationContext,
