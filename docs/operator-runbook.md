@@ -263,6 +263,14 @@ Comma separate several domains, for example
 outside this list is counted separately on the page as out of scope and is never
 written to.
 
+`INSTANTLY_SENDING_DOMAINS` is the one variable that scopes the estate. **Sending**,
+**Deliverability** and the today bar all read it, so they report the same mailboxes
+and the same totals. `DELIVERABILITY_SENDING_DOMAINS` is still read as a fallback for
+hosts that only carry that older name, and it is used only when
+`INSTANTLY_SENDING_DOMAINS` is unset or empty. Setting both to different values is
+not supported: `INSTANTLY_SENDING_DOMAINS` wins. Set that one and, once every host
+has it, `DELIVERABILITY_SENDING_DOMAINS` can be removed.
+
 ### What it does and does not do
 
 - It writes each in-scope mailbox's `daily_limit` through

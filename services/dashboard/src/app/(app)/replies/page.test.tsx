@@ -1,13 +1,19 @@
 import { render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getDashboardTenantIdMock, getReplyInboxPageMock, getReplyInboxFilterCountsMock, replyInboxMock } =
-  vi.hoisted(() => ({
-    getDashboardTenantIdMock: vi.fn(),
-    getReplyInboxPageMock: vi.fn(),
-    getReplyInboxFilterCountsMock: vi.fn(),
-    replyInboxMock: vi.fn(() => null),
-  }));
+const {
+  getDashboardTenantIdMock,
+  getReplyInboxPageMock,
+  getReplyInboxFilterCountsMock,
+  getReplyIngestSignalMock,
+  replyInboxMock,
+} = vi.hoisted(() => ({
+  getDashboardTenantIdMock: vi.fn(),
+  getReplyInboxPageMock: vi.fn(),
+  getReplyInboxFilterCountsMock: vi.fn(),
+  getReplyIngestSignalMock: vi.fn(),
+  replyInboxMock: vi.fn(() => null),
+}));
 
 vi.mock("@/auth/tenant", () => ({
   getDashboardTenantId: getDashboardTenantIdMock,
@@ -16,6 +22,7 @@ vi.mock("@/auth/tenant", () => ({
 vi.mock("@/db/queries", () => ({
   getReplyInboxPage: getReplyInboxPageMock,
   getReplyInboxFilterCounts: getReplyInboxFilterCountsMock,
+  getReplyIngestSignal: getReplyIngestSignalMock,
 }));
 
 vi.mock("@/components/ReplyInbox", () => ({
@@ -42,8 +49,10 @@ describe("RepliesPage", () => {
     getDashboardTenantIdMock.mockReset();
     getReplyInboxPageMock.mockReset();
     getReplyInboxFilterCountsMock.mockReset();
+    getReplyIngestSignalMock.mockReset();
     replyInboxMock.mockClear();
 
+    getReplyIngestSignalMock.mockResolvedValue({ lastInboundAt: null, firstHandoffAt: null });
     getDashboardTenantIdMock.mockReturnValue(tenantId);
     getReplyInboxFilterCountsMock.mockResolvedValue(counts);
     getReplyInboxPageMock.mockResolvedValue({
@@ -93,6 +102,35 @@ describe("RepliesPage", () => {
       }),
       undefined,
     );
+  });
+
+  it("hands the inbox a health line derived from the last inbound write", async () => {
+    getReplyIngestSignalMock.mockResolvedValue({
+      lastInboundAt: new Date("2026-08-20T00:00:00.000Z"),
+      firstHandoffAt: new Date("2026-08-01T00:00:00.000Z"),
+    });
+
+    render(await RepliesPage({ searchParams: Promise.resolve({ filter: "all" }) }));
+
+    expect(getReplyIngestSignalMock).toHaveBeenCalledWith({ tenantId });
+    const props = (replyInboxMock.mock.calls[0] as unknown[])[0] as { ingestHealth: { message: string } | null };
+    expect(props.ingestHealth?.message).toContain("No inbound reply has been recorded since 20 Aug 2026");
+  });
+
+  it("passes no health line at all when the health signal cannot be read", async () => {
+    getReplyIngestSignalMock.mockRejectedValue(new Error("connection refused"));
+
+    render(await RepliesPage({ searchParams: Promise.resolve({ filter: "all" }) }));
+
+    const props = (replyInboxMock.mock.calls[0] as unknown[])[0] as { ingestHealth: unknown };
+    expect(props.ingestHealth).toBeNull();
+  });
+
+  it("does not tell the operator that inbound replies are delivered by Instantly", async () => {
+    const { container } = render(await RepliesPage({ searchParams: Promise.resolve({ filter: "all" }) }));
+
+    expect(container.textContent).not.toContain("delivered by Instantly");
+    expect(container.textContent).toContain("recorded by the reply agent webhook");
   });
 
   it("reports a missing tenant instead of rendering an empty inbox", async () => {
