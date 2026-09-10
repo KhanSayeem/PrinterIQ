@@ -26,6 +26,7 @@ import {
   leadPaidPaymentExists,
   buildRelatedLeadDataQueries,
   buildRevenueImportedCountQuery,
+  computePaidConversionRate,
   buildTodayReplyCountQuery,
   buildTodayUnsubscribeCountQuery,
   normalizeTodaySoFar,
@@ -677,7 +678,18 @@ describe("dashboard D2 analytics queries", () => {
     expect(query.sql).toContain('"payments"."status" =');
     expect(query.sql).toContain('"payments"."paid_at" >=');
     expect(query.params).toContain(tenantId);
-    expect(query.params).toContain("paid");
+    // Was `toContain("paid")`. This assertion is why the bug survived: the
+    // builder asked for a status literal no writer produces, and the test
+    // asserted that exact wrong literal, so the suite defended it. Pinned to
+    // the shared constant now, so the test tracks the writer instead.
+    expect(query.params).toContain(PAID_PAYMENT_STATUS);
+  });
+
+  it("counts paying leads by distinct lead so two payments from one lead are one lead", () => {
+    const query = buildRevenuePaymentsSummaryQuery(db, { tenantId, periodStart }).toSQL();
+
+    expect(query.sql).toContain('count(distinct "lead_id")');
+    expect(query.sql).toContain('from "payments"');
   });
 
   it("scopes imported lead denominator by tenant_id and import period", () => {
@@ -1473,5 +1485,65 @@ describe("today's unsubscribes are dated by the unsubscribe, not by the last wri
       0.5,
       10,
     );
+  });
+});
+
+/** Revenue has to agree with the leads page and the funnel about what a sale is.
+ *
+ * `payments.status` is `'completed'`. This builder asked for `'paid'`, which
+ * matches no row, so every real sale would have reported as zero revenue while
+ * the Paid pill and the pipeline funnel reported it correctly. With `payments`
+ * empty both literals return 0, so nothing on screen could distinguish "no
+ * sales yet" from "this query can never find a sale".
+ */
+describe("the revenue summary reads the same sale as everything else", () => {
+  it("filters on the status the payment writer actually writes", () => {
+    const query = buildRevenuePaymentsSummaryQuery(db, {
+      tenantId,
+      periodStart: new Date("2026-09-01T00:00:00Z"),
+    }).toSQL();
+
+    expect(query.params).toContain(PAID_PAYMENT_STATUS);
+  });
+
+  it("never asks for a status literal no writer produces", () => {
+    const query = buildRevenuePaymentsSummaryQuery(db, {
+      tenantId,
+      periodStart: new Date("2026-09-01T00:00:00Z"),
+    }).toSQL();
+
+    expect(query.params).not.toContain("paid");
+  });
+
+  it("uses the same status literal as the pipeline funnel's paid cohort", () => {
+    const revenue = buildRevenuePaymentsSummaryQuery(db, {
+      tenantId,
+      periodStart: new Date("2026-09-01T00:00:00Z"),
+    }).toSQL();
+    const funnel = buildPipelinePaidCountQuery(db, { tenantId }).toSQL();
+
+    const statusOf = (params: unknown[]) => params.filter((p) => p === PAID_PAYMENT_STATUS);
+
+    expect(statusOf(revenue.params)).toHaveLength(1);
+    expect(statusOf(funnel.params)).toHaveLength(1);
+  });
+});
+
+describe("paid conversion rate", () => {
+  it("divides paying leads by every non-deleted lead, both counted all time", () => {
+    expect(computePaidConversionRate(3, 7574)).toBeCloseTo(0.0396, 4);
+  });
+
+  it("reports nothing rather than dividing by an empty lead book", () => {
+    expect(computePaidConversionRate(0, 0)).toBeNull();
+  });
+
+  it("reads zero paying leads as a real zero, not as unavailable", () => {
+    expect(computePaidConversionRate(0, 7574)).toBe(0);
+  });
+
+  it("refuses to report a rate above 100 percent when the two counts disagree", () => {
+    expect(computePaidConversionRate(7575, 7574)).toBeNull();
+    expect(computePaidConversionRate(7574, 7574)).toBe(100);
   });
 });

@@ -12,6 +12,10 @@ export const SEND_RATE_PATH = "/sending";
 
 export type SendRateSnapshot = {
   accounts: InstantlySendingAccount[];
+  /**
+   * Sum of the per mailbox Instantly daily limits in scope. Not the campaign
+   * level daily limit, which is set in Instantly and can cap sending lower.
+   */
   campaignDailyTotal: number;
   mailboxCount: number;
   excludedAccountCount: number;
@@ -113,7 +117,7 @@ function readRequestedTotal(formData: FormData): { total: number } | { error: st
   const parsed = Number(text);
 
   if (text === "" || !Number.isInteger(parsed) || parsed < 1) {
-    return { error: "Enter the new campaign daily total as a whole number of 1 or more." };
+    return { error: "Enter the new mailbox daily limit total as a whole number of 1 or more." };
   }
   if (parsed > MAX_REQUESTABLE_DAILY_TOTAL) {
     return {
@@ -151,7 +155,7 @@ function applyReport(
   if (failed.length === 0) {
     return {
       ok: true,
-      message: `Daily limit applied to ${changed.length} of ${outcomes.length} mailboxes. Campaign daily total is now ${effectiveDailyTotal}.`,
+      message: `Daily limit applied to ${changed.length} of ${outcomes.length} mailboxes. The mailbox daily limits now sum to ${effectiveDailyTotal}.`,
       requestedDailyTotal,
       currentDailyTotal,
       effectiveDailyTotal,
@@ -162,7 +166,7 @@ function applyReport(
   if (changed.length === 0) {
     return {
       ok: false,
-      message: `No mailbox was changed. All ${outcomes.length} Instantly updates failed. Campaign daily total is unchanged at ${effectiveDailyTotal}.`,
+      message: `No mailbox was changed. All ${outcomes.length} Instantly updates failed. The mailbox daily limits still sum to ${effectiveDailyTotal}.`,
       requestedDailyTotal,
       currentDailyTotal,
       effectiveDailyTotal,
@@ -172,7 +176,7 @@ function applyReport(
 
   return {
     ok: false,
-    message: `Applied to ${changed.length} of ${outcomes.length} mailboxes. ${failed.length} failed and kept the previous limit. Campaign daily total is now ${effectiveDailyTotal}, not the ${requestedDailyTotal} requested.`,
+    message: `Applied to ${changed.length} of ${outcomes.length} mailboxes. ${failed.length} failed and kept the previous limit. The mailbox daily limits now sum to ${effectiveDailyTotal}, not the ${requestedDailyTotal} requested.`,
     requestedDailyTotal,
     currentDailyTotal,
     effectiveDailyTotal,

@@ -26,14 +26,31 @@ function renderControl(applySendRate = vi.fn()) {
 }
 
 describe("SendRateControl", () => {
-  it("shows the campaign total, each mailbox limit and the next ramp step", () => {
+  it("shows the mailbox limit total, each mailbox limit and the next ramp step", () => {
     renderControl();
 
-    expect(screen.getByLabelText("Campaign daily total")).toHaveTextContent("7");
+    expect(screen.getByLabelText("Mailbox daily limit total")).toHaveTextContent("7");
     expect(screen.getByLabelText("Next ramp step")).toHaveTextContent("30");
     expect(screen.getByText("murphy@presciaweb.com")).toBeInTheDocument();
     expect(screen.getByText("dana@presciaweb.com")).toBeInTheDocument();
     expect(screen.getByText(/1 Instantly account outside/i)).toBeInTheDocument();
+  });
+
+  it("labels the total as the mailbox limits it sums, not as the campaign limit", () => {
+    renderControl();
+
+    const total = screen.getByLabelText("Mailbox daily limit total").closest(".metric-card");
+    expect(total).toHaveTextContent("sum of the mailbox daily limits below");
+    expect(total).not.toHaveTextContent(/campaign/i);
+    expect(screen.queryByText("Campaign daily total")).toBeNull();
+  });
+
+  it("keeps the campaign level cap caveat next to the control that writes limits", () => {
+    renderControl();
+
+    expect(
+      screen.getByText(/does not change the campaign level daily limit in Instantly/i),
+    ).toHaveTextContent(/can still cap sending lower/i);
   });
 
   it("sends the mailboxes in scope card to the mailbox health list", () => {
@@ -50,7 +67,7 @@ describe("SendRateControl", () => {
   it("leaves the cards with nowhere useful to go unlinked", () => {
     renderControl();
 
-    const total = screen.getByLabelText("Campaign daily total").closest(".metric-card");
+    const total = screen.getByLabelText("Mailbox daily limit total").closest(".metric-card");
     const ramp = screen.getByLabelText("Next ramp step").closest(".metric-card");
     expect(total).not.toHaveAttribute("href");
     expect((total as HTMLElement).tagName).toBe("DIV");
@@ -63,7 +80,7 @@ describe("SendRateControl", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /use next ramp step/i }));
 
-    expect(screen.getByLabelText<HTMLInputElement>(/new campaign daily total/i).value).toBe("30");
+    expect(screen.getByLabelText<HTMLInputElement>(/new mailbox daily limit total/i).value).toBe("30");
   });
 
   it("asks for explicit confirmation before applying an over doubling increase", async () => {
@@ -77,7 +94,7 @@ describe("SendRateControl", () => {
     });
     renderControl(applySendRate);
 
-    fireEvent.change(screen.getByLabelText(/new campaign daily total/i), {
+    fireEvent.change(screen.getByLabelText(/new mailbox daily limit total/i), {
       target: { value: "30" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^apply to mailboxes$/i }));
@@ -118,7 +135,7 @@ describe("SendRateControl", () => {
     });
     renderControl(applySendRate);
 
-    fireEvent.change(screen.getByLabelText(/new campaign daily total/i), {
+    fireEvent.change(screen.getByLabelText(/new mailbox daily limit total/i), {
       target: { value: "30" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^apply to mailboxes$/i }));
@@ -140,7 +157,7 @@ describe("SendRateControl", () => {
     const applySendRate = vi.fn().mockRejectedValue(new Error("boom"));
     renderControl(applySendRate);
 
-    fireEvent.change(screen.getByLabelText(/new campaign daily total/i), {
+    fireEvent.change(screen.getByLabelText(/new mailbox daily limit total/i), {
       target: { value: "30" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^apply to mailboxes$/i }));
