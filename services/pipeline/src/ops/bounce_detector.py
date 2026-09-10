@@ -260,9 +260,17 @@ def _format_threshold(rate: float) -> str:
 
 
 def _format_window(window_days: int) -> str:
+    """Name the window without claiming a calendar day in Australia.
+
+    The counts come from Instantly, which buckets by UTC, and the span is
+    chosen to contain an Australian sending day rather than to match one. So
+    it always carries some of the previous Australian day as well. Saying
+    "today" would be a false claim about which emails were counted, and this
+    dashboard has just been audited for exactly that class of error.
+    """
     if window_days == 1:
-        return "today"
-    return f"in the last {window_days}d"
+        return "over the last UTC day"
+    return f"over the last {window_days} UTC days"
 
 
 def _campaign_phrase(count: int) -> str:
