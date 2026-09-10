@@ -23,6 +23,7 @@ import {
   buildPipelineThresholdCohortQueries,
   buildPipelineRepliedCountQuery,
   buildPipelinePaidCountQuery,
+  leadPaidPaymentExists,
   buildRelatedLeadDataQueries,
   buildRevenueImportedCountQuery,
   computePaidConversionRate,
@@ -48,6 +49,7 @@ import {
   normalizePipelineAnalytics,
 } from "./queries";
 import * as queryModule from "./queries";
+import { PAID_LEAD_FILTER, PAID_PAYMENT_STATUS } from "@/lib/paid-payments";
 import type { MetricAvailability } from "@/lib/deliverability";
 
 const sql = postgres("postgres://user:pass@localhost:5432/printeriq", { prepare: false });
@@ -121,8 +123,10 @@ describe("dashboard lead queries", () => {
   it("tallies unsubscribed and preview pills inside the single filter-count aggregate", () => {
     const query = buildLeadFilterCountsQuery(db, { tenantId }).toSQL();
 
-    // One pass over the tenant's leads: no second aggregate is issued per page load.
-    expect(query.sql.match(/select/g)).toHaveLength(2);
+    // Still one pass over the tenant's leads: no second aggregate is issued per
+    // page load. Three selects, because the unsubscribed and paid tallies are
+    // each a correlated exists inside that single pass.
+    expect(query.sql.match(/select/g)).toHaveLength(3);
     expect(query.sql).toContain('from "leads"');
     expect(query.sql).toContain('left join "website_previews"');
     expect(query.sql).toContain('"website_previews"."tenant_id" =');
@@ -137,7 +141,7 @@ describe("dashboard lead queries", () => {
       normalizeLeadFilterCounts([
         { status: "imported", count: "3" },
         { status: "qualified", count: 2 },
-        { status: "paid", count: "1" },
+        { status: "paid", count: "1", paidCount: "1" },
       ]),
     ).toEqual({
       all: 6,
@@ -674,7 +678,11 @@ describe("dashboard D2 analytics queries", () => {
     expect(query.sql).toContain('"payments"."status" =');
     expect(query.sql).toContain('"payments"."paid_at" >=');
     expect(query.params).toContain(tenantId);
-    expect(query.params).toContain("paid");
+    // Was `toContain("paid")`. This assertion is why the bug survived: the
+    // builder asked for a status literal no writer produces, and the test
+    // asserted that exact wrong literal, so the suite defended it. Pinned to
+    // the shared constant now, so the test tracks the writer instead.
+    expect(query.params).toContain(PAID_PAYMENT_STATUS);
   });
 
   it("counts paying leads by distinct lead so two payments from one lead are one lead", () => {
@@ -754,7 +762,7 @@ describe("dashboard D2 analytics queries", () => {
     const paid = buildPipelinePaidCountQuery(db, { tenantId }).toSQL();
     expect(paid.sql).toContain('from "payments"');
     expect(paid.sql).toContain('"payments"."status" =');
-    expect(paid.params).toContain("paid");
+    expect(paid.params).toContain(PAID_PAYMENT_STATUS);
   });
 
   /**
@@ -985,10 +993,11 @@ describe("today so far queries", () => {
     const query = buildTodayUnsubscribeCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
 
     expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
-    expect(query.sql).toContain('"outreach_sends"."updated_at" >=');
-    expect(query.sql).toContain('"outreach_sends"."updated_at" <');
-    expect(query.sql).toContain('count(*) filter (where "unsubscribed")');
+    expect(query.sql).toContain('"outreach_sends"."unsubscribed" =');
+    expect(query.sql).toContain('"unsubscribe_count"');
     expect(query.params).toContain(tenantId);
+    expect(query.params).toContain(dayStart);
+    expect(query.params).toContain(dayEnd);
   });
 
   it("no longer answers sends or bounces from outreach_sends", () => {
@@ -1296,6 +1305,227 @@ describe("today so far queries", () => {
   it("publishes the thresholds a sender has to react to", () => {
     expect(BOUNCE_RATE_WARNING_PERCENT).toBe(3);
     expect(UNSUBSCRIBE_RATE_WARNING_PERCENT).toBe(0.5);
+  });
+});
+
+/**
+ * The Paid pill is the only pill on the leads page that is not a `leads.status`
+ * bucket, because it is the only one that reports money. These tests hold the
+ * two halves together: the count and the filter behind it must be the same
+ * predicate, or the pill reads 1 and opens an empty list.
+ */
+describe("the Paid pill reads a sale from payments", () => {
+  const withoutPlaceholderNumbers = (statement: string) => statement.replace(/\$\d+/g, "$?");
+
+  it("counts the Paid pill from a payments row, not from leads.status", () => {
+    const query = buildLeadFilterCountsQuery(db, { tenantId }).toSQL();
+
+    expect(query.sql).toContain('from "payments"');
+    expect(query.sql).toContain('"payments"."status" =');
+    expect(query.params).toContain(PAID_PAYMENT_STATUS);
+  });
+
+  it("counts the Paid pill with the exact predicate the Paid filter uses", () => {
+    // A count that does not match its own list is invisible until an operator
+    // clicks the pill, so the two are asserted to be one predicate rather than
+    // two predicates that happen to agree today. Placeholder numbers are
+    // normalised because they depend on where in the statement the fragment
+    // lands, and nothing else about the fragment may differ.
+    const predicate = withoutPlaceholderNumbers(toRawSQL(leadPaidPaymentExists(tenantId)).sql);
+    const counts = buildLeadFilterCountsQuery(db, { tenantId }).toSQL();
+    const list = buildLeadListQuery(db, {
+      tenantId,
+      status: PAID_LEAD_FILTER,
+      page: 1,
+      pageSize: 25,
+    }).toSQL();
+    const total = buildLeadListCountQuery(db, {
+      tenantId,
+      status: PAID_LEAD_FILTER,
+      page: 1,
+      pageSize: 25,
+    }).toSQL();
+
+    expect(predicate).toContain('from "payments"');
+    expect(withoutPlaceholderNumbers(counts.sql)).toContain(predicate);
+    expect(withoutPlaceholderNumbers(list.sql)).toContain(predicate);
+    expect(withoutPlaceholderNumbers(total.sql)).toContain(predicate);
+  });
+
+  it("filters the Paid pill on the payment rather than on leads.status", () => {
+    const query = buildLeadListQuery(db, {
+      tenantId,
+      status: PAID_LEAD_FILTER,
+      page: 1,
+      pageSize: 25,
+    }).toSQL();
+
+    expect(query.sql).toContain('from "payments"');
+    expect(query.params).toContain(PAID_PAYMENT_STATUS);
+    // Nothing in this query may compare leads.status against "paid": a lead
+    // that paid while sitting in another status still has to appear here.
+    expect(query.params).not.toContain(PAID_LEAD_FILTER);
+  });
+
+  it("leaves every other status pill filtering on leads.status", () => {
+    const query = buildLeadListQuery(db, {
+      tenantId,
+      status: "contacted",
+      page: 1,
+      pageSize: 25,
+    }).toSQL();
+
+    expect(query.sql).toContain('"leads"."status" =');
+    expect(query.sql).not.toContain('from "payments"');
+    expect(query.params).toContain("contacted");
+  });
+
+  it("counts a lead with a payment as paid even when its status says otherwise", () => {
+    expect(
+      normalizeLeadFilterCounts([
+        { status: "archived", count: "1", paidCount: "1" },
+        { status: "contacted", count: "1", paidCount: 0 },
+      ]),
+    ).toMatchObject({ all: 2, archived: 1, contacted: 1, paid: 1 });
+  });
+
+  it("does not count a lead whose status is paid but which has no payment", () => {
+    // The reply agent only writes leads.status = 'paid' through a CTE gated on
+    // the lead already being 'replied'. A status without a payments row behind
+    // it is therefore not evidence of money and must not reach this pill.
+    expect(
+      normalizeLeadFilterCounts([{ status: "paid", count: "1", paidCount: "0" }]),
+    ).toMatchObject({ all: 1, paid: 0 });
+  });
+
+  it("uses one definition of a paid payment for the pill and the pipeline funnel", () => {
+    // /pipeline already reads paid from payments. Both call sites share the
+    // status constant so the two screens cannot drift apart.
+    const funnel = buildPipelinePaidCountQuery(db, { tenantId }).toSQL();
+
+    expect(funnel.params).toContain(PAID_PAYMENT_STATUS);
+    expect(buildLeadFilterCountsQuery(db, { tenantId }).toSQL().params).toContain(
+      PAID_PAYMENT_STATUS,
+    );
+  });
+});
+
+/**
+ * Suppressions are dated by their own event time now, so today's count and
+ * today's send count are the same cohort.
+ */
+describe("today's unsubscribes are dated by the unsubscribe, not by the last write", () => {
+  const dayStart = new Date("2026-06-15T14:00:00.000Z");
+  const dayEnd = new Date("2026-06-16T14:00:00.000Z");
+  const dayLabel = "Tuesday 16 June";
+  const sent = (value: number): MetricAvailability<number> => ({ available: true, value });
+
+  /** The tally the tile prints, cut off before the undated one that follows it. */
+  const datedTally = (statement: string) =>
+    statement.slice(0, statement.indexOf('as "unsubscribe_count"'));
+
+  it("counts today's unsubscribes from unsubscribed_at", () => {
+    const query = buildTodayUnsubscribeCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
+
+    expect(datedTally(query.sql)).toContain('"unsubscribed_at" >=');
+    expect(datedTally(query.sql)).toContain('"unsubscribed_at" <');
+    expect(query.sql).toContain('as "unsubscribe_count"');
+    expect(query.sql).toContain('"outreach_sends"."tenant_id" =');
+    expect(query.params).toContain(tenantId);
+  });
+
+  it("does not date an unsubscribe by the row's last write", () => {
+    const query = buildTodayUnsubscribeCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
+
+    // updated_at may only appear in the undated tally, never in the count the
+    // tile prints: a row sent last week that unsubscribes today would otherwise
+    // be divided by today's sends.
+    expect(datedTally(query.sql)).not.toContain("updated_at");
+    expect(query.sql).toContain('as "undated_unsubscribe_count"');
+  });
+
+  it("tallies the rows that were flagged before the event time existed", () => {
+    const query = buildTodayUnsubscribeCountQuery(db, { tenantId, dayStart, dayEnd }).toSQL();
+    const undated = query.sql.slice(query.sql.indexOf('as "unsubscribe_count"'));
+
+    expect(undated).toContain('"unsubscribed_at" is null');
+    expect(undated).toContain('"updated_at" >=');
+    expect(undated).toContain('"updated_at" <');
+  });
+
+  it("says so on the tile when an unsubscribe today has no event time", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: sent(200),
+      bounces: sent(0),
+      replies: 0,
+      unsubscribes: 1,
+      unsubscribesUndated: 2,
+    });
+
+    expect(summary.unsubscribes).toBe(1);
+    expect(summary.unsubscribesUndated).toBe(2);
+    expect(summary.unsubscribeRate.available).toBe(false);
+    expect(summary.unsubscribeRate.available ? "" : summary.unsubscribeRate.reason).toContain("2");
+    expect(summary.hasActivity).toBe(true);
+  });
+
+  it("reports the rate as usual once every unsubscribe carries its own time", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: sent(200),
+      bounces: sent(0),
+      replies: 0,
+      unsubscribes: 1,
+      unsubscribesUndated: 0,
+    });
+
+    expect(summary.unsubscribesUndated).toBe(0);
+    expect(summary.unsubscribeRate.available ? summary.unsubscribeRate.value : null).toBeCloseTo(
+      0.5,
+      10,
+    );
+  });
+});
+
+/** Revenue has to agree with the leads page and the funnel about what a sale is.
+ *
+ * `payments.status` is `'completed'`. This builder asked for `'paid'`, which
+ * matches no row, so every real sale would have reported as zero revenue while
+ * the Paid pill and the pipeline funnel reported it correctly. With `payments`
+ * empty both literals return 0, so nothing on screen could distinguish "no
+ * sales yet" from "this query can never find a sale".
+ */
+describe("the revenue summary reads the same sale as everything else", () => {
+  it("filters on the status the payment writer actually writes", () => {
+    const query = buildRevenuePaymentsSummaryQuery(db, {
+      tenantId,
+      periodStart: new Date("2026-09-01T00:00:00Z"),
+    }).toSQL();
+
+    expect(query.params).toContain(PAID_PAYMENT_STATUS);
+  });
+
+  it("never asks for a status literal no writer produces", () => {
+    const query = buildRevenuePaymentsSummaryQuery(db, {
+      tenantId,
+      periodStart: new Date("2026-09-01T00:00:00Z"),
+    }).toSQL();
+
+    expect(query.params).not.toContain("paid");
+  });
+
+  it("uses the same status literal as the pipeline funnel's paid cohort", () => {
+    const revenue = buildRevenuePaymentsSummaryQuery(db, {
+      tenantId,
+      periodStart: new Date("2026-09-01T00:00:00Z"),
+    }).toSQL();
+    const funnel = buildPipelinePaidCountQuery(db, { tenantId }).toSQL();
+
+    const statusOf = (params: unknown[]) => params.filter((p) => p === PAID_PAYMENT_STATUS);
+
+    expect(statusOf(revenue.params)).toHaveLength(1);
+    expect(statusOf(funnel.params)).toHaveLength(1);
   });
 });
 

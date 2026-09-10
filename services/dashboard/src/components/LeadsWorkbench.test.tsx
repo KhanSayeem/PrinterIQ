@@ -136,6 +136,7 @@ describe("LeadsWorkbench", () => {
           replies: 7,
           bounces: { available: true, value: 4 },
           unsubscribes: 1,
+          unsubscribesUndated: 0,
           replyRate: { available: true, value: 3.5 },
           bounceRate: { available: true, value: 2 },
           unsubscribeRate: { available: true, value: 0.5 },

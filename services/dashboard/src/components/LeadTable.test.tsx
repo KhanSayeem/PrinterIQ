@@ -33,7 +33,7 @@ describe("LeadTable", () => {
     );
 
     const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
-    expect(headers).toEqual(["Name", "Business", "State", "Status", "Score", "Last Activity"]);
+    expect(headers).toEqual(["Name", "Business", "State", "Status", "Score", "Last updated"]);
 
     const row = screen.getAllByRole("row")[1];
     expect(within(row).getByText("Aqua Options")).toBeInTheDocument();

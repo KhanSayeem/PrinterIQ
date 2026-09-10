@@ -25,7 +25,10 @@ export function LeadTable({
               <th>State</th>
               <th>Status</th>
               <th>Score</th>
-              <th>Last Activity</th>
+              {/* leads.updated_at, which moves on any write to the row,
+                  including a background status change. It is not the prospect
+                  doing anything, so the column does not claim to be. */}
+              <th>Last updated</th>
             </tr>
           </thead>
           <tbody>
@@ -55,7 +58,7 @@ export function LeadTable({
                     <span>{lead.score ?? "--"}</span>
                   </div>
                 </td>
-                <td className="td-muted">{formatLastActivity(lead.updatedAt)}</td>
+                <td className="td-muted">{formatLastUpdated(lead.updatedAt)}</td>
               </tr>
             ))}
           </tbody>
@@ -84,7 +87,7 @@ export function LeadTable({
                   <span>Score {lead.score ?? "--"}</span>
                 </div>
                 <div className="lead-card-footer">
-                  <span>{formatLastActivity(lead.updatedAt)}</span>
+                  <span>{formatLastUpdated(lead.updatedAt)}</span>
                   <span className="lead-card-link" aria-hidden="true">Preview</span>
                 </div>
               </button>
@@ -96,7 +99,7 @@ export function LeadTable({
   );
 }
 
-function formatLastActivity(value: Date | string | null | undefined) {
+function formatLastUpdated(value: Date | string | null | undefined) {
   if (!value) return "--";
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "--";

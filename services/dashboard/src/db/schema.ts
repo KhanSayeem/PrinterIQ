@@ -155,6 +155,13 @@ export const outreachSends = pgTable("outreach_sends", {
   replied: boolean("replied").default(false),
   bounced: boolean("bounced").default(false),
   unsubscribed: boolean("unsubscribed").default(false),
+  /**
+   * When the suppression happened, as opposed to `updated_at`, which is when
+   * the row was last written for any reason. Null on every row flagged before
+   * migration 0014, and the today bar says so rather than dropping them.
+   */
+  bouncedAt: timestamp("bounced_at", { withTimezone: true }),
+  unsubscribedAt: timestamp("unsubscribed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

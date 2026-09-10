@@ -405,6 +405,20 @@ export async function archiveLeadForSuppression(
   );
 }
 
+/**
+ * Flags the send, stamps the event time and archives the lead, in one
+ * statement.
+ *
+ * `${column}_at` is written with COALESCE rather than plainly, so a redelivered
+ * webhook cannot move the suppression to the day it was retried. Instantly
+ * redelivers, and the whole point of the column is that the dashboard stops
+ * dating a suppression by the row's last write: overwriting it here would
+ * reintroduce that in a new place.
+ *
+ * The columns are `bounced_at` and `unsubscribed_at`, added by migration
+ * `0014_add_suppression_event_times.sql`. `column` is a closed union rather
+ * than a string, so the interpolation cannot name anything else.
+ */
 async function recordInstantlySuppressionEvent(
   column: "bounced" | "unsubscribed",
   tenantId: string,
@@ -418,6 +432,7 @@ async function recordInstantlySuppressionEvent(
         UPDATE outreach_sends
         SET
           ${column} = TRUE,
+          ${column}_at = COALESCE(${column}_at, NOW()),
           updated_at = NOW()
         WHERE tenant_id = $1
           AND lead_id = $2

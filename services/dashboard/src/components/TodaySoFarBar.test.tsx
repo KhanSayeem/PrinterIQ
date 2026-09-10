@@ -18,6 +18,7 @@ function summaryFixture(overrides: Partial<TodaySoFarSummary> = {}): TodaySoFarS
     replies: 7,
     bounces: value(4),
     unsubscribes: 1,
+    unsubscribesUndated: 0,
     replyRate: value(3.5),
     bounceRate: value(2),
     unsubscribeRate: value(0.5),
@@ -69,6 +70,27 @@ describe("TodaySoFarBar", () => {
     expect(tile(container, "Replies")).toHaveTextContent("3.5% of sent");
     expect(tile(container, "Bounces")).toHaveTextContent("2.0% of sent");
     expect(tile(container, "Unsubscribes")).toHaveTextContent("0.5% of sent");
+  });
+
+  // Sends flagged unsubscribed before migration 0014 carry no event time, so
+  // today's count is short by however many of them there are. The tile prints
+  // that instead of a percentage, which is how an operator finds out at all:
+  // this bar is the only place the figure appears.
+  it("says on the tile when today's unsubscribes are missing an event time", () => {
+    const reason = "2 unsubscribes were recorded today without an event time, so this rate would read low";
+    const { container } = render(
+      <TodaySoFarBar
+        summary={summaryFixture({
+          unsubscribes: 1,
+          unsubscribesUndated: 2,
+          unsubscribeRate: missing(reason),
+        })}
+      />,
+    );
+
+    expect(tile(container, "Unsubscribes")).toHaveTextContent("1");
+    expect(tile(container, "Unsubscribes")).toHaveTextContent(reason);
+    expect(tile(container, "Unsubscribes")).not.toHaveTextContent("% of sent");
   });
 
   it("colours a bounce rate that is over the threshold", () => {
