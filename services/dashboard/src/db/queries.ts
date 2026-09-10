@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, max, min, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { PreviewViewFilter } from "@/lib/lead-list-params";
 import {
@@ -9,6 +9,7 @@ import {
   type ReplyIntent,
 } from "@/lib/reply-inbox-params";
 import type { MetricAvailability } from "@/lib/deliverability";
+import type { ReplyIngestSignal } from "@/lib/reply-ingest-health";
 import type { TodaySendTotals } from "@/lib/today-sends";
 import { formatSydneyDayLabel, getSydneyDayRange } from "@/lib/sydney-day";
 import { getDb } from "./client";
@@ -2140,4 +2141,67 @@ export async function getReplyInboxPage(filters: ReplyInboxFilters) {
 export async function getReplyInboxFilterCounts(identity: { tenantId: string }) {
   const db = getDb();
   return normalizeReplyInboxFilterCounts(await buildReplyInboxFilterCountsQuery(db, identity));
+}
+
+// ---------------------------------------------------------------------------
+// Inbound reply ingest health
+//
+// The two timestamps behind the /replies empty state. Neither is a health
+// check Instantly answers, so see src/lib/reply-ingest-health.ts for what each
+// one does and does not prove.
+// ---------------------------------------------------------------------------
+
+/** The last inbound write of any kind, so deleted leads are counted too.
+ *
+ * The inbox itself hides replies whose lead was deleted, but a write against
+ * a since-deleted lead is still proof the ingest path worked, and this
+ * question is about the path rather than about the pipeline.
+ */
+export function buildLastInboundConversationQuery(db: DashboardDb, identity: { tenantId: string }) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({ lastInboundAt: max(conversations.createdAt) })
+    .from(conversations)
+    .where(
+      and(eq(conversations.tenantId, identity.tenantId), eq(conversations.direction, "inbound")),
+    );
+}
+
+/** The earliest handoff to Instantly, which is the earliest a reply could exist. */
+export function buildFirstOutreachHandoffQuery(db: DashboardDb, identity: { tenantId: string }) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({ firstHandoffAt: min(outreachSends.sentAt) })
+    .from(outreachSends)
+    .where(and(eq(outreachSends.tenantId, identity.tenantId), isNotNull(outreachSends.sentAt)));
+}
+
+export function normalizeReplyIngestSignal(
+  inboundRows: Array<{ lastInboundAt?: Date | string | null }>,
+  handoffRows: Array<{ firstHandoffAt?: Date | string | null }>,
+): ReplyIngestSignal {
+  return {
+    lastInboundAt: toDateOrNull(inboundRows[0]?.lastInboundAt),
+    firstHandoffAt: toDateOrNull(handoffRows[0]?.firstHandoffAt),
+  };
+}
+
+export async function getReplyIngestSignal(identity: { tenantId: string }): Promise<ReplyIngestSignal> {
+  const db = getDb();
+  const [inboundRows, handoffRows] = await Promise.all([
+    buildLastInboundConversationQuery(db, identity),
+    buildFirstOutreachHandoffQuery(db, identity),
+  ]);
+
+  return normalizeReplyIngestSignal(inboundRows, handoffRows);
+}
+
+function toDateOrNull(value: Date | string | null | undefined): Date | null {
+  if (value instanceof Date) return value;
+  if (typeof value !== "string" || value.trim() === "") return null;
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }

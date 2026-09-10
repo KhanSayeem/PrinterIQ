@@ -3,9 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { requireOperator } from "@/auth/server";
 import { InstantlyHttpClient } from "@/clients/instantly";
+import { resolveSendingDomains } from "@/lib/sending-domains";
 import {
   createSendRateActions,
-  parseSendingDomains,
   type SendRateActionDeps,
   type SendRateActionState,
 } from "./send-rate-actions-core";
@@ -15,7 +15,7 @@ export type { SendRateActionState } from "./send-rate-actions-core";
 function defaultDeps(): SendRateActionDeps {
   return {
     instantly: new InstantlyHttpClient(),
-    allowedDomains: parseSendingDomains(process.env.INSTANTLY_SENDING_DOMAINS),
+    allowedDomains: resolveSendingDomains(),
     revalidatePath,
   };
 }

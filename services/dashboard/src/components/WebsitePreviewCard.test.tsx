@@ -17,9 +17,11 @@ const preview: WebsitePreviewDetail = {
   generatedAt: new Date("2026-06-10T08:30:00.000Z"),
 };
 
+const handoff = new Date("2026-06-10T08:31:00.000Z");
+
 describe("WebsitePreviewCard", () => {
   it("renders the preview generating state when no website preview exists", () => {
-    render(<WebsitePreviewCard websitePreview={null} outreachSent={false} />);
+    render(<WebsitePreviewCard websitePreview={null} handedToInstantlyAt={null} />);
 
     expect(screen.getByText("Preview generating...")).toBeInTheDocument();
     expect(screen.getByText("Waiting for the preview worker to publish this lead's prototype.")).toBeInTheDocument();
@@ -27,7 +29,7 @@ describe("WebsitePreviewCard", () => {
   });
 
   it("renders preview metadata, iframe, and full preview link for a generated preview", () => {
-    render(<WebsitePreviewCard websitePreview={preview} outreachSent />);
+    render(<WebsitePreviewCard websitePreview={preview} handedToInstantlyAt={handoff} />);
 
     expect(screen.getByRole("button", { name: "Plumbing" })).toHaveClass("active");
     expect(screen.getByTitle("Website preview desktop")).toHaveAttribute("src", preview.previewUrl);
@@ -45,7 +47,7 @@ describe("WebsitePreviewCard", () => {
   });
 
   it("switches between desktop and mobile iframe viewports", () => {
-    render(<WebsitePreviewCard websitePreview={preview} outreachSent={false} />);
+    render(<WebsitePreviewCard websitePreview={preview} handedToInstantlyAt={null} />);
 
     expect(screen.getByTitle("Website preview desktop")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Mobile view" }));
@@ -54,14 +56,39 @@ describe("WebsitePreviewCard", () => {
     expect(screen.queryByTitle("Website preview desktop")).toBeNull();
   });
 
-  it("only shows the delivered badge when outreach has been sent", () => {
-    const { rerender } = render(<WebsitePreviewCard websitePreview={preview} outreachSent={false} />);
+  it("never claims delivery, because the timestamp it has is only the handoff to Instantly", () => {
+    render(<WebsitePreviewCard websitePreview={preview} handedToInstantlyAt={handoff} />);
 
-    const sendRow = screen.getByText("Prototype link included in Step 1 opener").closest(".proto-send-row");
+    expect(screen.queryByText(/delivered/i)).toBeNull();
+    expect(document.querySelector(".proto-sent-badge")).toBeNull();
+  });
+
+  it("reports the handoff to Instantly with its timestamp", () => {
+    render(<WebsitePreviewCard websitePreview={preview} handedToInstantlyAt={handoff} />);
+
+    const sendRow = screen.getByText("Prototype link included in the opener").closest(".proto-send-row");
     expect(sendRow).not.toBeNull();
-    expect(within(sendRow as HTMLElement).queryByText("Delivered")).toBeNull();
+    expect(within(sendRow as HTMLElement).getByText(/Handed to Instantly 10 June 2026/)).toBeInTheDocument();
+    expect(within(sendRow as HTMLElement).getByText(/Instantly confirms no delivery back to this dashboard/)).toBeInTheDocument();
+  });
 
-    rerender(<WebsitePreviewCard websitePreview={preview} outreachSent />);
-    expect(within(screen.getByText("Prototype link included in Step 1 opener").closest(".proto-send-row") as HTMLElement).getByText("Delivered")).toBeInTheDocument();
+  it("says nothing has been handed over when there is no handoff timestamp", () => {
+    render(<WebsitePreviewCard websitePreview={preview} handedToInstantlyAt={null} />);
+
+    const sendRow = screen.getByText("Prototype link included in the opener").closest(".proto-send-row");
+    expect(within(sendRow as HTMLElement).getByText("Not handed to Instantly yet")).toBeInTheDocument();
+    expect(within(sendRow as HTMLElement).queryByText(/Handed to Instantly/)).toBeNull();
+  });
+
+  it("only says the template went out with outreach once there is a handoff", () => {
+    const { rerender } = render(<WebsitePreviewCard websitePreview={preview} handedToInstantlyAt={null} />);
+
+    expect(screen.queryByText(/handed to Instantly · Generated/)).toBeNull();
+    expect(screen.getByText(/^Industry-matched template · Generated 10 June 2026$/)).toBeInTheDocument();
+
+    rerender(<WebsitePreviewCard websitePreview={preview} handedToInstantlyAt={handoff} />);
+    expect(
+      screen.getByText("Industry-matched template, included in the outreach handed to Instantly · Generated 10 June 2026"),
+    ).toBeInTheDocument();
   });
 });

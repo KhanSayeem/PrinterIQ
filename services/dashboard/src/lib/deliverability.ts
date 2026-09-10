@@ -153,12 +153,8 @@ export function filterAccountsBySendingDomains(
   return accounts.filter((account) => allowed.has(domainOf(account.email)));
 }
 
-export function parseSendingDomains(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((domain) => domain.trim().toLowerCase())
-    .filter(Boolean);
-}
+/** Re-exported so existing importers keep one implementation between them. */
+export { parseSendingDomains, resolveSendingDomains } from "./sending-domains";
 
 function domainOf(email: string): string {
   const at = email.lastIndexOf("@");

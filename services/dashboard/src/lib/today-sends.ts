@@ -1,10 +1,7 @@
 import { InstantlyHttpClient } from "@/clients/instantly";
 import type { InstantlySentEmail } from "@/clients/instantly";
-import {
-  filterAccountsBySendingDomains,
-  parseSendingDomains,
-  type MetricAvailability,
-} from "@/lib/deliverability";
+import { filterAccountsBySendingDomains, type MetricAvailability } from "@/lib/deliverability";
+import { MISSING_SENDING_DOMAINS_MESSAGE, resolveSendingDomains } from "@/lib/sending-domains";
 import { getSydneyDayRange, type SydneyDayRange } from "@/lib/sydney-day";
 
 /**
@@ -63,8 +60,7 @@ export type LoadTodaySendTotalsOptions = {
 
 const MISSING_API_KEY =
   "INSTANTLY_API_KEY is not configured, so today's send count cannot be read from Instantly.";
-const MISSING_DOMAINS =
-  "DELIVERABILITY_SENDING_DOMAINS is not set, so PrinterIQ mailboxes cannot be told apart from the other projects sharing this Instantly workspace.";
+const MISSING_DOMAINS = MISSING_SENDING_DOMAINS_MESSAGE;
 const NO_MATCHING_MAILBOX =
   "No Instantly mailbox matches the configured PrinterIQ sending domains.";
 const ACCOUNTS_FAILED = "Instantly did not return the sending accounts.";
@@ -164,16 +160,13 @@ export async function loadTodayInstantlySendTotals(
   }
 
   /**
-   * Both env vars name the same five PrinterIQ domains and both are set in
-   * production. Without either one, every mailbox in the workspace would be
-   * counted, including another project's, so the honest answer is that the
-   * figure is not available rather than a plausible larger number.
+   * One resolver for the whole estate, so this bar, /deliverability and
+   * /sending can never scope themselves differently. Without either env var
+   * every mailbox in the workspace would be counted, including another
+   * project's, so the honest answer is that the figure is not available rather
+   * than a plausible larger number.
    */
-  const sendingDomains =
-    options.sendingDomains ??
-    parseSendingDomains(
-      process.env.DELIVERABILITY_SENDING_DOMAINS || process.env.INSTANTLY_SENDING_DOMAINS,
-    );
+  const sendingDomains = options.sendingDomains ?? resolveSendingDomains();
 
   if (!sendingDomains.length) {
     return unavailableTotals(MISSING_DOMAINS);

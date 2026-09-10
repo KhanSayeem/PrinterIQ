@@ -18,6 +18,54 @@ function externalHref(value: string) {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
+/** The first moment this lead was handed to Instantly, or null if it never was.
+ *
+ * `outreach_sends.sent_at` is stamped when the pipeline hands the lead over,
+ * not when an email is sent and not when one is delivered, so nothing derived
+ * from it may claim a delivery. `outreach_sends.step` is not tested here on
+ * purpose: nothing ever writes it, so every row carries the schema default of
+ * 1 and filtering on it would only look like a filter.
+ */
+function earliestHandoff(sends: Outreach[]): Date | null {
+  const handoffs = sends
+    .map((send) => send.sentAt)
+    .filter((sentAt): sentAt is Date => sentAt instanceof Date);
+
+  if (!handoffs.length) return null;
+  return handoffs.reduce((earliest, sentAt) => (sentAt < earliest ? sentAt : earliest));
+}
+
+/** `enrichments.has_ssl` is nullable and a null is not a missing certificate.
+ *
+ * The auditor writes null when there is no site to load, when the site could
+ * not be reached, or when the audit could not run at all
+ * (services/pipeline/src/clients/playwright_audit.py, workers/enrich.py).
+ * Rendering that as "Missing" asserted a security defect about sites nobody
+ * ever loaded, so the unknown case says so and names the reason.
+ */
+function describeSsl(hasSsl: boolean | null) {
+  if (hasSsl === true) return "Present";
+  if (hasSsl === false) return "Missing";
+  return "Unknown (site not reached)";
+}
+
+/** A measured 0ms is a measurement. Only a null is an absence of one. */
+function describeLoadMs(loadMs: number | null) {
+  return loadMs === null ? "--" : `${loadMs}ms`;
+}
+
+function describeHandoff(sentAt: Date | null) {
+  if (!sentAt) return "Not handed to Instantly yet";
+  return `Handed to Instantly ${new Intl.DateTimeFormat("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Australia/Sydney",
+  }).format(sentAt)}`;
+}
+
 function renderExternalUrl(value: string | null) {
   if (!value?.trim()) {
     return <span className="detail-field-value">--</span>;
@@ -52,7 +100,7 @@ export function LeadDetailTabs({
   onDeleteNote?: (conversationId: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>("Overview");
-  const outreachSent = outreachSends.some((send) => send.step === 1 && send.sentAt !== null);
+  const handedToInstantlyAt = earliestHandoff(outreachSends);
 
   return (
     <>
@@ -80,8 +128,8 @@ export function LeadDetailTabs({
                   <>
                     <div className="detail-field"><span className="detail-field-label">CMS</span><span className="detail-field-value">{enrichment.cmsDetected ?? "--"}</span></div>
                     <div className="detail-field"><span className="detail-field-label">Tech source</span><span className="detail-field-value">{enrichment.techSource}</span></div>
-                    <div className="detail-field"><span className="detail-field-label">Load time</span><span className="detail-field-value">{enrichment.loadMs ? `${enrichment.loadMs}ms` : "--"}</span></div>
-                    <div className="detail-field"><span className="detail-field-label">SSL</span><span className="detail-field-value">{enrichment.hasSsl ? "Present" : "Missing"}</span></div>
+                    <div className="detail-field"><span className="detail-field-label">Load time</span><span className="detail-field-value">{describeLoadMs(enrichment.loadMs)}</span></div>
+                    <div className="detail-field"><span className="detail-field-label">SSL</span><span className="detail-field-value">{describeSsl(enrichment.hasSsl)}</span></div>
                   </>
                 ) : (
                   <div className="empty-state">No enrichment data yet.</div>
@@ -99,20 +147,34 @@ export function LeadDetailTabs({
                 <div className="empty-state">No qualification data yet.</div>
               )}
             </div>
-            <WebsitePreviewCard websitePreview={websitePreview} outreachSent={outreachSent} />
+            <WebsitePreviewCard websitePreview={websitePreview} handedToInstantlyAt={handedToInstantlyAt} />
           </>
         ) : null}
         {activeTab === "Conversation" ? (
           <ConversationThread conversations={conversations} now={now} onDeleteNote={onDeleteNote} />
         ) : null}
         {activeTab === "Outreach" ? (
-          outreachSends.length ? outreachSends.map((send) => (
-            <div className="outreach-row" key={send.id}>
-              <div className="outreach-step">Step {send.step}</div>
-              <div>{send.templateRef ?? send.channel}</div>
-              <div className="td-muted">{send.replied ? "Replied" : send.opened ? "Opened" : send.delivered ? "Delivered" : "Pending"}</div>
-            </div>
-          )) : <div className="empty-state">No outreach sends yet. Qualified leads will appear here after scheduling.</div>
+          outreachSends.length ? (
+            <>
+              {outreachSends.map((send) => (
+                <div className="outreach-row" key={send.id}>
+                  <div className="outreach-step">{describeHandoff(send.sentAt)}</div>
+                  <div>{send.templateRef ?? "No template recorded"}</div>
+                  <div className="td-muted">{send.channel}</div>
+                </div>
+              ))}
+              {/* No step number and no send status, because neither is written.
+                  `step` is the schema default of 1 on every row, `template_ref`
+                  is null on every row, and nothing ever writes `delivered`,
+                  `opened` or `replied`, so the old status column read "Pending"
+                  for leads Instantly had already emailed. */}
+              <div className="empty-state">
+                One row per handoff to Instantly. Instantly sends the opener and every follow-up on its own
+                schedule and writes no row here, so delivery and open status live in Instantly. Replies appear
+                in the Conversation tab.
+              </div>
+            </>
+          ) : <div className="empty-state">No outreach sends yet. Qualified leads will appear here after scheduling.</div>
         ) : null}
         {activeTab === "Payment" ? (
           payment ? (
