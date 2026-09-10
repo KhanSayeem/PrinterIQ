@@ -584,6 +584,9 @@ def test_dry_run_entrypoint_prints_the_sms_and_sends_nothing(monkeypatch, capsys
             self.keys[key] = value
             return True
 
+        async def exists(self, key: str) -> int:
+            return 1 if key in self.keys else 0
+
         async def delete(self, key: str) -> int:
             return 1 if self.keys.pop(key, None) is not None else 0
 
@@ -625,6 +628,10 @@ def test_dry_run_entrypoint_prints_the_sms_and_sends_nothing(monkeypatch, capsys
     assert result.verdict.state == "elevated"
     assert result.alert_sent is True
     assert redis_client.closed is True
+    # The whole point of a rehearsal: it changed nothing. This used to claim
+    # the real cooldown for an hour, so running it on the live box to check
+    # the alarm was armed was what disarmed it.
+    assert redis_client.keys == {}
 
     printed = capsys.readouterr().out
     # `--dry-run` is the operator's proof the alarm is armed, so the body it

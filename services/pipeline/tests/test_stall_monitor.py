@@ -13,8 +13,10 @@ from ops.stall_monitor import (
     ALERT_COOLDOWN_SECONDS,
     OpsAlert,
     QueueProgressReader,
+    ReadOnlyAlertThrottle,
     RedisAlertThrottle,
     StallCheckResult,
+    build_alert_throttle,
     run_stall_check,
 )
 
@@ -92,6 +94,9 @@ class FakeRedis:
             return None
         self.keys[key] = value
         return True
+
+    async def exists(self, key: str) -> int:
+        return 1 if key in self.keys else 0
 
     async def delete(self, key: str) -> int:
         return 1 if self.keys.pop(key, None) is not None else 0
@@ -318,3 +323,185 @@ def test_redis_throttle_claims_once_then_refuses_until_cleared() -> None:
         assert await throttle.claim_alert(cooldown_seconds=ALERT_COOLDOWN_SECONDS) is True
 
     asyncio.run(scenario())
+
+
+def test_a_dry_run_throttle_does_not_take_the_claim_a_real_check_needs() -> None:
+    """A rehearsal must not be able to silence the next real page.
+
+    `--dry-run` swaps the SMS sink for one that prints, but the throttle was
+    left as the real Redis one, so a rehearsal took the cooldown claim for a
+    full hour and then printed to a terminal instead of texting anyone. The
+    next scheduled check, the one that would have paged a human, found the
+    cooldown held and stood down. Verifying the alarm was enough to disarm it.
+    """
+
+    async def scenario() -> None:
+        redis = FakeRedis()
+        rehearsal = ReadOnlyAlertThrottle(redis=redis, key="printeriq:ops:pipeline_stall")
+
+        assert await rehearsal.claim_alert(cooldown_seconds=ALERT_COOLDOWN_SECONDS) is True
+        # Nothing was written, so the real check that follows still pages.
+        assert redis.keys == {}
+        real = RedisAlertThrottle(redis=redis, key="printeriq:ops:pipeline_stall")
+        assert await real.claim_alert(cooldown_seconds=ALERT_COOLDOWN_SECONDS) is True
+
+    asyncio.run(scenario())
+
+
+def test_a_dry_run_throttle_still_reports_a_cooldown_it_would_have_hit() -> None:
+    """Read-only is not the same as always-yes.
+
+    The point of a rehearsal is to show what the real check would do. If it
+    answered True while a cooldown was standing it would show an SMS that
+    production would never have sent.
+    """
+
+    async def scenario() -> None:
+        redis = FakeRedis()
+        real = RedisAlertThrottle(redis=redis, key="printeriq:ops:pipeline_stall")
+        assert await real.claim_alert(cooldown_seconds=ALERT_COOLDOWN_SECONDS) is True
+
+        rehearsal = ReadOnlyAlertThrottle(redis=redis, key="printeriq:ops:pipeline_stall")
+
+        assert await rehearsal.claim_alert(cooldown_seconds=ALERT_COOLDOWN_SECONDS) is False
+
+    asyncio.run(scenario())
+
+
+def test_a_dry_run_throttle_does_not_clear_a_standing_alert() -> None:
+    """The recovery path mutates Redis too, and it is the worse one.
+
+    `clear_alert` deletes the outstanding flag and the cooldown. A rehearsal
+    taken while an alert was standing would clear the real flag and print a
+    recovery, so the one recovery text the operator was owed is spent on a
+    terminal nobody is reading, and production believes it already announced.
+    """
+
+    async def scenario() -> None:
+        redis = FakeRedis()
+        real = RedisAlertThrottle(redis=redis, key="printeriq:ops:pipeline_stall")
+        await real.claim_alert(cooldown_seconds=ALERT_COOLDOWN_SECONDS)
+
+        rehearsal = ReadOnlyAlertThrottle(redis=redis, key="printeriq:ops:pipeline_stall")
+
+        assert await rehearsal.clear_alert() is True
+        # Still standing, so the real recovery is still owed and still sent.
+        assert await real.clear_alert() is True
+
+    asyncio.run(scenario())
+
+
+def test_build_alert_throttle_writes_only_when_it_is_not_a_dry_run() -> None:
+    """One builder, so a new monitor cannot forget the dry-run case.
+
+    Both monitors wired `RedisAlertThrottle` directly and both had this bug.
+    Choosing the throttle in one place is what stops the third one repeating
+    it.
+    """
+    redis = FakeRedis()
+
+    assert isinstance(
+        build_alert_throttle(redis=redis, key="printeriq:ops:pipeline_stall", dry_run=False),
+        RedisAlertThrottle,
+    )
+    assert isinstance(
+        build_alert_throttle(redis=redis, key="printeriq:ops:pipeline_stall", dry_run=True),
+        ReadOnlyAlertThrottle,
+    )
+
+
+def test_stall_dry_run_entrypoint_prints_the_sms_and_writes_no_redis_state(
+    monkeypatch, capsys
+) -> None:
+    """The stall monitor's `--dry-run` must leave production state alone too.
+
+    This test exists because a mutation proved it was missing: dropping
+    `dry_run` at this monitor's throttle call site, restoring the exact bug,
+    left all 650 tests green. The bounce monitor had a dry-run entrypoint test
+    that caught it and this one did not, so the fix was undefended here.
+    """
+    from ops import stall_monitor
+
+    monkeypatch.setattr(stall_monitor, "load_pipeline_env", lambda: False)
+    monkeypatch.setenv("TENANT_ID", str(TENANT_ID))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+
+    class FakeRedisClient:
+        def __init__(self) -> None:
+            self.lists = {"bull:pipeline:wait": 3321, "bull:pipeline:active": 5}
+            self.keys: dict[str, str] = {}
+            self.closed = False
+
+        async def llen(self, key: str) -> int:
+            return self.lists.get(key, 0)
+
+        async def zcard(self, key: str) -> int:
+            return 0
+
+        async def exists(self, key: str) -> int:
+            return 1 if key in self.keys else 0
+
+        async def set(
+            self, key: str, value: str, *, nx: bool = False, ex: int | None = None
+        ) -> bool | None:
+            del ex
+            if nx and key in self.keys:
+                return None
+            self.keys[key] = value
+            return True
+
+        async def delete(self, key: str) -> int:
+            return 1 if self.keys.pop(key, None) is not None else 0
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    redis_client = FakeRedisClient()
+
+    class FakeConnectionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_: object) -> bool:
+            return False
+
+    class FakePool:
+        def acquire(self) -> FakeConnectionContext:
+            return FakeConnectionContext()
+
+        async def close(self) -> None:
+            return None
+
+    async def create_pool(*_: object, **__: object) -> FakePool:
+        return FakePool()
+
+    def import_module(name: str) -> object:
+        if name == "asyncpg":
+            return type("Module", (), {"create_pool": staticmethod(create_pool)})
+        return type("Module", (), {"get_redis_client": staticmethod(lambda: redis_client)})
+
+    monkeypatch.setattr(stall_monitor.importlib, "import_module", import_module)
+
+    class FakeStore:
+        def __init__(self, _connection: object) -> None:
+            pass
+
+        async def fetch_queue_progress(self, *, tenant_id: UUID) -> QueueProgress:
+            del tenant_id
+            return QueueProgress(
+                last_completion_at=datetime.now(UTC) - timedelta(days=14),
+                last_start_at=datetime.now(UTC) - timedelta(days=14),
+                active_job_count=5,
+                oldest_active_started_at=datetime.now(UTC) - timedelta(days=14),
+            )
+
+    monkeypatch.setattr(stall_monitor, "QueueJobStore", FakeStore)
+
+    result = asyncio.run(stall_monitor._run_checks(once=True, dry_run=True))
+
+    assert result.verdict.stalled is True
+    assert result.alert_sent is True
+    assert redis_client.closed is True
+    # A rehearsal that claims the real cooldown silences the next real check.
+    assert redis_client.keys == {}
+    assert "[dry-run]" in capsys.readouterr().out
