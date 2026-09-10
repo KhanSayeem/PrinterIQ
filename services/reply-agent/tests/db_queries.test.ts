@@ -298,6 +298,40 @@ describe("reply-agent DB queries", () => {
     expect(params).toEqual(["tenant-id", "lead-id", "instantly-lead-123"]);
   });
 
+  // outreach_sends had no event time at all, so the dashboard dated a
+  // suppression by the row's last write and counted a lead suppressed last week
+  // against today's sends. These two columns are that event time.
+  it("stamps the bounce with its own event time", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ lead_id: "lead-id" }] });
+
+    await recordInstantlyBounce("tenant-id", "lead-id", "instantly-lead-123", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toContain("bounced_at = COALESCE(bounced_at, NOW())");
+    expect(sql).not.toContain("unsubscribed_at");
+  });
+
+  it("stamps the unsubscribe with its own event time", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ lead_id: "lead-id" }] });
+
+    await recordInstantlyUnsubscribe("tenant-id", "lead-id", "instantly-lead-123", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toContain("unsubscribed_at = COALESCE(unsubscribed_at, NOW())");
+    expect(sql).not.toContain("bounced_at");
+  });
+
+  // A redelivered webhook must not move the event to the day it was retried,
+  // which is the same mistake as dating it by updated_at.
+  it("keeps the first suppression time when the webhook is redelivered", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ lead_id: "lead-id" }] });
+
+    await recordInstantlyUnsubscribe("tenant-id", "lead-id", "instantly-lead-123", { query });
+
+    const [sql] = query.mock.calls[0]!;
+    expect(sql).toMatch(/unsubscribed_at = COALESCE\(unsubscribed_at, NOW\(\)\)/);
+  });
+
   it("fails bounce handling when no tenant-scoped Instantly send matches", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
 

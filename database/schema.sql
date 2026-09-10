@@ -153,9 +153,23 @@ CREATE TABLE outreach_sends (
   replied               BOOLEAN DEFAULT FALSE,
   bounced               BOOLEAN DEFAULT FALSE,
   unsubscribed          BOOLEAN DEFAULT FALSE,
+  -- When the suppression happened, not when the row was last written. Null on
+  -- rows flagged before migration 0014, and the dashboard reports those
+  -- separately rather than dating them by updated_at.
+  bounced_at            TIMESTAMPTZ,
+  unsubscribed_at       TIMESTAMPTZ,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT outreach_sends_suppression_times_consistent
+    CHECK (
+      (bounced_at IS NULL OR bounced = TRUE)
+      AND (unsubscribed_at IS NULL OR unsubscribed = TRUE)
+    )
 );
+
+CREATE INDEX idx_outreach_sends_tenant_unsubscribed_at
+ON outreach_sends (tenant_id, unsubscribed_at DESC)
+WHERE unsubscribed_at IS NOT NULL;
 
 CREATE TABLE conversations (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),

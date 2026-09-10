@@ -54,9 +54,12 @@ export function SendRateControl({
   return (
     <div className="send-rate-content">
       <div className="metrics-grid">
+        {/* Not the campaign level daily limit. This is the sum of the
+            per mailbox Instantly limits, which the campaign limit can cap
+            well below. The caveat under the control below says so too. */}
         <div className="metric-card">
-          <div className="metric-label">Campaign daily total</div>
-          <div className="metric-value" aria-label="Campaign daily total">
+          <div className="metric-label">Mailbox daily limit total</div>
+          <div className="metric-value" aria-label="Mailbox daily limit total">
             {snapshot.campaignDailyTotal}
           </div>
           <div className="metric-delta">sum of the mailbox daily limits below</div>
@@ -86,9 +89,9 @@ export function SendRateControl({
       <div className="ai-card send-rate-card">
         <div className="ai-card-title">Set the daily limit</div>
         <div className="ai-card-sub">
-          The requested campaign total is split across the mailboxes in scope and written to each
-          one as its Instantly daily limit. This does not change the campaign level daily limit in
-          Instantly, which can still cap sending lower.
+          The requested total is split across the mailboxes in scope and written to each one as its
+          Instantly daily limit. This does not change the campaign level daily limit in Instantly,
+          which can still cap sending lower.
         </div>
 
         <form
@@ -99,7 +102,7 @@ export function SendRateControl({
           }}
         >
           <label className="form-label" htmlFor="send-rate-total">
-            New campaign daily total
+            New mailbox daily limit total
           </label>
           <div className="send-rate-input-row">
             <input

@@ -861,6 +861,7 @@ export function buildServer(options: BuildServerOptions): FastifyInstance {
         await sendOpsAlert(
           { subject: parsed.data.subject ?? "", body: parsed.data.body },
           opsAlert.sms,
+          opsAlert.balance,
         );
       } catch (error) {
         console.error(

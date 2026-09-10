@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { RevenueMetrics, formatUsd } from "@/components/RevenueMetrics";
+import { AiSpendBreakdown } from "@/components/AiSpendBreakdown";
+import { RevenueMetrics } from "@/components/RevenueMetrics";
 import { getDashboardTenantId } from "@/auth/tenant";
 import {
   getRevenueAnalytics,
@@ -78,39 +79,7 @@ function RevenueView({ analytics }: { analytics: RevenueAnalytics }) {
         ))}
       </div>
       <RevenueMetrics analytics={analytics} />
-      <div className="ai-card">
-        <div className="ai-card-title">AI spend breakdown</div>
-        <div className="ai-card-sub">Claude API calls logged by model and prompt version</div>
-        {analytics.aiCosts.length === 0 ? (
-          <div className="empty-inline">No AI spend recorded yet.</div>
-        ) : (
-          analytics.aiCosts.map((row) => (
-            <div className="ai-row" key={`${row.modelName}-${row.promptVersion}`}>
-              <div className={`ai-dot ${row.modelFamily === "Haiku" ? "haiku" : "sonnet"}`} />
-              <div className="ai-model-cell">
-                <div className="ai-model-name">
-                  Claude {row.modelFamily} <span className="ai-model-sub">· {row.promptVersion}</span>
-                </div>
-                <div className="ai-calls-count">
-                  {row.calls.toLocaleString()} calls · {row.modelName}
-                </div>
-              </div>
-              <div className="ai-cost-val">{formatUsd(row.costUsd)}</div>
-            </div>
-          ))
-        )}
-        <div className="ai-total-row">
-          <div>
-            <div className="ai-total-label">Total AI spend</div>
-            <div className="ai-total-sub">
-              {analytics.paidCount === 0
-                ? "No paid leads in this period"
-                : `${formatUsd(analytics.totalAiCostUsd / analytics.paidCount)} per paid lead`}
-            </div>
-          </div>
-          <div className="ai-total-val">{formatUsd(analytics.totalAiCostUsd)}</div>
-        </div>
-      </div>
+      <AiSpendBreakdown analytics={analytics} />
     </div>
   );
 }
