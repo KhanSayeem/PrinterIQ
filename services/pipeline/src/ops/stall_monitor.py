@@ -258,18 +258,27 @@ def _required_env(name: str) -> str:
     return value
 
 
-def build_alert_sink(*, dry_run: bool = False) -> AlertSink:
+def build_alert_sink(
+    *,
+    dry_run: bool = False,
+    source: str = "pipeline-stall-monitor",
+) -> AlertSink:
     """Build the alert path, or refuse to run.
 
     A monitor that starts without a delivery path is worse than no monitor: it
     fills the log with healthy checks and stays silent on the one that matters.
     Missing configuration raises here, at startup, where PM2 shows it.
+
+    Shared with `ops.bounce_monitor`, which passes its own `source`. One place
+    that knows how to reach the reply agent means one place to fix when that
+    changes, and both alarms fail to start for the same reason if it breaks.
     """
     if dry_run:
         return PrintingAlertSink()
     return ReplyAgentAlertSink(
         base_url=_required_env("REPLY_AGENT_INTERNAL_URL"),
         secret=_required_env("OPS_ALERT_SECRET"),
+        source=source,
     )
 
 

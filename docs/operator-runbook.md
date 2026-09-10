@@ -834,3 +834,191 @@ check itself failed, which is different from finding a stall.
    WHERE error_message LIKE '%watchdog%'
    ORDER BY started_at DESC LIMIT 20;
    ```
+
+## Cold email bounce rate alarm
+
+### Why it exists
+
+Bounces are one of the signals mailbox providers use to judge a sender, and
+the PrinterIQ estate has almost no sending history to absorb a bad batch: ADR
+005 records roughly 29 real cold emails sent across all 8 Prescia mailboxes
+before the ramp started. On the first real sending day the two live campaigns
+sent 30 emails and 3 of them bounced, which is 10%.
+
+The dashboard cannot be relied on for this and neither can our database. Both
+learn about a bounce only when Instantly posts a bounce webhook, and that
+webhook silently dropped every event for months until it was fixed in #165. So
+the alarm reads `GET /api/v2/campaigns/analytics` directly and trusts what
+Instantly itself believes.
+
+### What it does
+
+`pipeline-bounce-monitor` runs every 15 minutes under PM2 and sends an SMS to
+`ESCALATION_PHONE` when **both** halves of the rule are true:
+
+- the bounce rate for today is at or above **3%**, and
+- at least **30 emails** have been sent today across the campaigns.
+
+Both halves matter. One bounce out of two sends is 50% and means nothing, and
+an alarm that fired on it would get muted. 30 sends is day 1 of the ramp in ADR
+005, so it is the smallest volume a live sending day deliberately produces: a
+higher floor would leave the alarm silent through the first days of a ramp,
+which is exactly when a cold domain is most exposed.
+
+A rate at or above **15%** is a second, more urgent message. 3% means the list
+is drifting and the fix is to pull the unverified bucket. 15% means the segment
+is dead and sending should stop before the next batch goes out.
+
+Below 30 sends the alarm says **"not enough volume to judge"**, which is not
+the same as healthy and is not treated as one. In particular a fresh window
+after midnight has 0 sends in it, and that never counts as recovery: a
+standing alert is only stood down by a real healthy reading built on enough
+volume.
+
+At most one SMS per tier per hour while a breach persists, and one more when it
+recovers. Every ops alert also carries a warning tail when the Twilio credit is
+running low, because the account is on a trial balance and when it empties
+every alarm in this system goes silent.
+
+The thresholds are read from `/root/printeriq/.env` and none of them are
+required:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BOUNCE_RATE_THRESHOLD` | `0.03` | Rate at which the ordinary alert fires |
+| `BOUNCE_RATE_CRITICAL_THRESHOLD` | `0.15` | Rate at which the urgent alert fires |
+| `BOUNCE_RATE_MIN_SENDS` | `30` | Sends required before a rate is judged |
+| `BOUNCE_RATE_WINDOW_DAYS` | `1` | Days of sending the rate covers |
+| `TWILIO_BALANCE_WARN_USD` | `2.00` | Credit below which alerts carry a warning |
+
+3% is a PrinterIQ operating choice, not a provider figure. ADR 005 is explicit
+that no official Google or Microsoft bounce-rate threshold exists and that the
+commonly cited "under 2%" is vendor blog material. Raise
+`BOUNCE_RATE_MIN_SENDS` once the estate is holding 155 sends a day, because a
+30 send floor will be met before breakfast.
+
+### One-time setup on the VPS
+
+1. The alarm sends through the same path as the stall alarm, so if
+   `pipeline-stall-monitor` is already armed there is nothing new to configure.
+   If it is not, follow "One-time setup on the VPS" under **Pipeline stall
+   alarm** first: `OPS_ALERT_SECRET` and `REPLY_AGENT_INTERNAL_URL` in
+   `/root/printeriq/.env`, and a working `ESCALATION_PHONE`.
+
+2. Confirm the campaign ids the alarm will watch are set in
+   `/root/printeriq/.env`. It reads the same two variables the pipeline sends
+   to, so it cannot end up watching a different set of campaigns than the ones
+   receiving leads:
+
+   ```bash
+   cd /root/printeriq
+   grep -c INSTANTLY_CAMPAIGN_ID .env
+   grep -c INSTANTLY_NO_WEBSITE_CAMPAIGN_ID .env
+   ```
+
+   Both must print `1`. Do not cat the file, it holds every credential.
+
+3. Prove it is armed, **without sending a text**:
+
+   ```bash
+   cd /root/printeriq/services/pipeline
+   PYTHONPATH=src /root/printeriq/.venv/bin/python -m ops.bounce_monitor --once --dry-run
+   ```
+
+   `--dry-run` prints the exact SMS instead of sending it, so this costs
+   nothing and wakes nobody. Expect one of three kinds of output:
+
+   - a breach, printed as the SMS body and prefixed `[dry-run]`, for example
+     `[dry-run] PrinterIQ bounce alarm: Bounce rate 10.0% today, above the 3%
+     threshold. 3 bounced of 30 sent across 2 campaigns. Approved action: pull
+     the remaining unverified email bucket from the campaigns and hold the
+     ramp.`
+   - `Bounce rate 0.7% today, under the 3% threshold. 1 bounced of 152 sent
+     across 2 campaigns.` on a good day
+   - `Bounce rate not enough volume to judge: 4 sent and 0 bounced across 2
+     campaigns today, floor is 30 sends.` before the send window has filled up
+
+   Each is followed by a per-campaign breakdown, which the SMS leaves out.
+
+   Two ways this tells you it is **not** armed: a `Missing env var` line, or
+   `Bounce rate unknown: Instantly returned no campaign analytics rows`, which
+   means the configured campaign ids match nothing in Instantly.
+
+4. Restart the reply agent so it picks up the balance check, then start the
+   monitor:
+
+   ```bash
+   cd /root/printeriq
+   pm2 restart reply-agent
+   pm2 start ecosystem.config.js --only pipeline-bounce-monitor
+   pm2 save
+   ```
+
+5. Confirm the cron actually took, rather than assuming it did:
+
+   ```bash
+   pm2 describe pipeline-bounce-monitor | grep -E 'cron|status'
+   pm2 logs pipeline-bounce-monitor --lines 20 --nostream
+   ```
+
+`pm2 status` shows `pipeline-bounce-monitor` as `stopped` between cron ticks.
+That is correct: it is a one-shot process, not a daemon. `errored` means the
+check itself failed, which is different from finding a high bounce rate. A
+found breach still exits 0, because the alarm is the SMS. The one exception is
+a read that returned no campaign rows at all, which exits 1 on purpose: the
+alarm is blind and that should be visible in `pm2 status` rather than only in
+a log.
+
+### When you get a bounce rate SMS
+
+1. Read the numbers in the message. It carries the rate, the bounce and send
+   counts behind it, and the action already approved for it.
+2. Pull the remaining unverified email bucket from both campaigns in the
+   Instantly UI and hold the ramp at its current level. That is the approved
+   decision for a rate that stays above 3%, and the ADR 005 ramp rule is to
+   hold or step back a level on any meaningful rise in bounces.
+3. If the message says `CRITICAL`, stop sending first: open
+   `https://dashboard.presciaiq.com/sending` and use **Stop all sending**, then
+   deal with the bucket. See "Emergency stop" at the top of this runbook.
+4. Check the split per campaign before deciding, because the SMS carries the
+   estate total:
+
+   ```bash
+   cd /root/printeriq/services/pipeline
+   PYTHONPATH=src /root/printeriq/.venv/bin/python -m ops.bounce_monitor --once --dry-run
+   ```
+
+   This will not send a second SMS.
+5. The alarm goes quiet for an hour after each message, per tier. To page again
+   sooner, clear the cooldown:
+
+   ```bash
+   redis-cli DEL printeriq:ops:bounce_rate:elevated:cooldown
+   redis-cli DEL printeriq:ops:bounce_rate:critical:cooldown
+   ```
+
+### Twilio credit
+
+Every alarm in this system, this one and the stall alarm, reaches you as a
+Twilio SMS. The account is on a **trial plan** and had **10.90 USD** on it on
+2026-09-10, which at Australian SMS rates is roughly 100 two-segment alerts.
+When it empties, every alarm goes silent and nothing on any screen says so.
+
+Ops alerts therefore carry a tail like
+`Twilio credit USD 1.85, top up or alerts stop.` once the balance drops below
+`TWILIO_BALANCE_WARN_USD` (2.00 by default), and the same line appears in
+`pm2 logs reply-agent` as `ops alert twilio balance low`.
+
+Read the balance yourself at any time. This endpoint is free, so checking it
+never costs a message:
+
+```bash
+cd /root/printeriq
+set -a && . ./.env && set +a
+curl -s -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
+  "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/Balance.json"
+```
+
+The limit worth knowing: at 0.00 USD no SMS goes out at all, including the
+warning. The log line is the only place the silence gets explained, so check
+`pm2 logs reply-agent` if an alarm you expected never arrived.

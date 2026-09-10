@@ -79,6 +79,35 @@ module.exports = {
       },
     },
     {
+      // Bounce rate alarm. Answers one question every 15 minutes: is the cold
+      // email bounce rate above the level where sending domains start getting
+      // burned, on enough volume for the rate to mean anything?
+      //
+      // Reads the counts from Instantly rather than our own database. Our
+      // tables only learn about a bounce through the Instantly webhook, and
+      // that webhook silently dropped every event for months until #165, so
+      // it is the wrong source of truth for a deliverability alarm.
+      //
+      // 15 minutes rather than the stall monitor's 5: a bounce rate is a
+      // daily aggregate that cannot move meaningfully inside a quarter of an
+      // hour, and every check is a live Instantly API call.
+      //
+      // One-shot on a cron, same as the stall monitor. autorestart false so a
+      // clean exit is not read as a crash, cron_restart so PM2 relaunches it.
+      name: 'pipeline-bounce-monitor',
+      interpreter: '/root/printeriq/.venv/bin/python',
+      script: 'src/ops/bounce_monitor.py',
+      args: '--once',
+      cwd: '/root/printeriq/services/pipeline',
+      watch: false,
+      autorestart: false,
+      cron_restart: '*/15 * * * *',
+      env: {
+        ...rootEnv,
+        NODE_ENV: 'production',
+      },
+    },
+    {
       name: 'reply-agent',
       script: 'dist/webhook.js',
       cwd: '/root/printeriq/services/reply-agent',

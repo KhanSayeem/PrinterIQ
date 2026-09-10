@@ -22,6 +22,11 @@ export type SmsClient = {
   sendSms(input: { to: string; body: string }): Promise<void>;
 };
 
+/** Reads how much Twilio credit is left, in USD, or null if it cannot tell. */
+export type BalanceClient = {
+  readBalanceUsd(): Promise<number | null>;
+};
+
 export type InstantlyClient = {
   pauseLead(instantlyLeadId: string, instantlyCampaignId: string): Promise<void>;
 };
@@ -90,6 +95,66 @@ export class TwilioSmsClient implements SmsClient {
     if (!response.ok) {
       throw new Error(`Twilio SMS send failed with ${response.status}; response body omitted`);
     }
+  }
+}
+
+/** How long to wait on the balance read before giving up on it.
+ *
+ * The balance is a courtesy attached to an alert that is already being sent,
+ * so it gets a short leash. Five seconds is enough for a healthy API call and
+ * short enough that a hanging Twilio cannot delay a page about a burning
+ * sending domain by anything an operator would notice.
+ */
+const BALANCE_TIMEOUT_MS = 5_000;
+
+/** Reads the remaining Twilio credit.
+ *
+ * `GET /2010-04-01/Accounts/{sid}/Balance.json` is free, which is the whole
+ * reason this is affordable to call on every alert: checking the balance
+ * cannot itself consume the balance.
+ *
+ * Every failure path returns null rather than throwing. The caller is on the
+ * alert delivery path and an unreadable balance must never cost the operator
+ * the alert, so "I cannot tell" is a first-class answer here.
+ */
+export class TwilioBalanceClient implements BalanceClient {
+  constructor(
+    private readonly accountSid = process.env.TWILIO_ACCOUNT_SID,
+    private readonly authToken = process.env.TWILIO_AUTH_TOKEN,
+    private readonly baseUrl = TWILIO_BASE_URL,
+  ) {}
+
+  async readBalanceUsd(): Promise<number | null> {
+    if (!this.accountSid || !this.authToken) {
+      return null;
+    }
+
+    const response = await fetch(
+      `${this.baseUrl}/2010-04-01/Accounts/${encodeURIComponent(this.accountSid)}/Balance.json`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
+        },
+        signal: AbortSignal.timeout(BALANCE_TIMEOUT_MS),
+      },
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as { balance?: unknown; currency?: unknown };
+
+    // A balance in another currency compared against a USD threshold would
+    // either warn on every alert or on none of them, so it declines to guess
+    // rather than inventing a conversion rate.
+    if (payload.currency !== "USD") {
+      return null;
+    }
+
+    const balance = Number(payload.balance);
+    return Number.isFinite(balance) ? balance : null;
   }
 }
 

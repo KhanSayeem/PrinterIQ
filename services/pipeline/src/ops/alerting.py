@@ -44,11 +44,17 @@ class ReplyAgentAlertSink:
         *,
         base_url: str,
         secret: str,
+        source: str = "pipeline-stall-monitor",
         timeout_seconds: float = 15.0,
         http_client_factory: object | None = None,
     ) -> None:
         self._url = f"{base_url.rstrip('/')}/internal/ops-alert"
         self._secret = secret
+        # Names the monitor that raised this, so `pm2 logs reply-agent` can
+        # tell a stall page apart from a bounce page when a delivery fails.
+        # There is more than one ops monitor now, and the reply agent only
+        # ever logs this field, never the body.
+        self._source = source
         self._timeout_seconds = timeout_seconds
         self._http_client_factory = http_client_factory
 
@@ -64,7 +70,7 @@ class ReplyAgentAlertSink:
                 self._url,
                 headers={"x-ops-alert-secret": self._secret},
                 json={
-                    "source": "pipeline-stall-monitor",
+                    "source": self._source,
                     "subject": alert.subject,
                     "body": alert.body,
                 },
@@ -81,7 +87,9 @@ class PrintingAlertSink:
     """Writes the alert to stdout instead of sending it.
 
     For `--dry-run`, so an operator can read the exact SMS the alarm would
-    send without paying for one or waking anybody up.
+    send without paying for one or waking anybody up. On a Twilio trial
+    balance that is not only about noise: every dry run that would otherwise
+    have been a real send is a real alert still available later.
     """
 
     def __init__(self) -> None:
