@@ -180,6 +180,55 @@ class RedisAlertThrottle:
         return bool(removed)
 
 
+class ReadOnlyAlertThrottle:
+    """The throttle a `--dry-run` gets: answers the same questions, writes nothing.
+
+    A rehearsal used to run against `RedisAlertThrottle`, because `--dry-run`
+    only ever reached the SMS sink. So a dry run on the live box took the real
+    cooldown claim for a full hour and then printed the alert to a terminal.
+    The next scheduled check, the one that would have paged a human, found the
+    cooldown held and stood down. Checking that the alarm worked was enough to
+    switch it off, and nothing in the output said so.
+
+    The recovery path was worse: `clear_alert` deletes the outstanding flag, so
+    a rehearsal spent the one recovery text the operator was owed on a
+    terminal nobody was reading, and production then believed it had already
+    announced.
+
+    So this reads the same keys and returns the same answers without a single
+    write. It is deliberately not an always-yes stub: the point of a rehearsal
+    is to show what production would do, and answering True while a cooldown
+    stands would show an SMS production would never have sent.
+    """
+
+    def __init__(self, *, redis: object, key: str = ALERT_STATE_KEY) -> None:
+        self._redis = cast(Any, redis)
+        self._cooldown_key = f"{key}:cooldown"
+        self._outstanding_key = f"{key}:outstanding"
+
+    async def claim_alert(self, *, cooldown_seconds: float) -> bool:
+        # EXISTS rather than SET NX. Same answer, no claim taken.
+        del cooldown_seconds
+        held = await self._redis.exists(self._cooldown_key)
+        return not bool(held)
+
+    async def clear_alert(self) -> bool:
+        outstanding = await self._redis.exists(self._outstanding_key)
+        return bool(outstanding)
+
+
+def build_alert_throttle(*, redis: object, key: str, dry_run: bool) -> AlertThrottle:
+    """Pick the throttle that matches the run.
+
+    Both monitors constructed `RedisAlertThrottle` inline and both therefore
+    had the dry-run bug. Choosing here means the next monitor inherits the
+    fix instead of repeating the mistake.
+    """
+    if dry_run:
+        return ReadOnlyAlertThrottle(redis=redis, key=key)
+    return RedisAlertThrottle(redis=redis, key=key)
+
+
 async def run_stall_check(
     *,
     reader: ProgressReader,
@@ -291,7 +340,7 @@ async def _run_checks(*, once: bool, dry_run: bool) -> StallCheckResult:
     redis_client = importlib.import_module("clients.redis_client").get_redis_client()
     asyncpg = importlib.import_module("asyncpg")
     pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
-    throttle = RedisAlertThrottle(redis=redis_client)
+    throttle = build_alert_throttle(redis=redis_client, key=ALERT_STATE_KEY, dry_run=dry_run)
 
     try:
         while True:
