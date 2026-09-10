@@ -1,11 +1,33 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { PipelineConversion } from "@/db/queries";
+import type { PipelineConversion } from "@/lib/pipeline-funnel";
 import { ConversionChart } from "./ConversionChart";
 
+function measured(value: number) {
+  return { available: true as const, value };
+}
+
+function missing(reason: string) {
+  return { available: false as const, reason };
+}
+
 const conversions: PipelineConversion[] = [
-  { from: "imported", to: "enriched", label: "70.0%", rate: 70, count: 7, droppedCount: 3 },
-  { from: "enriched", to: "qualified", label: "--", rate: null, count: 0, droppedCount: 0 },
+  {
+    from: "imported",
+    to: "enriched",
+    rate: measured(70),
+    count: measured(7),
+    enteredCount: measured(10),
+    droppedCount: measured(3),
+  },
+  {
+    from: "enriched",
+    to: "qualified",
+    rate: missing("No leads ever reached Enriched, so there is no rate to measure"),
+    count: measured(0),
+    enteredCount: measured(0),
+    droppedCount: measured(0),
+  },
 ];
 
 function hitAreas(container: HTMLElement) {
@@ -38,9 +60,30 @@ describe("ConversionChart", () => {
 
   it("shows the hovered bar's own numbers, not the first bar's", () => {
     const threeBars: PipelineConversion[] = [
-      { from: "imported", to: "enriched", label: "70.0%", rate: 70, count: 7, droppedCount: 3 },
-      { from: "enriched", to: "qualified", label: "50.0%", rate: 50, count: 4, droppedCount: 4 },
-      { from: "qualified", to: "contacted", label: "25.0%", rate: 25, count: 1, droppedCount: 3 },
+      {
+        from: "imported",
+        to: "enriched",
+        rate: measured(70),
+        count: measured(7),
+        enteredCount: measured(10),
+        droppedCount: measured(3),
+      },
+      {
+        from: "enriched",
+        to: "qualified",
+        rate: measured(50),
+        count: measured(4),
+        enteredCount: measured(8),
+        droppedCount: measured(4),
+      },
+      {
+        from: "qualified",
+        to: "contacted",
+        rate: measured(25),
+        count: measured(1),
+        enteredCount: measured(4),
+        droppedCount: measured(3),
+      },
     ];
     const { container } = render(<ConversionChart conversions={threeBars} />);
 
@@ -63,14 +106,14 @@ describe("ConversionChart", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
-  it("says there is no prior stage data instead of inventing a percentage", () => {
+  it("gives the reason a rate is missing instead of inventing a percentage", () => {
     const { container } = render(<ConversionChart conversions={conversions} />);
 
     fireEvent.mouseEnter(hitAreas(container)[1]);
 
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveTextContent("Qualified");
-    expect(tooltip).toHaveTextContent("No prior stage data");
+    expect(tooltip).toHaveTextContent("No leads ever reached Enriched");
     expect(tooltip).not.toHaveTextContent("%");
   });
 
@@ -79,5 +122,84 @@ describe("ConversionChart", () => {
 
     expect(container.querySelector("svg.conversion-chart-svg")).not.toBeNull();
     expect(screen.getByRole("img", { name: /Conversion between stages/ })).toBeInTheDocument();
+  });
+
+  /**
+   * The live regression. Qualified sat at 2 and contacted at 1951 in
+   * `leads.status`, and this label rendered 97550.0% over a bar that the old
+   * clamp drew at a healthy full height. Cohort figures make it a real rate.
+   */
+  it("renders the live qualified to contacted step as a sane percentage", () => {
+    render(
+      <ConversionChart
+        conversions={[
+          {
+            from: "qualified",
+            to: "contacted",
+            rate: measured((6480 / 7120) * 100),
+            count: measured(6480),
+            enteredCount: measured(7120),
+            droppedCount: measured(640),
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("91.0%")).toBeInTheDocument();
+    expect(screen.queryByText(/9755/)).not.toBeInTheDocument();
+    expect(screen.getByText("6,480 of 7,120")).toBeInTheDocument();
+    expect(screen.getByText("640 dropped")).toBeInTheDocument();
+  });
+
+  it("says a missing rate is not available rather than drawing it as zero", () => {
+    const { container } = render(
+      <ConversionChart
+        conversions={[
+          {
+            from: "contacted",
+            to: "replied",
+            rate: missing("A webhook bug dropped inbound replies"),
+            count: missing("A webhook bug dropped inbound replies"),
+            enteredCount: measured(6480),
+            droppedCount: missing("A webhook bug dropped inbound replies"),
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Not available")).toBeInTheDocument();
+    expect(screen.queryByText("0.0%")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 dropped")).not.toBeInTheDocument();
+    expect(screen.getByText("6,480 reached Contacted")).toBeInTheDocument();
+    expect(container.querySelector(".cc-bar")).toBeNull();
+  });
+
+  /**
+   * A rate over 100% means the later cohort is bigger than the earlier one.
+   * The bar has to stay inside the plot, but it must not read as a healthy
+   * complete bar and the label must still print the true figure.
+   */
+  it("keeps a rate above 100% inside the plot and still prints the true figure", () => {
+    const { container } = render(
+      <ConversionChart
+        conversions={[
+          {
+            from: "qualified",
+            to: "contacted",
+            rate: measured(150),
+            count: measured(300),
+            enteredCount: measured(200),
+            droppedCount: missing("More leads reached Contacted than ever reached Qualified"),
+          },
+        ]}
+      />,
+    );
+
+    const bar = container.querySelector(".cc-bar");
+    expect(bar).not.toBeNull();
+    expect(Number(bar?.getAttribute("height"))).toBeLessThanOrEqual(170);
+    expect(bar?.getAttribute("class")).toContain("cc-bar-over");
+    expect(screen.getByText("150.0%")).toBeInTheDocument();
+    expect(screen.getByText("Drop not measurable")).toBeInTheDocument();
   });
 });

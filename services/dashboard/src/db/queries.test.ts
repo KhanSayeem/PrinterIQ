@@ -14,6 +14,12 @@ import {
   buildLatestInstantlyLeadIdQuery,
   buildLatestInstantlyReplyMetadataQuery,
   buildPipelineStatusCountsQuery,
+  buildPipelineImportedCountQuery,
+  buildPipelineEnrichedCountQuery,
+  buildPipelineQualifiedCountQuery,
+  buildPipelineContactedCountQuery,
+  buildPipelineRepliedCountQuery,
+  buildPipelinePaidCountQuery,
   buildRelatedLeadDataQueries,
   buildRevenueImportedCountQuery,
   buildTodayReplyCountQuery,
@@ -684,12 +690,78 @@ describe("dashboard D2 analytics queries", () => {
     expect(query.params).toContain(tenantId);
   });
 
-  it("zero-fills pipeline statuses and avoids divide-by-zero conversions", () => {
-    const analytics = normalizePipelineAnalytics([
-      { status: "imported", count: 3 },
-      { status: "qualified", count: "1" },
-      { status: "archived", count: 2 },
-    ]);
+  it("scopes each milestone cohort by tenant_id and excludes deleted leads", () => {
+    const builders = [
+      buildPipelineImportedCountQuery,
+      buildPipelineEnrichedCountQuery,
+      buildPipelineQualifiedCountQuery,
+      buildPipelineContactedCountQuery,
+      buildPipelineRepliedCountQuery,
+      buildPipelinePaidCountQuery,
+    ];
+
+    for (const build of builders) {
+      const query = build(db, { tenantId }).toSQL();
+
+      expect(query.sql).toContain('"leads"."is_deleted" =');
+      expect(query.params).toContain(tenantId);
+    }
+  });
+
+  it("counts each milestone cohort from evidence rows that outlive the status change", () => {
+    expect(buildPipelineImportedCountQuery(db, { tenantId }).toSQL().sql).toContain('from "leads"');
+
+    const enriched = buildPipelineEnrichedCountQuery(db, { tenantId }).toSQL();
+    expect(enriched.sql).toContain('from "enrichments"');
+    expect(enriched.sql).toContain('count(distinct "enrichments"."lead_id")');
+
+    const qualified = buildPipelineQualifiedCountQuery(db, { tenantId }).toSQL();
+    expect(qualified.sql).toContain('from "qualifications"');
+    expect(qualified.sql).toContain('count(distinct "qualifications"."lead_id")');
+
+    const contacted = buildPipelineContactedCountQuery(db, { tenantId }).toSQL();
+    expect(contacted.sql).toContain('from "outreach_sends"');
+    expect(contacted.sql).toContain('count(distinct "outreach_sends"."lead_id")');
+
+    const replied = buildPipelineRepliedCountQuery(db, { tenantId }).toSQL();
+    expect(replied.sql).toContain('from "conversations"');
+    expect(replied.sql).toContain('"conversations"."direction" =');
+    expect(replied.params).toContain("inbound");
+
+    const paid = buildPipelinePaidCountQuery(db, { tenantId }).toSQL();
+    expect(paid.sql).toContain('from "payments"');
+    expect(paid.sql).toContain('"payments"."status" =');
+    expect(paid.params).toContain("paid");
+  });
+
+  it("reads the funnel from milestone cohorts, never from the status histogram", () => {
+    const analytics = normalizePipelineAnalytics({
+      milestones: {
+        imported: "7574",
+        enriched: "7480",
+        qualified: "7120",
+        contacted: "6480",
+        replied: "0",
+        paid: "3",
+      },
+      statusRows: [
+        { status: "imported", count: 45 },
+        { status: "enriched", count: "2" },
+        { status: "qualified", count: 2 },
+        { status: "contacted", count: 1951 },
+        { status: "archived", count: 5574 },
+      ],
+    });
+
+    const qualifiedToContacted = analytics.conversions.find(
+      (row) => row.from === "qualified" && row.to === "contacted",
+    );
+    expect(qualifiedToContacted?.rate.available).toBe(true);
+    expect(qualifiedToContacted?.rate.available && qualifiedToContacted.rate.value).toBeCloseTo(
+      91.0,
+      1,
+    );
+    expect(qualifiedToContacted?.droppedCount).toEqual({ available: true, value: 640 });
 
     expect(analytics.stages.map((stage) => stage.status)).toEqual([
       "imported",
@@ -700,37 +772,32 @@ describe("dashboard D2 analytics queries", () => {
       "paid",
       "archived",
     ]);
-    expect(analytics.stages.map((stage) => stage.count)).toEqual([3, 0, 1, 0, 0, 0, 2]);
-    expect(analytics.conversions[0]).toMatchObject({
-      from: "imported",
-      to: "enriched",
-      rate: 0,
-    });
-    expect(analytics.conversions[1]).toMatchObject({
-      from: "enriched",
-      to: "qualified",
-      rate: null,
-      label: "--",
-    });
+    expect(analytics.total).toBe(7574);
+
+    const contacted = analytics.stages.find((stage) => stage.status === "contacted");
+    expect(contacted?.count).toEqual({ available: true, value: 6480 });
+    expect(contacted?.currentCount).toBe(1951);
   });
 
-  it("adds non-negative drop-off counts to conversion rows", () => {
-    const analytics = normalizePipelineAnalytics([
-      { status: "imported", count: 2 },
-      { status: "enriched", count: 5 },
-      { status: "qualified", count: 3 },
-    ]);
+  it("keeps the replied cohort unavailable rather than reporting a zero reply rate", () => {
+    const analytics = normalizePipelineAnalytics({
+      milestones: {
+        imported: "7574",
+        enriched: "7480",
+        qualified: "7120",
+        contacted: "6480",
+        replied: "0",
+        paid: "3",
+      },
+      statusRows: [{ status: "contacted", count: 1951 }],
+    });
 
-    expect(analytics.conversions[0]).toMatchObject({
-      from: "imported",
-      to: "enriched",
-      droppedCount: 0,
-    });
-    expect(analytics.conversions[1]).toMatchObject({
-      from: "enriched",
-      to: "qualified",
-      droppedCount: 2,
-    });
+    const contactedToReplied = analytics.conversions.find(
+      (row) => row.from === "contacted" && row.to === "replied",
+    );
+
+    expect(contactedToReplied?.rate.available).toBe(false);
+    expect(contactedToReplied?.count.available).toBe(false);
   });
 
 });

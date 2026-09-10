@@ -336,7 +336,9 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .stage-card:focus-visible, .metric-card.is-clickable:focus-visible, .today-metric.is-clickable:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
 .stage-name { font-size: 9px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 10px; }
 .stage-count { font-size: 26px; font-weight: 300; letter-spacing: 0; font-family: var(--font-mono); }
-.stage-pct { font-size: 10px; color: var(--text-tertiary); margin-top: 3px; }
+.stage-pct { font-size: 10px; color: var(--text-tertiary); margin-top: 3px; line-height: 1.45; }
+.stage-count-unavailable { font-size: 13px; font-weight: 500; font-family: var(--font); color: #92400e; }
+.stage-note { font-size: 10px; color: var(--text-tertiary); margin-top: 3px; line-height: 1.45; }
 .funnel-bars { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 22px; }
 .funnel-bars-title { font-size: 13px; font-weight: 500; }
 .conversion-chart-heading { margin-bottom: 16px; }
@@ -355,6 +357,8 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .cc-axis-label { fill: var(--text-tertiary); font-size: 10px; font-family: var(--font-mono); }
 .cc-bar { fill: var(--accent); }
 .cc-bar-paid { fill: #059669; }
+/* A rate over 100% is capped at the axis, so it is recoloured rather than left looking like a complete bar. */
+.cc-bar-over { fill: #b45309; }
 .cc-bar-empty { fill: var(--bg-active); }
 .cc-value { fill: var(--text-primary); font-size: 13px; font-weight: 500; font-family: var(--font-mono); }
 .cc-value-muted { fill: var(--text-tertiary); font-size: 10px; font-family: var(--font); font-weight: 400; }

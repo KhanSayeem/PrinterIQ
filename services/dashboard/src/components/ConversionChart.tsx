@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { PipelineConversion } from "@/db/queries";
+import type { MetricAvailability } from "@/lib/deliverability";
+import { formatPipelineRate, type PipelineConversion } from "@/lib/pipeline-funnel";
 
 const chartWidth = 720;
 const chartHeight = 286;
@@ -11,6 +12,7 @@ const plotHeight = chartHeight - padding.top - padding.bottom;
 const plotBottom = padding.top + plotHeight;
 const gridValues = [0, 25, 50, 75, 100];
 const maxBarWidth = 62;
+const UNAVAILABLE_LABEL = "Not available";
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
@@ -20,19 +22,48 @@ function transitionLabel(conversion: PipelineConversion) {
   return `${titleCase(conversion.from)} to ${titleCase(conversion.to)}`;
 }
 
-function enteredPreviousStage(conversion: PipelineConversion) {
-  return conversion.count + conversion.droppedCount;
+function rateLabel(rate: MetricAvailability<number>) {
+  return rate.available ? formatPipelineRate(rate.value) : UNAVAILABLE_LABEL;
+}
+
+/**
+ * The cohort line under a bar. Whatever was measured is shown, and whatever
+ * was not is named. "0 of 0" would read as a real, empty population.
+ */
+function cohortLabel(conversion: PipelineConversion) {
+  if (conversion.count.available && conversion.enteredCount.available) {
+    return `${conversion.count.value.toLocaleString()} of ${conversion.enteredCount.value.toLocaleString()}`;
+  }
+  if (conversion.enteredCount.available) {
+    return `${conversion.enteredCount.value.toLocaleString()} reached ${titleCase(conversion.from)}`;
+  }
+
+  return `${titleCase(conversion.from)} cohort not counted`;
+}
+
+function dropLabel(conversion: PipelineConversion) {
+  return conversion.droppedCount.available
+    ? `${conversion.droppedCount.value.toLocaleString()} dropped`
+    : "Drop not measurable";
+}
+
+/** Trims a trailing full stop so the summary does not read "result..". */
+function sentenceCase(reason: string) {
+  return reason.replace(/\.\s*$/, "");
 }
 
 function summarize(conversions: PipelineConversion[]) {
-  const measured = conversions.filter((conversion) => conversion.rate !== null);
-  if (!measured.length) {
+  if (!conversions.length) {
     return "Conversion between stages. No stage transitions have data yet.";
   }
 
-  return `Conversion between stages. ${measured
-    .map((conversion) => `${transitionLabel(conversion)} ${conversion.label}`)
-    .join(", ")}.`;
+  return `Conversion between stages. ${conversions
+    .map((conversion) =>
+      conversion.rate.available
+        ? `${transitionLabel(conversion)} ${formatPipelineRate(conversion.rate.value)}`
+        : `${transitionLabel(conversion)} not available, ${sentenceCase(conversion.rate.reason)}`,
+    )
+    .join(". ")}.`;
 }
 
 /** Percentage positions so the tooltip tracks the SVG as the viewBox scales. */
@@ -54,13 +85,22 @@ export function ConversionChart({ conversions }: { conversions: PipelineConversi
   function barGeometry(conversion: PipelineConversion, index: number) {
     const bandCentre = padding.left + bandWidth * (index + 0.5);
     const rate = conversion.rate;
-    const hasRate = rate !== null;
-    const barHeight = hasRate ? Math.max((Math.min(rate, 100) / 100) * plotHeight, rate > 0 ? 2 : 0) : 0;
+    const hasRate = rate.available;
+    /**
+     * The bar is capped at the top of the axis so it cannot spill out of the
+     * plot, and a capped bar is marked so it does not read as a healthy
+     * complete one. The label always prints the true rate.
+     */
+    const overAxis = rate.available && rate.value > 100;
+    const barHeight = rate.available
+      ? Math.max((Math.min(rate.value, 100) / 100) * plotHeight, rate.value > 0 ? 2 : 0)
+      : 0;
 
     return {
       bandCentre,
       barX: bandCentre - barWidth / 2,
       hasRate,
+      overAxis,
       barHeight,
       barY: plotBottom - barHeight,
     };
@@ -99,7 +139,10 @@ export function ConversionChart({ conversions }: { conversions: PipelineConversi
             })}
 
             {conversions.map((conversion, index) => {
-              const { bandCentre, barX, hasRate, barHeight, barY } = barGeometry(conversion, index);
+              const { bandCentre, barX, hasRate, overAxis, barHeight, barY } = barGeometry(
+                conversion,
+                index,
+              );
 
               return (
                 <g key={`${conversion.from}-${conversion.to}`}>
@@ -107,18 +150,18 @@ export function ConversionChart({ conversions }: { conversions: PipelineConversi
                     <>
                       <rect
                         className={`cc-bar ${conversion.to === "paid" ? "cc-bar-paid" : ""} ${
-                          hoveredIndex === index ? "cc-bar-hovered" : ""
-                        }`}
+                          overAxis ? "cc-bar-over" : ""
+                        } ${hoveredIndex === index ? "cc-bar-hovered" : ""}`}
                         x={barX}
                         y={barY}
                         width={barWidth}
                         height={barHeight}
                         rx={3}
                       >
-                        <title>{`${transitionLabel(conversion)}: ${conversion.label}`}</title>
+                        <title>{`${transitionLabel(conversion)}: ${rateLabel(conversion.rate)}`}</title>
                       </rect>
                       <text className="cc-value" x={bandCentre} y={barY - 9} textAnchor="middle">
-                        {conversion.label}
+                        {rateLabel(conversion.rate)}
                       </text>
                     </>
                   ) : (
@@ -130,9 +173,11 @@ export function ConversionChart({ conversions }: { conversions: PipelineConversi
                         width={barWidth}
                         height={6}
                         rx={3}
-                      />
+                      >
+                        <title>{`${transitionLabel(conversion)}: ${conversion.rate.available ? "" : conversion.rate.reason}`}</title>
+                      </rect>
                       <text className="cc-value cc-value-muted" x={bandCentre} y={plotBottom - 16} textAnchor="middle">
-                        No prior stage data
+                        {UNAVAILABLE_LABEL}
                       </text>
                     </>
                   )}
@@ -140,10 +185,10 @@ export function ConversionChart({ conversions }: { conversions: PipelineConversi
                     {titleCase(conversion.to)}
                   </text>
                   <text className="cc-detail" x={bandCentre} y={plotBottom + 42} textAnchor="middle">
-                    {`${conversion.count.toLocaleString()} of ${enteredPreviousStage(conversion).toLocaleString()}`}
+                    {cohortLabel(conversion)}
                   </text>
                   <text className="cc-detail" x={bandCentre} y={plotBottom + 58} textAnchor="middle">
-                    {`${conversion.droppedCount.toLocaleString()} dropped`}
+                    {dropLabel(conversion)}
                   </text>
                 </g>
               );
@@ -176,12 +221,14 @@ export function ConversionChart({ conversions }: { conversions: PipelineConversi
             >
               <div className="cc-tooltip-stage">{titleCase(hovered.to)}</div>
               <div className="cc-tooltip-count">
-                {`${hovered.count.toLocaleString()} of ${enteredPreviousStage(hovered).toLocaleString()} leads`}
+                {hovered.count.available && hovered.enteredCount.available
+                  ? `${cohortLabel(hovered)} leads`
+                  : cohortLabel(hovered)}
               </div>
               <div className="cc-tooltip-rate">
-                {hovered.rate === null
-                  ? "No prior stage data"
-                  : `${hovered.label} of ${titleCase(hovered.from)}`}
+                {hovered.rate.available
+                  ? `${formatPipelineRate(hovered.rate.value)} of ${titleCase(hovered.from)}`
+                  : hovered.rate.reason}
               </div>
             </div>
           ) : null}
