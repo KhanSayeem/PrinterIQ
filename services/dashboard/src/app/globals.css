@@ -382,8 +382,6 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .ai-row { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--border); }
 .ai-row:last-child { border-bottom: none; padding-bottom: 0; }
 .ai-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #6366f1; }
-.ai-dot.sonnet { background: #0ea5e9; }
-.ai-dot.haiku { background: #6366f1; }
 .ai-model-cell { flex: 1; min-width: 0; }
 .ai-model-name { font-size: 12px; font-weight: 500; }
 .ai-model-sub { font-size: 10px; color: var(--text-tertiary); }

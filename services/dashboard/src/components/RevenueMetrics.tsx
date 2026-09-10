@@ -32,24 +32,33 @@ export function RevenueMetrics({ analytics }: { analytics: RevenueAnalytics }) {
         positive={analytics.paidCount > 0}
         href="/leads?status=paid"
       />
+      {/* Both sides of this rate are the same population, distinct non-deleted
+          leads counted all time, so it answers "what share of my leads have
+          paid" and cannot pass 100%. It does not follow the period tabs: no
+          lead paying today was imported today, so a period numerator over a
+          period denominator would compare two different cohorts. */}
       <MetricCard
-        label="Conversion rate"
+        label="Conversion rate, all time"
         value={analytics.paidConversionRate === null ? "--" : `${analytics.paidConversionRate.toFixed(2)}%`}
-        delta="paid / imported"
+        delta={`${analytics.allTimePayingLeadCount.toLocaleString()} of ${analytics.allTimeLeadCount.toLocaleString()} leads have paid`}
         href="/pipeline"
       />
       <MetricCard
         label="Paid payments"
         value={analytics.paidCount.toLocaleString()}
-        delta={`${analytics.importedCount.toLocaleString()} imported leads`}
+        delta={`${analytics.importedCount.toLocaleString()} imported this period`}
         href="/leads?status=paid"
       />
-      {/* AI spend has no filtered view of its own: the per model breakdown is
+      {/* AI spend has no filtered view of its own: the model pair breakdown is
           the card directly below this grid on the same page. */}
       <MetricCard
         label="AI spend"
         value={formatUsd(analytics.totalAiCostUsd)}
-        delta={analytics.aiCosts.length === 0 ? "No AI spend recorded yet." : `${analytics.aiCosts.length} model rows`}
+        delta={
+          analytics.aiCosts.length === 0
+            ? "No AI spend recorded yet."
+            : `${analytics.aiCosts.length} model pair row${analytics.aiCosts.length === 1 ? "" : "s"}`
+        }
       />
     </div>
   );
