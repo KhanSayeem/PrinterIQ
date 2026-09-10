@@ -243,10 +243,23 @@ export type RevenueAnalytics = {
   period: RevenuePeriod;
   periodStart: Date;
   totalRevenueAud: number;
+  /** Paid payment rows in the period. A lead can hold more than one. */
   paidCount: number;
+  /** Distinct leads behind those payments, so a repeat payer counts once. */
+  payingLeadCount: number;
+  /** Leads imported in the period, not the size of the lead book. */
   importedCount: number;
+  /** Every non-deleted lead, all time. Denominator of paidConversionRate. */
+  allTimeLeadCount: number;
+  /** Distinct non-deleted leads that have ever paid. Its numerator. */
+  allTimePayingLeadCount: number;
+  /**
+   * All-time share of the lead book that has paid. Deliberately not period
+   * scoped: a lead paying today was imported weeks ago, so a period numerator
+   * over a period denominator would compare two different cohorts.
+   */
   paidConversionRate: number | null;
-  aiCosts: AiCostByModel[];
+  aiCosts: AiCostByModelPair[];
   totalAiCostUsd: number;
 };
 
@@ -303,9 +316,18 @@ export type TodaySoFarSummary = {
   hasActivity: boolean;
 };
 
-export type AiCostByModel = {
-  modelFamily: "Haiku" | "Sonnet";
-  modelName: string;
+/**
+ * One group of qualifications that ran the same models under the same prompt
+ * version. `qualifications.cost_usd` is the combined cost of the whole
+ * qualification, which calls Haiku and then, when it escalates, Sonnet. Only
+ * that one total is stored, so a group naming both models cannot be split
+ * between them. Both names are carried so the row can say what it covers
+ * instead of picking one model and lending it the other model's spend.
+ */
+export type AiCostByModelPair = {
+  haikuModelName: string;
+  /** Null when the group ran no Sonnet call, so the cost is Haiku only. */
+  sonnetModelName: string | null;
   promptVersion: string;
   calls: number;
   costUsd: number;
@@ -979,6 +1001,9 @@ export function buildRevenuePaymentsSummaryQuery(
   return db
     .select({
       paidCount: sql<string>`count(*)`,
+      // Distinct leads, not rows: two payments from one customer are one
+      // paying lead, and dividing AI spend by rows would halve the figure.
+      payingLeadCount: sql<string>`count(distinct ${payments.leadId})`,
       totalRevenueAud: sql<string>`coalesce(sum(${payments.amountAud}), 0)`,
     })
     .from(payments)
@@ -1929,17 +1954,24 @@ export async function getRevenueAnalytics(identity: { tenantId: string; period: 
 
   const db = getDb();
   const periodStart = getRevenuePeriodStart(identity.period);
-  const [paymentRows, importedRows, aiRows] = await Promise.all([
-    buildRevenuePaymentsSummaryQuery(db, { tenantId: identity.tenantId, periodStart }),
-    buildRevenueImportedCountQuery(db, { tenantId: identity.tenantId, periodStart }),
-    buildAiCostByModelQuery(db, { tenantId: identity.tenantId, periodStart }),
-  ]);
+  // The conversion rate reuses the two all-time cohort queries the pipeline
+  // page counts from, so both pages report the same paid-over-leads figure.
+  const [paymentRows, importedRows, aiRows, allTimeLeadRows, allTimePayingLeadRows] =
+    await Promise.all([
+      buildRevenuePaymentsSummaryQuery(db, { tenantId: identity.tenantId, periodStart }),
+      buildRevenueImportedCountQuery(db, { tenantId: identity.tenantId, periodStart }),
+      buildAiCostByModelQuery(db, { tenantId: identity.tenantId, periodStart }),
+      buildPipelineImportedCountQuery(db, { tenantId: identity.tenantId }),
+      buildPipelinePaidCountQuery(db, { tenantId: identity.tenantId }),
+    ]);
 
   const paymentSummary = paymentRows[0];
   const paidCount = toNumber(paymentSummary?.paidCount);
+  const payingLeadCount = toNumber(paymentSummary?.payingLeadCount);
   const totalRevenueAud = toNumber(paymentSummary?.totalRevenueAud);
   const importedCount = toNumber(importedRows[0]?.importedCount);
-  const paidConversionRate = importedCount === 0 ? null : (paidCount / importedCount) * 100;
+  const allTimeLeadCount = toNumber(allTimeLeadRows[0]?.count);
+  const allTimePayingLeadCount = toNumber(allTimePayingLeadRows[0]?.count);
   const aiCosts = normalizeAiCostRows(aiRows);
 
   return {
@@ -1947,11 +1979,31 @@ export async function getRevenueAnalytics(identity: { tenantId: string; period: 
     periodStart,
     totalRevenueAud,
     paidCount,
+    payingLeadCount,
     importedCount,
-    paidConversionRate,
+    allTimeLeadCount,
+    allTimePayingLeadCount,
+    paidConversionRate: computePaidConversionRate(allTimePayingLeadCount, allTimeLeadCount),
     aiCosts,
     totalAiCostUsd: aiCosts.reduce((sum, row) => sum + row.costUsd, 0),
   };
+}
+
+/**
+ * Share of the lead book that has paid, as a percentage. Numerator and
+ * denominator come from the same population, distinct non-deleted leads, so a
+ * paying lead is always inside the denominator and the result cannot
+ * legitimately pass 100 percent. If it does, the two counts disagree and that
+ * is a bug, so the rate is reported as unavailable rather than as a healthy
+ * looking number the operator would act on.
+ */
+export function computePaidConversionRate(
+  payingLeadCount: number,
+  leadCount: number,
+): number | null {
+  if (leadCount <= 0) return null;
+  if (payingLeadCount > leadCount) return null;
+  return (payingLeadCount / leadCount) * 100;
 }
 
 export async function insertOperatorConversation(input: OperatorConversationInput) {
@@ -2021,18 +2073,17 @@ function normalizeAiCostRows(
     calls: number | string;
     costUsd: number | string;
   }>,
-): AiCostByModel[] {
+): AiCostByModelPair[] {
+  // Both model names are kept as the query grouped them. Nothing here decides
+  // which model a group belongs to, because the stored cost covers both.
   return rows
-    .flatMap((row) => {
-      const family = row.modelSonnet ? "Sonnet" : "Haiku";
-      return {
-        modelFamily: family as AiCostByModel["modelFamily"],
-        modelName: row.modelSonnet ?? row.modelHaiku,
-        promptVersion: row.promptVersion,
-        calls: toNumber(row.calls),
-        costUsd: toNumber(row.costUsd),
-      };
-    })
+    .map((row) => ({
+      haikuModelName: row.modelHaiku,
+      sonnetModelName: row.modelSonnet,
+      promptVersion: row.promptVersion,
+      calls: toNumber(row.calls),
+      costUsd: toNumber(row.costUsd),
+    }))
     .sort((left, right) => right.costUsd - left.costUsd);
 }
 

@@ -25,6 +25,7 @@ import {
   buildPipelinePaidCountQuery,
   buildRelatedLeadDataQueries,
   buildRevenueImportedCountQuery,
+  computePaidConversionRate,
   buildTodayReplyCountQuery,
   buildTodayUnsubscribeCountQuery,
   normalizeTodaySoFar,
@@ -676,6 +677,13 @@ describe("dashboard D2 analytics queries", () => {
     expect(query.params).toContain("paid");
   });
 
+  it("counts paying leads by distinct lead so two payments from one lead are one lead", () => {
+    const query = buildRevenuePaymentsSummaryQuery(db, { tenantId, periodStart }).toSQL();
+
+    expect(query.sql).toContain('count(distinct "lead_id")');
+    expect(query.sql).toContain('from "payments"');
+  });
+
   it("scopes imported lead denominator by tenant_id and import period", () => {
     const query = buildRevenueImportedCountQuery(db, { tenantId, periodStart }).toSQL();
 
@@ -1288,5 +1296,24 @@ describe("today so far queries", () => {
   it("publishes the thresholds a sender has to react to", () => {
     expect(BOUNCE_RATE_WARNING_PERCENT).toBe(3);
     expect(UNSUBSCRIBE_RATE_WARNING_PERCENT).toBe(0.5);
+  });
+});
+
+describe("paid conversion rate", () => {
+  it("divides paying leads by every non-deleted lead, both counted all time", () => {
+    expect(computePaidConversionRate(3, 7574)).toBeCloseTo(0.0396, 4);
+  });
+
+  it("reports nothing rather than dividing by an empty lead book", () => {
+    expect(computePaidConversionRate(0, 0)).toBeNull();
+  });
+
+  it("reads zero paying leads as a real zero, not as unavailable", () => {
+    expect(computePaidConversionRate(0, 7574)).toBe(0);
+  });
+
+  it("refuses to report a rate above 100 percent when the two counts disagree", () => {
+    expect(computePaidConversionRate(7575, 7574)).toBeNull();
+    expect(computePaidConversionRate(7574, 7574)).toBe(100);
   });
 });
