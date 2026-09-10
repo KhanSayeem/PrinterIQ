@@ -385,6 +385,9 @@ describe("send rate server action wrappers", () => {
     revalidatePathMock.mockReset();
     requireOperatorMock.mockReset().mockResolvedValue({ id: "operator-1" });
     delete process.env.INSTANTLY_SENDING_DOMAINS;
+    // The fallback name has to go too, or "not configured" is not the state
+    // under test. See src/lib/sending-domains.ts.
+    delete process.env.DELIVERABILITY_SENDING_DOMAINS;
   });
 
   it("requires an authenticated operator before reading limits", async () => {

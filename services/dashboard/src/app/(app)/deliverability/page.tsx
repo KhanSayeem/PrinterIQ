@@ -6,9 +6,9 @@ import {
   buildDeliverabilityReport,
   filterAccountsBySendingDomains,
   isoDateDaysBefore,
-  parseSendingDomains,
   sendingDayIsoDate,
 } from "@/lib/deliverability";
+import { MISSING_SENDING_DOMAINS_MESSAGE, resolveSendingDomains } from "@/lib/sending-domains";
 
 /** The sending estate is Australian, so the sending day is read in Sydney time. */
 const DEFAULT_TIMEZONE = "Australia/Sydney";
@@ -54,7 +54,13 @@ export default async function DeliverabilityPage() {
     );
   }
 
-  const sendingDomains = parseSendingDomains(process.env.DELIVERABILITY_SENDING_DOMAINS);
+  /** Same allowlist as /sending, read through the same resolver.
+   *
+   * These two pages used to read different env vars, so a drift between them
+   * would have reported two different estate sizes with nothing on screen
+   * saying so. See src/lib/sending-domains.ts.
+   */
+  const sendingDomains = resolveSendingDomains();
   const mailboxes = filterAccountsBySendingDomains(accounts, sendingDomains);
 
   /**
@@ -78,8 +84,7 @@ export default async function DeliverabilityPage() {
   }
 
   if (!notice && !sendingDomains.length) {
-    notice =
-      "DELIVERABILITY_SENDING_DOMAINS is not set, so every mailbox in the Instantly workspace is listed. ADR 005 records that some of them belong to a different project and are not PrinterIQ capacity.";
+    notice = `${MISSING_SENDING_DOMAINS_MESSAGE} Every mailbox in the workspace is listed below, and ADR 005 records that some of them belong to a different project and are not PrinterIQ capacity.`;
   }
 
   const report = buildDeliverabilityReport({ accounts: mailboxes, analytics, today });

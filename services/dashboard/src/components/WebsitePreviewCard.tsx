@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Lock, Mail, Monitor, Smartphone } from "lucide-react";
+import { Lock, Mail, Monitor, Smartphone } from "lucide-react";
 import { useState } from "react";
 
 export type WebsitePreviewDetail = {
@@ -23,12 +23,22 @@ const templates = [
   { key: "general", label: "General", detail: "Tradie Pro - General" },
 ] as const;
 
+/** When the lead was handed to Instantly, or null when it has not been.
+ *
+ * This is `outreach_sends.sent_at`, which `complete_outreach_send` in
+ * services/pipeline stamps with NOW() at the moment the lead is handed over.
+ * Instantly then sends the email later, on its own schedule, and tells this
+ * database nothing about it. So the timestamp is a handoff and nothing more:
+ * not a send, and certainly not a delivery. `outreach_sends.delivered` would
+ * be the delivery fact and nothing ever writes it, so no delivery claim can
+ * be made on this card at all.
+ */
 export function WebsitePreviewCard({
   websitePreview,
-  outreachSent,
+  handedToInstantlyAt,
 }: {
   websitePreview: WebsitePreviewDetail | null;
-  outreachSent: boolean;
+  handedToInstantlyAt: Date | string | null;
 }) {
   const [device, setDevice] = useState<DeviceMode>("desktop");
 
@@ -67,7 +77,12 @@ export function WebsitePreviewCard({
       <div className="website-preview-heading">
         <div>
           <div className="detail-card-title">Website prototype</div>
-          <div className="website-preview-sub">Industry-matched template sent with outreach · Generated {formatDate(websitePreview.generatedAt)}</div>
+          <div className="website-preview-sub">
+            {handedToInstantlyAt
+              ? "Industry-matched template, included in the outreach handed to Instantly"
+              : "Industry-matched template"}{" "}
+            · Generated {formatDate(websitePreview.generatedAt)}
+          </div>
         </div>
         <a className="preview-open-link" href={websitePreview.previewUrl} target="_blank" rel="noreferrer">
           Open full preview
@@ -147,15 +162,13 @@ export function WebsitePreviewCard({
           <Mail aria-hidden="true" />
         </div>
         <div className="proto-send-row-text">
-          <div className="proto-send-row-label">Prototype link included in Step 1 opener</div>
-          <div className="proto-send-row-sub">{outreachSent ? "Sent with outreach" : "Not sent yet"}</div>
-        </div>
-        {outreachSent ? (
-          <div className="proto-sent-badge">
-            <Check aria-hidden="true" />
-            Delivered
+          <div className="proto-send-row-label">Prototype link included in the opener</div>
+          <div className="proto-send-row-sub">
+            {handedToInstantlyAt
+              ? `Handed to Instantly ${formatHandoff(handedToInstantlyAt)}. Instantly confirms no delivery back to this dashboard.`
+              : "Not handed to Instantly yet"}
           </div>
-        ) : null}
+        </div>
       </div>
     </section>
   );
@@ -203,6 +216,20 @@ function capitalize(value: string) {
 
 function textValue(value: unknown, fallback: string | null) {
   return typeof value === "string" && value.trim().length > 0 ? value : fallback;
+}
+
+/** The handoff instant, in the operator's own timezone rather than the server's. */
+function formatHandoff(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "at an unrecorded time";
+  return new Intl.DateTimeFormat("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Australia/Sydney",
+  }).format(date);
 }
 
 function formatDate(value: Date | string) {

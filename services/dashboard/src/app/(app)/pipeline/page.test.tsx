@@ -14,18 +14,24 @@ vi.mock("@/db/queries", () => ({
   getPipelineAnalytics: getPipelineAnalyticsMock,
 }));
 
+import { buildPipelineFunnel } from "@/lib/pipeline-funnel";
+
 import PipelinePage from "./page";
 
-const analytics = {
-  total: 10,
-  stages: [
-    { status: "imported" as const, label: "Imported", count: 10, totalRate: 100 },
-    { status: "qualified" as const, label: "Qualified", count: 4, totalRate: 40 },
-  ],
-  conversions: [
-    { from: "imported" as const, to: "qualified" as const, label: "40.0%", rate: 40, count: 4, droppedCount: 6 },
-  ],
-};
+const analytics = buildPipelineFunnel({
+  milestones: {
+    imported: 7574,
+    enriched: 7546,
+    scored: 7543,
+    qualified: 4291,
+    contacted: 1960,
+    contactedQualified: 1955,
+    replied: 0,
+    paid: 0,
+  },
+  currentCounts: { imported: 45, qualified: 2, contacted: 1951, archived: 5574 },
+  qualificationThreshold: { available: true, value: 35 },
+});
 
 describe("PipelinePage", () => {
   beforeEach(() => {
@@ -66,5 +72,12 @@ describe("PipelinePage", () => {
     render(await PipelinePage());
 
     expect(screen.getByText(/Failed to load pipeline data/)).toBeInTheDocument();
+  });
+
+  it("does not call a current status snapshot an all time breakdown", async () => {
+    render(await PipelinePage());
+
+    expect(screen.queryByText(/all time/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/ever reached each stage/i)).toBeInTheDocument();
   });
 });

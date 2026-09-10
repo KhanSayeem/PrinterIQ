@@ -142,6 +142,11 @@ pipeline's file is a silent no-op.
 effect. The pipeline never reads it from env at all: the dashboard validates it
 per upload and threads it through the job payload as `score_threshold`.
 
+`/pipeline` reads the same variable. Every scored lead has a `qualifications`
+row whether it passed or failed, so the funnel needs the threshold to tell the
+Qualified cohort from the Scored one. Without it the Qualified stage renders as
+unavailable and names the variable, rather than guessing a pass mark.
+
 Set it:
 
 ```bash
@@ -262,6 +267,14 @@ Comma separate several domains, for example
 `INSTANTLY_SENDING_DOMAINS=presciaweb.com,second-domain.com`. Any Instantly account
 outside this list is counted separately on the page as out of scope and is never
 written to.
+
+`INSTANTLY_SENDING_DOMAINS` is the one variable that scopes the estate. **Sending**,
+**Deliverability** and the today bar all read it, so they report the same mailboxes
+and the same totals. `DELIVERABILITY_SENDING_DOMAINS` is still read as a fallback for
+hosts that only carry that older name, and it is used only when
+`INSTANTLY_SENDING_DOMAINS` is unset or empty. Setting both to different values is
+not supported: `INSTANTLY_SENDING_DOMAINS` wins. Set that one and, once every host
+has it, `DELIVERABILITY_SENDING_DOMAINS` can be removed.
 
 ### What it does and does not do
 

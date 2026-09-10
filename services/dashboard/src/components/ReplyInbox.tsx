@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReplyInboxFilterCounts, ReplyInboxRow } from "@/db/queries";
 import type { ReplyInboxFilter } from "@/lib/reply-inbox-params";
+import { REPLY_INGEST_UNKNOWN_MESSAGE, type ReplyIngestHealth } from "@/lib/reply-ingest-health";
 
 /** Labels for the intents `services/reply-agent` writes to conversations.intent.
  *
@@ -74,6 +75,7 @@ export function ReplyInbox({
   page,
   totalPages,
   total,
+  ingestHealth,
   now = new Date(),
 }: {
   replies: ReplyInboxRow[];
@@ -82,6 +84,12 @@ export function ReplyInbox({
   page: number;
   totalPages: number;
   total: number;
+  /** The inbound path's own health, or null when it could not be read.
+   *
+   * An empty inbox says what the ingest path last did instead of explaining
+   * the zero away. See src/lib/reply-ingest-health.ts for why.
+   */
+  ingestHealth: ReplyIngestHealth | null;
   now?: Date;
 }) {
   return (
@@ -101,7 +109,7 @@ export function ReplyInbox({
       {replies.length === 0 ? (
         <div className="empty-state">
           {counts.all === 0
-            ? "No replies yet. Instantly posts every inbound reply here as it arrives, so zero before the campaign is live is the correct number, not a fault."
+            ? (ingestHealth?.message ?? REPLY_INGEST_UNKNOWN_MESSAGE)
             : "No replies match this filter."}
         </div>
       ) : (
