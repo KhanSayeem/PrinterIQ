@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import type { MetricAvailability } from "@/lib/deliverability";
 import type { PreviewViewFilter } from "@/lib/lead-list-params";
 import {
   DEFAULT_REPLY_INBOX_FILTER,
@@ -10,13 +11,11 @@ import {
 } from "@/lib/reply-inbox-params";
 import {
   buildPipelineFunnel,
-  FUNNEL_STAGES,
   PIPELINE_STAGES,
-  type FunnelStageKey,
   type PipelineAnalytics,
-  type PipelineMilestoneCounts,
   type PipelineStageKey,
 } from "@/lib/pipeline-funnel";
+import { readQualificationScoreThreshold } from "@/lib/qualification-threshold";
 import { formatSydneyDayLabel, getSydneyDayRange } from "@/lib/sydney-day";
 import { getDb } from "./client";
 import {
@@ -383,22 +382,41 @@ function buildLeadListWhere(filters: LeadListFilters) {
   ].filter(Boolean);
 }
 
+type PipelineCountRow = number | string;
+
 export type PipelineAnalyticsRows = {
-  /** One count per funnel milestone, as returned by the cohort queries. */
-  milestones: Record<FunnelStageKey, number | string>;
+  /**
+   * One count per funnel milestone, as returned by the cohort queries. The two
+   * cohorts that need the passing score are null when it is not configured,
+   * because their queries cannot be built without it.
+   */
+  milestones: {
+    imported: PipelineCountRow;
+    enriched: PipelineCountRow;
+    scored: PipelineCountRow;
+    qualified: PipelineCountRow | null;
+    contacted: PipelineCountRow;
+    contactedQualified: PipelineCountRow | null;
+    replied: PipelineCountRow;
+    paid: PipelineCountRow;
+  };
   /** The `leads.status` histogram. Used for the current status figures only. */
   statusRows: Array<{ status: string; count: number | string }>;
+  /** The passing score, or the reason the funnel cannot name one. */
+  qualificationThreshold: MetricAvailability<number>;
 };
 
 /**
  * Turns the cohort and status rows into the funnel view model. The funnel
  * itself is computed by `buildPipelineFunnel`; this only coerces the counts,
  * which arrive from postgres as strings.
+ *
+ * A null count stays null rather than becoming zero. `toNumber` reads an
+ * unmeasured value as 0, and 0 qualified leads is a measurement, so the two
+ * threshold cohorts are coerced separately.
  */
 export function normalizePipelineAnalytics(rows: PipelineAnalyticsRows): PipelineAnalytics {
-  const milestones = Object.fromEntries(
-    FUNNEL_STAGES.map((stage) => [stage, toNumber(rows.milestones[stage])]),
-  ) as PipelineMilestoneCounts;
+  const optional = (value: PipelineCountRow | null) => (value === null ? null : toNumber(value));
 
   const currentCounts: Partial<Record<PipelineStageKey, number>> = {};
   for (const row of rows.statusRows) {
@@ -407,7 +425,20 @@ export function normalizePipelineAnalytics(rows: PipelineAnalyticsRows): Pipelin
     }
   }
 
-  return buildPipelineFunnel({ milestones, currentCounts });
+  return buildPipelineFunnel({
+    milestones: {
+      imported: toNumber(rows.milestones.imported),
+      enriched: toNumber(rows.milestones.enriched),
+      scored: toNumber(rows.milestones.scored),
+      qualified: optional(rows.milestones.qualified),
+      contacted: toNumber(rows.milestones.contacted),
+      contactedQualified: optional(rows.milestones.contactedQualified),
+      replied: toNumber(rows.milestones.replied),
+      paid: toNumber(rows.milestones.paid),
+    },
+    currentCounts,
+    qualificationThreshold: rows.qualificationThreshold,
+  });
 }
 
 export function normalizeRevenuePeriod(period: string | undefined): RevenuePeriod {
@@ -768,7 +799,12 @@ export function buildPipelineEnrichedCountQuery(db: DashboardDb, identity: { ten
     );
 }
 
-export function buildPipelineQualifiedCountQuery(db: DashboardDb, identity: { tenantId: string }) {
+/**
+ * Scoring coverage. `qualifications` holds a row for every lead the qualifier
+ * looked at, whether it passed or failed, so this counts leads that were
+ * scored and says nothing about whether they qualified.
+ */
+export function buildPipelineScoredCountQuery(db: DashboardDb, identity: { tenantId: string }) {
   requireTenantId(identity.tenantId);
 
   return db
@@ -778,6 +814,34 @@ export function buildPipelineQualifiedCountQuery(db: DashboardDb, identity: { te
     .where(
       and(
         eq(qualifications.tenantId, identity.tenantId),
+        eq(leads.tenantId, identity.tenantId),
+        eq(leads.isDeleted, false),
+      ),
+    );
+}
+
+/**
+ * The leads that actually qualified. The pass or fail decision is not stored:
+ * `qualify.py` compares `score` against the `score_threshold` in the job
+ * payload and archives the lead when it falls short, so the only way to name
+ * the passing cohort is to apply the same threshold here. The threshold is a
+ * required argument rather than a default, because a default would invent the
+ * figure the pass rate is entirely made of.
+ */
+export function buildPipelineQualifiedCountQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; scoreThreshold: number },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({ count: sql<string>`count(distinct ${qualifications.leadId})` })
+    .from(qualifications)
+    .innerJoin(leads, eq(leads.id, qualifications.leadId))
+    .where(
+      and(
+        eq(qualifications.tenantId, identity.tenantId),
+        gte(qualifications.score, identity.scoreThreshold),
         eq(leads.tenantId, identity.tenantId),
         eq(leads.isDeleted, false),
       ),
@@ -798,6 +862,64 @@ export function buildPipelineContactedCountQuery(db: DashboardDb, identity: { te
         eq(leads.isDeleted, false),
       ),
     );
+}
+
+/**
+ * The part of the contacted cohort that also met the threshold, and the
+ * numerator of the qualified to contacted step. On the live tenant 1,960 leads
+ * were contacted but only 1,955 of them met the current threshold, because 5
+ * were contacted when the threshold was lower. Dividing the full contacted
+ * count by the passing cohort would put those 5 in a numerator whose
+ * denominator excludes them.
+ */
+export function buildPipelineContactedQualifiedCountQuery(
+  db: DashboardDb,
+  identity: { tenantId: string; scoreThreshold: number },
+) {
+  requireTenantId(identity.tenantId);
+
+  return db
+    .select({ count: sql<string>`count(distinct ${outreachSends.leadId})` })
+    .from(outreachSends)
+    .innerJoin(leads, eq(leads.id, outreachSends.leadId))
+    .innerJoin(qualifications, eq(qualifications.leadId, outreachSends.leadId))
+    .where(
+      and(
+        eq(outreachSends.tenantId, identity.tenantId),
+        eq(qualifications.tenantId, identity.tenantId),
+        gte(qualifications.score, identity.scoreThreshold),
+        eq(leads.tenantId, identity.tenantId),
+        eq(leads.isDeleted, false),
+      ),
+    );
+}
+
+/**
+ * The two cohorts that cannot be counted without the passing score, or null
+ * when there is no passing score to count them by.
+ *
+ * The decision lives here rather than in `getPipelineAnalytics` so it is
+ * testable. Falling back to a threshold of 0 would build a predicate that
+ * every scored lead satisfies, which reports the whole scored population as
+ * qualified: the exact reading this stage was corrected for.
+ */
+export function buildPipelineThresholdCohortQueries(
+  db: DashboardDb,
+  identity: { tenantId: string },
+  threshold: MetricAvailability<number>,
+) {
+  requireTenantId(identity.tenantId);
+
+  if (!threshold.available) {
+    return null;
+  }
+
+  const scoped = { tenantId: identity.tenantId, scoreThreshold: threshold.value };
+
+  return {
+    qualified: buildPipelineQualifiedCountQuery(db, scoped),
+    contactedQualified: buildPipelineContactedQualifiedCountQuery(db, scoped),
+  };
 }
 
 export function buildPipelineRepliedCountQuery(db: DashboardDb, identity: { tenantId: string }) {
@@ -1716,23 +1838,40 @@ export async function getPipelineAnalytics(identity: { tenantId: string }) {
   requireTenantId(identity.tenantId);
 
   const db = getDb();
-  const [statusRows, imported, enriched, qualified, contacted, replied, paid] = await Promise.all([
+  const qualificationThreshold = readQualificationScoreThreshold();
+
+  const [statusRows, imported, enriched, scored, contacted, replied, paid] = await Promise.all([
     buildPipelineStatusCountsQuery(db, identity),
     buildPipelineImportedCountQuery(db, identity),
     buildPipelineEnrichedCountQuery(db, identity),
-    buildPipelineQualifiedCountQuery(db, identity),
+    buildPipelineScoredCountQuery(db, identity),
     buildPipelineContactedCountQuery(db, identity),
     buildPipelineRepliedCountQuery(db, identity),
     buildPipelinePaidCountQuery(db, identity),
   ]);
 
+  /**
+   * Without the threshold there is no score predicate to build, so these two
+   * cohorts are not queried at all and stay null. The funnel then renders the
+   * qualified stage as words rather than as a count that quietly passes every
+   * scored lead.
+   */
+  const thresholdQueries = buildPipelineThresholdCohortQueries(db, identity, qualificationThreshold);
+  const [qualified, contactedQualified] =
+    thresholdQueries === null
+      ? [null, null]
+      : await Promise.all([thresholdQueries.qualified, thresholdQueries.contactedQualified]);
+
   return normalizePipelineAnalytics({
     statusRows,
+    qualificationThreshold,
     milestones: {
       imported: imported[0]?.count ?? 0,
       enriched: enriched[0]?.count ?? 0,
-      qualified: qualified[0]?.count ?? 0,
+      scored: scored[0]?.count ?? 0,
+      qualified: qualified === null ? null : (qualified[0]?.count ?? 0),
       contacted: contacted[0]?.count ?? 0,
+      contactedQualified: contactedQualified === null ? null : (contactedQualified[0]?.count ?? 0),
       replied: replied[0]?.count ?? 0,
       paid: paid[0]?.count ?? 0,
     },

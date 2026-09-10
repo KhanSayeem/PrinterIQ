@@ -338,6 +338,7 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .stage-count { font-size: 26px; font-weight: 300; letter-spacing: 0; font-family: var(--font-mono); }
 .stage-pct { font-size: 10px; color: var(--text-tertiary); margin-top: 3px; line-height: 1.45; }
 .stage-count-unavailable { font-size: 13px; font-weight: 500; font-family: var(--font); color: #92400e; }
+.stage-criterion { font-size: 10px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4; }
 .stage-note { font-size: 10px; color: var(--text-tertiary); margin-top: 3px; line-height: 1.45; }
 .funnel-bars { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 22px; }
 .funnel-bars-title { font-size: 13px; font-weight: 500; }

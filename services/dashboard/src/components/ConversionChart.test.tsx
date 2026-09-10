@@ -176,8 +176,10 @@ describe("ConversionChart", () => {
 
   /**
    * A rate over 100% means the later cohort is bigger than the earlier one.
-   * The bar has to stay inside the plot, but it must not read as a healthy
-   * complete bar and the label must still print the true figure.
+   * Raising the qualification threshold does that: 1,960 leads were contacted
+   * under the old threshold and only 1,500 pass the new one. The bar has to
+   * stay inside the plot, but it must not read as a healthy complete bar and
+   * the label must still print the true figure.
    */
   it("keeps a rate above 100% inside the plot and still prints the true figure", () => {
     const { container } = render(
@@ -186,9 +188,9 @@ describe("ConversionChart", () => {
           {
             from: "qualified",
             to: "contacted",
-            rate: measured(150),
-            count: measured(300),
-            enteredCount: measured(200),
+            rate: measured((1960 / 1500) * 100),
+            count: measured(1960),
+            enteredCount: measured(1500),
             droppedCount: missing("More leads reached Contacted than ever reached Qualified"),
           },
         ]}
@@ -199,7 +201,58 @@ describe("ConversionChart", () => {
     expect(bar).not.toBeNull();
     expect(Number(bar?.getAttribute("height"))).toBeLessThanOrEqual(170);
     expect(bar?.getAttribute("class")).toContain("cc-bar-over");
-    expect(screen.getByText("150.0%")).toBeInTheDocument();
+    expect(screen.getByText("130.7%")).toBeInTheDocument();
+    expect(screen.getByText("1,960 of 1,500")).toBeInTheDocument();
     expect(screen.getByText("Drop not measurable")).toBeInTheDocument();
+  });
+
+  /**
+   * 7,543 of 7,546 scored is not 100%, and printing it as "100.0%" over a
+   * "3 dropped" label contradicts itself.
+   */
+  it("does not round an incomplete rate up to a full one hundred percent", () => {
+    render(
+      <ConversionChart
+        conversions={[
+          {
+            from: "enriched",
+            to: "scored",
+            rate: measured((7543 / 7546) * 100),
+            count: measured(7543),
+            enteredCount: measured(7546),
+            droppedCount: measured(3),
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("just under 100%")).toBeInTheDocument();
+    expect(screen.queryByText("100.0%")).not.toBeInTheDocument();
+    expect(screen.getByText("3 dropped")).toBeInTheDocument();
+  });
+
+  /**
+   * The pass rate step, with the production figures. This is the bar an
+   * operator reads to see that scoring is the largest filter in the business.
+   */
+  it("renders the scored to qualified pass rate from the production cohorts", () => {
+    render(
+      <ConversionChart
+        conversions={[
+          {
+            from: "scored",
+            to: "qualified",
+            rate: measured((4291 / 7543) * 100),
+            count: measured(4291),
+            enteredCount: measured(7543),
+            droppedCount: measured(3252),
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("56.9%")).toBeInTheDocument();
+    expect(screen.getByText("4,291 of 7,543")).toBeInTheDocument();
+    expect(screen.getByText("3,252 dropped")).toBeInTheDocument();
   });
 });

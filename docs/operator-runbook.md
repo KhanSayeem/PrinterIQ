@@ -142,6 +142,11 @@ pipeline's file is a silent no-op.
 effect. The pipeline never reads it from env at all: the dashboard validates it
 per upload and threads it through the job payload as `score_threshold`.
 
+`/pipeline` reads the same variable. Every scored lead has a `qualifications`
+row whether it passed or failed, so the funnel needs the threshold to tell the
+Qualified cohort from the Scored one. Without it the Qualified stage renders as
+unavailable and names the variable, rather than guessing a pass mark.
+
 Set it:
 
 ```bash

@@ -16,8 +16,11 @@ import {
   buildPipelineStatusCountsQuery,
   buildPipelineImportedCountQuery,
   buildPipelineEnrichedCountQuery,
+  buildPipelineScoredCountQuery,
   buildPipelineQualifiedCountQuery,
   buildPipelineContactedCountQuery,
+  buildPipelineContactedQualifiedCountQuery,
+  buildPipelineThresholdCohortQueries,
   buildPipelineRepliedCountQuery,
   buildPipelinePaidCountQuery,
   buildRelatedLeadDataQueries,
@@ -694,7 +697,7 @@ describe("dashboard D2 analytics queries", () => {
     const builders = [
       buildPipelineImportedCountQuery,
       buildPipelineEnrichedCountQuery,
-      buildPipelineQualifiedCountQuery,
+      buildPipelineScoredCountQuery,
       buildPipelineContactedCountQuery,
       buildPipelineRepliedCountQuery,
       buildPipelinePaidCountQuery,
@@ -702,6 +705,16 @@ describe("dashboard D2 analytics queries", () => {
 
     for (const build of builders) {
       const query = build(db, { tenantId }).toSQL();
+
+      expect(query.sql).toContain('"leads"."is_deleted" =');
+      expect(query.params).toContain(tenantId);
+    }
+
+    for (const build of [
+      buildPipelineQualifiedCountQuery,
+      buildPipelineContactedQualifiedCountQuery,
+    ]) {
+      const query = build(db, { tenantId, scoreThreshold: 35 }).toSQL();
 
       expect(query.sql).toContain('"leads"."is_deleted" =');
       expect(query.params).toContain(tenantId);
@@ -715,9 +728,10 @@ describe("dashboard D2 analytics queries", () => {
     expect(enriched.sql).toContain('from "enrichments"');
     expect(enriched.sql).toContain('count(distinct "enrichments"."lead_id")');
 
-    const qualified = buildPipelineQualifiedCountQuery(db, { tenantId }).toSQL();
-    expect(qualified.sql).toContain('from "qualifications"');
-    expect(qualified.sql).toContain('count(distinct "qualifications"."lead_id")');
+    const scored = buildPipelineScoredCountQuery(db, { tenantId }).toSQL();
+    expect(scored.sql).toContain('from "qualifications"');
+    expect(scored.sql).toContain('count(distinct "qualifications"."lead_id")');
+    expect(scored.sql).not.toContain('"qualifications"."score" >=');
 
     const contacted = buildPipelineContactedCountQuery(db, { tenantId }).toSQL();
     expect(contacted.sql).toContain('from "outreach_sends"');
@@ -734,16 +748,91 @@ describe("dashboard D2 analytics queries", () => {
     expect(paid.params).toContain("paid");
   });
 
+  /**
+   * `qualifications` holds a row for every lead the qualifier scored, pass or
+   * fail. The pass or fail decision is not a column: `qualify.py` compares the
+   * score against the threshold from the job payload. So the qualified cohort
+   * is only a cohort once the score predicate is applied.
+   */
+  it("counts the qualified cohort from the score threshold, not from every scored row", () => {
+    const query = buildPipelineQualifiedCountQuery(db, { tenantId, scoreThreshold: 35 }).toSQL();
+
+    expect(query.sql).toContain('from "qualifications"');
+    expect(query.sql).toContain('count(distinct "qualifications"."lead_id")');
+    expect(query.sql).toContain('"qualifications"."score" >=');
+    expect(query.params).toContain(35);
+  });
+
+  it("passes whatever threshold it is given rather than a threshold of its own", () => {
+    const query = buildPipelineQualifiedCountQuery(db, { tenantId, scoreThreshold: 60 }).toSQL();
+
+    expect(query.params).toContain(60);
+    expect(query.params).not.toContain(35);
+  });
+
+  /**
+   * 1,960 leads were contacted but only 1,955 of them met the current
+   * threshold, so the contacted numerator for the qualified step has to carry
+   * the same score predicate or the rate divides two different populations.
+   */
+  it("scopes the contacted numerator to the leads that met the threshold", () => {
+    const query = buildPipelineContactedQualifiedCountQuery(db, {
+      tenantId,
+      scoreThreshold: 35,
+    }).toSQL();
+
+    expect(query.sql).toContain('from "outreach_sends"');
+    expect(query.sql).toContain('count(distinct "outreach_sends"."lead_id")');
+    expect(query.sql).toContain('"qualifications"');
+    expect(query.sql).toContain('"qualifications"."score" >=');
+    expect(query.params).toContain(35);
+  });
+
+  /** The cohort counts verified against the production database. */
+  const productionMilestoneRows = {
+    imported: "7574",
+    enriched: "7546",
+    scored: "7543",
+    qualified: "4291",
+    contacted: "1960",
+    contactedQualified: "1955",
+    replied: "0",
+    paid: "0",
+  };
+
+  /**
+   * With no threshold there is no score predicate to build, so the two cohorts
+   * that need one are not queried at all. Building them with a threshold of 0
+   * would report every scored lead as qualified, which is the reading this
+   * stage was corrected for.
+   */
+  it("builds no score-predicated query when the threshold is not configured", () => {
+    expect(
+      buildPipelineThresholdCohortQueries(db, { tenantId }, {
+        available: false,
+        reason: "QUALIFICATION_SCORE_THRESHOLD is not set",
+      }),
+    ).toBeNull();
+  });
+
+  it("builds both score-predicated cohorts from the configured threshold", () => {
+    const queries = buildPipelineThresholdCohortQueries(db, { tenantId }, {
+      available: true,
+      value: 35,
+    });
+
+    expect(queries).not.toBeNull();
+    for (const query of [queries!.qualified.toSQL(), queries!.contactedQualified.toSQL()]) {
+      expect(query.sql).toContain('"qualifications"."score" >=');
+      expect(query.params).toContain(35);
+      expect(query.params).toContain(tenantId);
+    }
+  });
+
   it("reads the funnel from milestone cohorts, never from the status histogram", () => {
     const analytics = normalizePipelineAnalytics({
-      milestones: {
-        imported: "7574",
-        enriched: "7480",
-        qualified: "7120",
-        contacted: "6480",
-        replied: "0",
-        paid: "3",
-      },
+      milestones: productionMilestoneRows,
+      qualificationThreshold: { available: true, value: 35 },
       statusRows: [
         { status: "imported", count: 45 },
         { status: "enriched", count: "2" },
@@ -758,14 +847,15 @@ describe("dashboard D2 analytics queries", () => {
     );
     expect(qualifiedToContacted?.rate.available).toBe(true);
     expect(qualifiedToContacted?.rate.available && qualifiedToContacted.rate.value).toBeCloseTo(
-      91.0,
+      45.6,
       1,
     );
-    expect(qualifiedToContacted?.droppedCount).toEqual({ available: true, value: 640 });
+    expect(qualifiedToContacted?.droppedCount).toEqual({ available: true, value: 2336 });
 
     expect(analytics.stages.map((stage) => stage.status)).toEqual([
       "imported",
       "enriched",
+      "scored",
       "qualified",
       "contacted",
       "replied",
@@ -775,20 +865,79 @@ describe("dashboard D2 analytics queries", () => {
     expect(analytics.total).toBe(7574);
 
     const contacted = analytics.stages.find((stage) => stage.status === "contacted");
-    expect(contacted?.count).toEqual({ available: true, value: 6480 });
+    expect(contacted?.count).toEqual({ available: true, value: 1960 });
     expect(contacted?.currentCount).toBe(1951);
+  });
+
+  /**
+   * The correction. Every scored lead has a `qualifications` row whether it
+   * passed or failed, so the qualified cohort is the 4,291 that met the
+   * threshold and the pass rate is 56.9%, not 100%.
+   */
+  it("reads the pass rate from the score threshold rather than from scoring coverage", () => {
+    const analytics = normalizePipelineAnalytics({
+      milestones: productionMilestoneRows,
+      qualificationThreshold: { available: true, value: 35 },
+      statusRows: [{ status: "contacted", count: 1951 }],
+    });
+
+    const scoredToQualified = analytics.conversions.find(
+      (row) => row.from === "scored" && row.to === "qualified",
+    );
+
+    expect(scoredToQualified?.rate.available && scoredToQualified.rate.value).toBeCloseTo(56.9, 1);
+    expect(scoredToQualified?.droppedCount).toEqual({ available: true, value: 3252 });
+
+    const qualified = analytics.stages.find((stage) => stage.status === "qualified");
+    expect(qualified?.count).toEqual({ available: true, value: 4291 });
+    expect(qualified?.criterion).toBe("score 35 or above");
+  });
+
+  it("renders the qualified cohort as unavailable when the threshold is not configured", () => {
+    const analytics = normalizePipelineAnalytics({
+      milestones: { ...productionMilestoneRows, qualified: null, contactedQualified: null },
+      qualificationThreshold: {
+        available: false,
+        reason: "QUALIFICATION_SCORE_THRESHOLD is not set",
+      },
+      statusRows: [{ status: "contacted", count: 1951 }],
+    });
+
+    const qualified = analytics.stages.find((stage) => stage.status === "qualified");
+    expect(qualified?.count.available).toBe(false);
+    expect(qualified?.count).not.toEqual({ available: true, value: 7543 });
+
+    const scored = analytics.stages.find((stage) => stage.status === "scored");
+    expect(scored?.count).toEqual({ available: true, value: 7543 });
+  });
+
+  /**
+   * A null count is a cohort that was not measured. `toNumber` reads it as 0,
+   * and 0 qualified leads is a measurement, so the two threshold cohorts have
+   * to keep their null rather than being coerced.
+   */
+  it("never reads an uncounted cohort as zero qualified leads", () => {
+    const analytics = normalizePipelineAnalytics({
+      milestones: { ...productionMilestoneRows, qualified: null, contactedQualified: null },
+      qualificationThreshold: { available: true, value: 35 },
+      statusRows: [{ status: "contacted", count: 1951 }],
+    });
+
+    const qualified = analytics.stages.find((stage) => stage.status === "qualified");
+    expect(qualified?.count.available).toBe(false);
+    expect(qualified?.count).not.toEqual({ available: true, value: 0 });
+
+    const qualifiedToContacted = analytics.conversions.find(
+      (row) => row.from === "qualified" && row.to === "contacted",
+    );
+    expect(qualifiedToContacted?.count.available).toBe(false);
+    expect(qualifiedToContacted?.rate.available).toBe(false);
   });
 
   it("keeps the replied cohort unavailable rather than reporting a zero reply rate", () => {
     const analytics = normalizePipelineAnalytics({
-      milestones: {
-        imported: "7574",
-        enriched: "7480",
-        qualified: "7120",
-        contacted: "6480",
-        replied: "0",
-        paid: "3",
-      },
+      milestones: productionMilestoneRows,
+      qualificationThreshold: { available: true, value: 35 },
       statusRows: [{ status: "contacted", count: 1951 }],
     });
 

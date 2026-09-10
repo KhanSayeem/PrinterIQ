@@ -21,13 +21,16 @@ import PipelinePage from "./page";
 const analytics = buildPipelineFunnel({
   milestones: {
     imported: 7574,
-    enriched: 7480,
-    qualified: 7120,
-    contacted: 6480,
+    enriched: 7546,
+    scored: 7543,
+    qualified: 4291,
+    contacted: 1960,
+    contactedQualified: 1955,
     replied: 0,
-    paid: 3,
+    paid: 0,
   },
   currentCounts: { imported: 45, qualified: 2, contacted: 1951, archived: 5574 },
+  qualificationThreshold: { available: true, value: 35 },
 });
 
 describe("PipelinePage", () => {
