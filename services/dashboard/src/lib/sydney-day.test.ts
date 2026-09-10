@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as sydneyDay from "./sydney-day";
 import { SYDNEY_TIME_ZONE, getSydneyDayRange, formatSydneyDayLabel } from "./sydney-day";
 
 describe("Sydney day range", () => {
@@ -63,5 +64,19 @@ describe("Sydney day range", () => {
 
   it("labels the day the operator is actually looking at", () => {
     expect(formatSydneyDayLabel(new Date("2026-06-15T23:00:00.000Z"))).toBe("Tue 16 Jun");
+  });
+});
+
+/**
+ * A plain Sydney calendar date used to be derived here so it could be handed to
+ * Instantly's daily analytics endpoint. That endpoint buckets by UTC calendar
+ * date, so a Sydney date meant nothing to it, and half of every Australian
+ * sending day landed in the wrong bucket. Nothing may reach for that shortcut
+ * again: the send count is now built from per email instants compared against
+ * the half open range above.
+ */
+describe("Sydney calendar date", () => {
+  it("no longer offers a bare Sydney date to hand to a UTC bucketed endpoint", () => {
+    expect(Object.keys(sydneyDay)).not.toContain("getSydneyIsoDate");
   });
 });
