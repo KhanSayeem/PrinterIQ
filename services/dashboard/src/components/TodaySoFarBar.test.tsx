@@ -1,26 +1,46 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { TodaySoFarSummary } from "@/db/queries";
+import type { MetricAvailability } from "@/lib/deliverability";
 import { TodaySoFarBar } from "./TodaySoFarBar";
+
+const value = (amount: number): MetricAvailability<number> => ({ available: true, value: amount });
+const missing = (reason: string): MetricAvailability<number> => ({ available: false, reason });
+
+const ANALYTICS_DOWN = "Instantly daily analytics did not load.";
 
 function summaryFixture(overrides: Partial<TodaySoFarSummary> = {}): TodaySoFarSummary {
   return {
     dayLabel: "Mon 15 Jun",
-    sent: 200,
+    sent: value(200),
     opens: null,
     opensTracked: false,
     replies: 7,
-    bounces: 4,
+    bounces: value(4),
     unsubscribes: 1,
-    replyRate: 3.5,
-    bounceRate: 2,
-    unsubscribeRate: 0.5,
+    replyRate: value(3.5),
+    bounceRate: value(2),
+    unsubscribeRate: value(0.5),
     bounceTone: "neutral",
     unsubscribeTone: "neutral",
     anySent: true,
     hasActivity: true,
     ...overrides,
   };
+}
+
+/** Every figure Instantly would have supplied is gone, which is the outage case. */
+function instantlyDownFixture(overrides: Partial<TodaySoFarSummary> = {}): TodaySoFarSummary {
+  return summaryFixture({
+    sent: missing(ANALYTICS_DOWN),
+    bounces: missing(ANALYTICS_DOWN),
+    replyRate: missing("no rate without today's send count from Instantly"),
+    bounceRate: missing(ANALYTICS_DOWN),
+    unsubscribeRate: missing("no rate without today's send count from Instantly"),
+    anySent: false,
+    hasActivity: true,
+    ...overrides,
+  });
 }
 
 function tile(container: HTMLElement, label: string) {
@@ -53,7 +73,9 @@ describe("TodaySoFarBar", () => {
 
   it("colours a bounce rate that is over the threshold", () => {
     const { container } = render(
-      <TodaySoFarBar summary={summaryFixture({ bounces: 8, bounceRate: 4, bounceTone: "warning" })} />,
+      <TodaySoFarBar
+        summary={summaryFixture({ bounces: value(8), bounceRate: value(4), bounceTone: "warning" })}
+      />,
     );
 
     expect(tile(container, "Bounces")).toHaveClass("warning");
@@ -63,7 +85,11 @@ describe("TodaySoFarBar", () => {
   it("colours an unsubscribe rate that is over the threshold", () => {
     const { container } = render(
       <TodaySoFarBar
-        summary={summaryFixture({ unsubscribes: 3, unsubscribeRate: 1.5, unsubscribeTone: "warning" })}
+        summary={summaryFixture({
+          unsubscribes: 3,
+          unsubscribeRate: value(1.5),
+          unsubscribeTone: "warning",
+        })}
       />,
     );
 
@@ -73,7 +99,9 @@ describe("TodaySoFarBar", () => {
 
   it("leaves a rate sitting on the threshold uncoloured", () => {
     const { container } = render(
-      <TodaySoFarBar summary={summaryFixture({ bounces: 6, bounceRate: 3, bounceTone: "neutral" })} />,
+      <TodaySoFarBar
+        summary={summaryFixture({ bounces: value(6), bounceRate: value(3), bounceTone: "neutral" })}
+      />,
     );
 
     expect(tile(container, "Bounces")).not.toHaveClass("warning");
@@ -84,13 +112,13 @@ describe("TodaySoFarBar", () => {
     const { container } = render(
       <TodaySoFarBar
         summary={summaryFixture({
-          sent: 0,
+          sent: value(0),
           replies: 0,
-          bounces: 0,
+          bounces: value(0),
           unsubscribes: 0,
-          replyRate: null,
-          bounceRate: null,
-          unsubscribeRate: null,
+          replyRate: missing("no sends today"),
+          bounceRate: missing("no sends today"),
+          unsubscribeRate: missing("no sends today"),
           anySent: false,
           hasActivity: false,
         })}
@@ -105,13 +133,13 @@ describe("TodaySoFarBar", () => {
     const { container } = render(
       <TodaySoFarBar
         summary={summaryFixture({
-          sent: 0,
+          sent: value(0),
           replies: 2,
-          bounces: 0,
+          bounces: value(0),
           unsubscribes: 0,
-          replyRate: null,
-          bounceRate: null,
-          unsubscribeRate: null,
+          replyRate: missing("no sends today"),
+          bounceRate: missing("no sends today"),
+          unsubscribeRate: missing("no sends today"),
           anySent: false,
           hasActivity: true,
         })}
@@ -160,6 +188,65 @@ describe("TodaySoFarBar", () => {
       card?.focus();
       expect(document.activeElement).toBe(card);
     }
+  });
+
+  it("shows the send count Instantly reported, not a database handoff count", () => {
+    const { container } = render(<TodaySoFarBar summary={summaryFixture({ sent: value(0) })} />);
+
+    expect(tile(container, "Sent")).toHaveTextContent("0");
+  });
+
+  it("says the send count is not available rather than drawing a zero", () => {
+    const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
+
+    const sentTile = tile(container, "Sent");
+    expect(sentTile).toHaveTextContent("Not available");
+    expect(sentTile).toHaveTextContent(ANALYTICS_DOWN);
+    expect(sentTile?.textContent).not.toMatch(/\d/);
+  });
+
+  it("says the bounce count is not available rather than drawing a zero", () => {
+    const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
+
+    const bounceTile = tile(container, "Bounces");
+    expect(bounceTile).toHaveTextContent("Not available");
+    expect(bounceTile).toHaveTextContent(ANALYTICS_DOWN);
+    expect(bounceTile?.textContent).not.toMatch(/\d/);
+  });
+
+  it("leaves a rate unmeasured rather than printing 0.0% against a missing denominator", () => {
+    const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
+
+    const replyTile = tile(container, "Replies");
+    expect(replyTile).toHaveTextContent("7");
+    expect(replyTile).toHaveTextContent(/no rate without today's send count/);
+    expect(replyTile).not.toHaveTextContent("0.0%");
+    expect(tile(container, "Unsubscribes")).not.toHaveTextContent("% of sent");
+  });
+
+  it("does not colour a tile as a breach when its rate is not available", () => {
+    const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
+
+    expect(tile(container, "Bounces")).not.toHaveClass("warning");
+    expect(tile(container, "Unsubscribes")).not.toHaveClass("warning");
+  });
+
+  it("keeps the tiles on screen when Instantly is down instead of saying nothing went out", () => {
+    const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
+
+    expect(screen.queryByText(/No emails sent yet today/)).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".today-metric")).toHaveLength(5);
+  });
+
+  it("says why a figure is missing in the same words the deliverability page uses", () => {
+    const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
+
+    expect(tile(container, "Sent")?.querySelector(".deliv-unavailable-label")).toHaveTextContent(
+      "Not available",
+    );
+    expect(tile(container, "Sent")?.querySelector(".deliv-unavailable-reason")).toHaveTextContent(
+      ANALYTICS_DOWN,
+    );
   });
 
   it("says so when the numbers could not be loaded", () => {

@@ -121,3 +121,17 @@ export function formatSydneyDayLabel(now: Date = new Date()): string {
 
   return `${weekday} ${wall.day} ${MONTH_NAMES[wall.month - 1]}`;
 }
+
+/**
+ * The Sydney calendar date as YYYY-MM-DD.
+ *
+ * Instantly stamps each daily analytics row with a plain date, so matching
+ * "today" against those rows needs the same day the range helper above uses.
+ * Deriving it from UTC would name yesterday for the whole Sydney morning.
+ */
+export function getSydneyIsoDate(now: Date = new Date()): string {
+  const wall = readSydneyWallClock(now);
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return `${wall.year}-${pad(wall.month)}-${pad(wall.day)}`;
+}

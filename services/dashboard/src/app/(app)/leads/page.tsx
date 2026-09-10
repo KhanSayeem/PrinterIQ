@@ -3,14 +3,23 @@ import type { LeadListRow } from "@/components/LeadQuickPanel";
 import { LeadsWorkbench } from "@/components/LeadsWorkbench";
 import { getDashboardTenantId } from "@/auth/tenant";
 import { parseLeadListParams } from "@/lib/lead-list-params";
+import { loadTodayInstantlySendTotals } from "@/lib/today-sends";
 
 /**
  * Today's numbers are a side panel on the lead list, not a precondition for
  * it. A failure here says so on the bar and leaves the list alone.
+ *
+ * Sends and bounces are read from Instantly rather than from `outreach_sends`,
+ * whose `sent_at` records the handoff to Instantly and not the send itself.
+ * That loader never throws: an Instantly failure comes back as an unavailable
+ * figure, so the bar can say which number is missing and why, instead of
+ * showing a zero that reads as a quiet sending day.
  */
-async function loadTodaySoFar(tenantId: string): Promise<TodaySoFarSummary | null> {
+async function loadTodaySoFar(tenantId: string, now: Date): Promise<TodaySoFarSummary | null> {
+  const sendTotals = await loadTodayInstantlySendTotals({ now });
+
   try {
-    return await getTodaySoFarSummary({ tenantId });
+    return await getTodaySoFarSummary({ tenantId, sendTotals, now });
   } catch (error) {
     console.error("Failed to load today so far", {
       message: error instanceof Error ? error.message : "Unknown today so far loading error",
@@ -51,6 +60,10 @@ export default async function LeadsPage({
     }
     tenantId = resolvedTenantId;
 
+    // One instant for both halves of the bar, so the Instantly day and the
+    // database window cannot land on different sides of Sydney midnight.
+    const now = new Date();
+
     const [filterCounts, leadPage, today] = await Promise.all([
       getLeadFilterCounts({ tenantId }),
       getLeadListPage({
@@ -66,7 +79,7 @@ export default async function LeadsPage({
         page: requestedPage,
         pageSize,
       }),
-      loadTodaySoFar(tenantId),
+      loadTodaySoFar(tenantId, now),
     ]);
     todaySummary = today;
     counts = filterCounts;

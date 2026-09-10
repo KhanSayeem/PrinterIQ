@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import type { TodayMetricTone, TodaySoFarSummary } from "@/db/queries";
+import type { MetricAvailability } from "@/lib/deliverability";
 import { MetricCardShell } from "./MetricCardShell";
 
 type TodaySoFarBarProps = {
@@ -6,8 +8,26 @@ type TodaySoFarBarProps = {
   summary: TodaySoFarSummary | null;
 };
 
-function formatRateOfSent(rate: number | null) {
-  return rate === null ? "no sends today" : `${rate.toFixed(1)}% of sent`;
+function formatRateOfSent(rate: MetricAvailability<number>) {
+  return rate.available ? `${rate.value.toFixed(1)}% of sent` : rate.reason;
+}
+
+/**
+ * An unavailable figure renders as words, never as a zero, in the same markup
+ * the deliverability panel uses. A zero here reads as a quiet sending day and
+ * would be indistinguishable from Instantly being unreachable.
+ */
+function MetricValue({ metric }: { metric: MetricAvailability<number> }) {
+  if (!metric.available) {
+    return (
+      <span className="deliv-unavailable">
+        <span className="deliv-unavailable-label">Not available</span>
+        <span className="deliv-unavailable-reason">{metric.reason}</span>
+      </span>
+    );
+  }
+
+  return <span>{metric.value.toLocaleString()}</span>;
 }
 
 function TodayMetric({
@@ -19,7 +39,7 @@ function TodayMetric({
   href,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   detail: string;
   tone?: TodayMetricTone;
   muted?: boolean;
@@ -50,10 +70,18 @@ export function TodaySoFarBar({ summary }: TodaySoFarBarProps) {
         </div>
       ) : summary.hasActivity ? (
         <div className="today-bar-metrics">
+          {/* Sends and bounces come from Instantly's daily analytics, the only
+              record of what actually left a mailbox. */}
           <TodayMetric
             label="Sent"
-            value={summary.sent.toLocaleString()}
-            detail={summary.anySent ? "emails out today" : "nothing out today"}
+            value={<MetricValue metric={summary.sent} />}
+            detail={
+              summary.sent.available
+                ? summary.anySent
+                  ? "emails out today"
+                  : "nothing out today"
+                : "emails out today, per Instantly"
+            }
             href="/deliverability"
           />
           {/* Open tracking is off for deliverability, so this tile counts
@@ -61,20 +89,20 @@ export function TodaySoFarBar({ summary }: TodaySoFarBarProps) {
           <TodayMetric label="Opens" value="--" detail="Not tracked" muted />
           <TodayMetric
             label="Replies"
-            value={summary.replies.toLocaleString()}
+            value={<MetricValue metric={{ available: true, value: summary.replies }} />}
             detail={formatRateOfSent(summary.replyRate)}
             href="/replies?filter=all"
           />
           <TodayMetric
             label="Bounces"
-            value={summary.bounces.toLocaleString()}
+            value={<MetricValue metric={summary.bounces} />}
             detail={formatRateOfSent(summary.bounceRate)}
             tone={summary.bounceTone}
             href="/deliverability"
           />
           <TodayMetric
             label="Unsubscribes"
-            value={summary.unsubscribes.toLocaleString()}
+            value={<MetricValue metric={{ available: true, value: summary.unsubscribes }} />}
             detail={formatRateOfSent(summary.unsubscribeRate)}
             tone={summary.unsubscribeTone}
             href="/leads?unsubscribed=1"
