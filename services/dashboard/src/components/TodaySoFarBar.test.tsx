@@ -227,6 +227,22 @@ describe("TodaySoFarBar", () => {
     expect(bounceTile?.textContent).not.toMatch(/\d/);
   });
 
+  /**
+   * Instantly has no bounce figure that can be cut at Sydney midnight, so this
+   * tile sits in its unavailable state every day. Printing the same sentence in
+   * the value and again in the detail line reads as two separate problems, and
+   * the detail line is the one place that can say where the measured figure is.
+   */
+  it("points at the deliverability page instead of repeating the reason under a missing bounce count", () => {
+    const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
+
+    const bounceTile = tile(container, "Bounces");
+    const detail = bounceTile?.querySelector(".today-metric-detail");
+    expect(detail).toHaveTextContent(/deliverability/i);
+    expect(detail).not.toHaveTextContent(ANALYTICS_DOWN);
+    expect(detail).not.toHaveTextContent("% of sent");
+  });
+
   it("leaves a rate unmeasured rather than printing 0.0% against a missing denominator", () => {
     const { container } = render(<TodaySoFarBar summary={instantlyDownFixture()} />);
 

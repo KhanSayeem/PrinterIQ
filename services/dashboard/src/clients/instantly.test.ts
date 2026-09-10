@@ -474,5 +474,205 @@ describe("InstantlyHttpClient", () => {
     );
     expect((error as Error).message).not.toContain("murphy@presciaweb.com");
   });
+});
 
+/**
+ * GET /api/v2/emails is the only Instantly endpoint that hands back a per email
+ * UTC instant. Everything else is pre-aggregated into UTC calendar buckets,
+ * which cannot be split at an Australian day boundary.
+ */
+describe("InstantlyHttpClient.listSentEmails", () => {
+  /** Sydney midnight either side of Tue 10 September 2026, which is AEST. */
+  const DAY_START = new Date("2026-09-09T14:00:00.000Z");
+  const DAY_END = new Date("2026-09-10T14:00:00.000Z");
+
+  function client(fetchFn: typeof fetch) {
+    return new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn,
+      baseUrl: "https://api.instantly.test",
+    });
+  }
+
+  it("asks only for sent campaign email from the given mailboxes inside the window", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          { timestamp_created: "2026-09-09T23:47:25.000Z", eaccount: "murphy@presciaweb.com" },
+        ],
+      }),
+    });
+
+    const result = await client(fetchMock).listSentEmails({
+      emails: ["murphy@presciaweb.com", "jo@presciaweb.com"],
+      createdAtOrAfter: DAY_START,
+      createdBefore: DAY_END,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url.startsWith("https://api.instantly.test/api/v2/emails?")).toBe(true);
+    const query = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+    expect(query.get("email_type")).toBe("sent");
+    expect(query.get("limit")).toBe("100");
+    expect(query.get("eaccount")).toBe("murphy@presciaweb.com,jo@presciaweb.com");
+    expect(result.complete).toBe(true);
+    expect(result.emails).toEqual([
+      {
+        sentAt: new Date("2026-09-09T23:47:25.000Z"),
+        eaccount: "murphy@presciaweb.com",
+      },
+    ]);
+  });
+
+  /**
+   * The spec says min_timestamp_created filters emails created "after" the
+   * value and max "before" it, without saying whether either end is inclusive.
+   * Widening both ends by a second keeps that undocumented boundary out of the
+   * answer: the day is decided by the caller comparing the instants it gets
+   * back, not by Instantly's comparison operator.
+   */
+  it("widens the server side window by a second so its boundary cannot decide the day", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ items: [] }),
+    });
+
+    await client(fetchMock).listSentEmails({
+      emails: ["murphy@presciaweb.com"],
+      createdAtOrAfter: DAY_START,
+      createdBefore: DAY_END,
+    });
+
+    const url = String(fetchMock.mock.calls[0]![0]);
+    const query = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+    expect(query.get("min_timestamp_created")).toBe("2026-09-09T13:59:59.000Z");
+    expect(query.get("max_timestamp_created")).toBe("2026-09-10T14:00:01.000Z");
+  });
+
+  it("walks every page and returns the rows from all of them", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [
+            { timestamp_created: "2026-09-09T23:47:25.000Z", eaccount: "murphy@presciaweb.com" },
+          ],
+          next_starting_after: "cursor-1",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [
+            { timestamp_created: "2026-09-10T00:04:26.000Z", eaccount: "jo@presciaweb.com" },
+          ],
+        }),
+      });
+
+    const result = await client(fetchMock).listSentEmails({
+      emails: ["murphy@presciaweb.com", "jo@presciaweb.com"],
+      createdAtOrAfter: DAY_START,
+      createdBefore: DAY_END,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]![0])).toContain("starting_after=cursor-1");
+    expect(result.complete).toBe(true);
+    expect(result.emails.map((email) => email.eaccount)).toEqual([
+      "murphy@presciaweb.com",
+      "jo@presciaweb.com",
+    ]);
+  });
+
+  /**
+   * A truncated walk must be visible to the caller. Returning the short list as
+   * though it were the whole day is the failure mode this whole branch exists
+   * to remove.
+   */
+  it("reports the walk as incomplete rather than silently truncating at the page cap", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          { timestamp_created: "2026-09-09T23:47:25.000Z", eaccount: "murphy@presciaweb.com" },
+        ],
+        next_starting_after: "always-more",
+      }),
+    });
+
+    const result = await client(fetchMock).listSentEmails({
+      emails: ["murphy@presciaweb.com"],
+      createdAtOrAfter: DAY_START,
+      createdBefore: DAY_END,
+    });
+
+    expect(result.complete).toBe(false);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(10);
+  });
+
+  it("does not call Instantly at all when there are no mailboxes to ask about", async () => {
+    const fetchMock = vi.fn();
+
+    await expect(
+      client(fetchMock).listSentEmails({
+        emails: [],
+        createdAtOrAfter: DAY_START,
+        createdBefore: DAY_END,
+      }),
+    ).resolves.toEqual({ emails: [], complete: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Skipping an unreadable row would shorten the count without saying so. The
+   * caller turns this throw into a stated "not available".
+   */
+  it("throws rather than skipping a row it cannot read a timestamp from", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          { timestamp_created: "2026-09-09T23:47:25.000Z", eaccount: "murphy@presciaweb.com" },
+          { eaccount: "murphy@presciaweb.com" },
+        ],
+      }),
+    });
+
+    await expect(
+      client(fetchMock).listSentEmails({
+        emails: ["murphy@presciaweb.com"],
+        createdAtOrAfter: DAY_START,
+        createdBefore: DAY_END,
+      }),
+    ).rejects.toThrow(/timestamp_created/);
+  });
+
+  it("keeps the mailbox addresses out of the failure message even though they are in the query", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 429 });
+
+    const error = await client(fetchMock)
+      .listSentEmails({
+        emails: ["murphy@presciaweb.com"],
+        createdAtOrAfter: DAY_START,
+        createdBefore: DAY_END,
+      })
+      .then(() => null)
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "Instantly API GET /api/v2/emails failed with 429; response body omitted",
+    );
+    expect((error as Error).message).not.toContain("murphy@presciaweb.com");
+  });
 });

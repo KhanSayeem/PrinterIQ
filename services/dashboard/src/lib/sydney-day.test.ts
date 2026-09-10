@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  SYDNEY_TIME_ZONE,
-  getSydneyDayRange,
-  getSydneyIsoDate,
-  formatSydneyDayLabel,
-} from "./sydney-day";
+import * as sydneyDay from "./sydney-day";
+import { SYDNEY_TIME_ZONE, getSydneyDayRange, formatSydneyDayLabel } from "./sydney-day";
 
 describe("Sydney day range", () => {
   it("names the operator time zone explicitly", () => {
@@ -71,29 +67,16 @@ describe("Sydney day range", () => {
   });
 });
 
-describe("Sydney ISO date", () => {
-  it("gives the Sydney calendar date, not the UTC one", () => {
-    // 23:00 UTC on 15 June is already 09:00 on 16 June in Sydney, which is the
-    // date Instantly's daily analytics rows are stamped with for these sends.
-    expect(getSydneyIsoDate(new Date("2026-06-15T23:00:00.000Z"))).toBe("2026-06-16");
-  });
-
-  it("keeps the last second before Sydney midnight on the day that is ending", () => {
-    expect(getSydneyIsoDate(new Date("2026-06-15T13:59:59.000Z"))).toBe("2026-06-15");
-  });
-
-  it("rolls over the instant Sydney midnight arrives", () => {
-    expect(getSydneyIsoDate(new Date("2026-06-15T14:00:00.000Z"))).toBe("2026-06-16");
-  });
-
-  it("pads month and day so the string sorts and compares", () => {
-    expect(getSydneyIsoDate(new Date("2026-01-05T00:00:00.000Z"))).toBe("2026-01-05");
-  });
-
-  it("agrees with the day range it is paired with during daylight saving", () => {
-    const now = new Date("2026-01-05T00:00:00.000Z");
-    const range = getSydneyDayRange(now);
-
-    expect(getSydneyIsoDate(range.start)).toBe(getSydneyIsoDate(now));
+/**
+ * A plain Sydney calendar date used to be derived here so it could be handed to
+ * Instantly's daily analytics endpoint. That endpoint buckets by UTC calendar
+ * date, so a Sydney date meant nothing to it, and half of every Australian
+ * sending day landed in the wrong bucket. Nothing may reach for that shortcut
+ * again: the send count is now built from per email instants compared against
+ * the half open range above.
+ */
+describe("Sydney calendar date", () => {
+  it("no longer offers a bare Sydney date to hand to a UTC bucketed endpoint", () => {
+    expect(Object.keys(sydneyDay)).not.toContain("getSydneyIsoDate");
   });
 });

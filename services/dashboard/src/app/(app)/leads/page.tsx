@@ -9,7 +9,7 @@ import { loadTodayInstantlySendTotals, unavailableTodaySendTotals } from "@/lib/
  * Today's numbers are a side panel on the lead list, not a precondition for
  * it. A failure here says so on the bar and leaves the list alone.
  *
- * Sends and bounces are read from Instantly rather than from `outreach_sends`,
+ * The send count is read from Instantly rather than from `outreach_sends`,
  * whose `sent_at` records the handoff to Instantly and not the send itself.
  * That loader is written not to throw: an Instantly failure comes back as an
  * unavailable figure, so the bar can say which number is missing and why,

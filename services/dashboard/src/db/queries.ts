@@ -1405,8 +1405,10 @@ export function buildTodayReplyCountQuery(
  * event's own timestamp.
  *
  * Bounces are deliberately not counted here any more. The bounce boolean is
- * only as complete as the webhook deliveries, and Instantly's own daily
- * analytics reports the bounce alongside the send it belongs to.
+ * only as complete as the webhook deliveries, and `updated_at` is the row's
+ * last write rather than the bounce's own time, so a row that bounces and later
+ * unsubscribes would land the bounce on the wrong day. Instantly has no
+ * same-day bounce figure to replace it with either: see `today-sends.ts`.
  */
 export function buildTodayUnsubscribeCountQuery(
   db: DashboardDb,
@@ -1469,11 +1471,17 @@ export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary
   const unsubscribeRate = rateAgainstSent({ available: true, value: unsubscribes }, sent);
 
   /**
-   * An unavailable figure keeps the tiles on screen. Falling back to the quiet
+   * A missing send count keeps the tiles on screen. Falling back to the quiet
    * day note would hide an Instantly outage behind "nothing went out today",
    * which is the confusion this bar was reporting in the first place.
+   *
+   * Only the send count is read for this, deliberately. The bounce count is
+   * unavailable by construction rather than by failure: Instantly publishes
+   * bounces only summed into a UTC calendar day, and a UTC day cannot be cut at
+   * Sydney midnight. Letting that force the tiles open would mean a genuinely
+   * quiet day never reached the quiet day note again.
    */
-  const anythingUnavailable = !sent.available || !bounces.available;
+  const sendCountUnavailable = !sent.available;
   const countedActivity =
     (sent.available ? sent.value : 0) +
     (bounces.available ? bounces.value : 0) +
@@ -1494,7 +1502,7 @@ export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary
     bounceTone: toneForRate(bounceRate, BOUNCE_RATE_WARNING_PERCENT),
     unsubscribeTone: toneForRate(unsubscribeRate, UNSUBSCRIBE_RATE_WARNING_PERCENT),
     anySent: sent.available && sent.value > 0,
-    hasActivity: anythingUnavailable || countedActivity > 0,
+    hasActivity: sendCountUnavailable || countedActivity > 0,
   };
 }
 

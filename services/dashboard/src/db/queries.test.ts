@@ -1009,6 +1009,38 @@ describe("today so far queries", () => {
     expect(summary.replyRate.available ? summary.replyRate.value : null).toBeCloseTo(3.5, 10);
   });
 
+  /**
+   * Instantly publishes no bounce figure that can be cut at Sydney midnight, so
+   * the bounce count is permanently unavailable. That must not be read as a
+   * failure: if it forced the tiles open, a genuinely quiet day would never
+   * reach the quiet day note again and the note would be dead code.
+   */
+  it("still shows the quiet day note when only the structurally missing bounce count is absent", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: sent(0),
+      bounces: missing("Instantly reports bounces only as a whole UTC calendar day."),
+      replies: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.hasActivity).toBe(false);
+    expect(summary.anySent).toBe(false);
+  });
+
+  it("keeps the tiles open on a sending day whose bounce count is unavailable", () => {
+    const summary = normalizeTodaySoFar({
+      dayLabel,
+      sent: sent(30),
+      bounces: missing("Instantly reports bounces only as a whole UTC calendar day."),
+      replies: 0,
+      unsubscribes: 0,
+    });
+
+    expect(summary.hasActivity).toBe(true);
+    expect(summary.anySent).toBe(true);
+  });
+
   it("counts a reply to yesterday's send as activity even with no sends today", () => {
     const summary = normalizeTodaySoFar({
       dayLabel,

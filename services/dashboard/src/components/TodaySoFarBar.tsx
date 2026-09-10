@@ -70,8 +70,9 @@ export function TodaySoFarBar({ summary }: TodaySoFarBarProps) {
         </div>
       ) : summary.hasActivity ? (
         <div className="today-bar-metrics">
-          {/* Sends and bounces come from Instantly's daily analytics, the only
-              record of what actually left a mailbox. */}
+          {/* The send count is Instantly's own record of what left a mailbox,
+              counted one email at a time so the Sydney day boundary is applied
+              to each send rather than to a UTC calendar bucket. */}
           <TodayMetric
             label="Sent"
             value={<MetricValue metric={summary.sent} />}
@@ -93,10 +94,18 @@ export function TodaySoFarBar({ summary }: TodaySoFarBarProps) {
             detail={formatRateOfSent(summary.replyRate)}
             href="/replies?filter=all"
           />
+          {/* Instantly publishes no bounce figure that can be cut at Sydney
+              midnight, so this tile usually has no count. The detail line then
+              names where the measured rate is rather than repeating the reason
+              already printed in the value. */}
           <TodayMetric
             label="Bounces"
             value={<MetricValue metric={summary.bounces} />}
-            detail={formatRateOfSent(summary.bounceRate)}
+            detail={
+              summary.bounces.available
+                ? formatRateOfSent(summary.bounceRate)
+                : "Bounce rate is on the deliverability page"
+            }
             tone={summary.bounceTone}
             href="/deliverability"
           />
