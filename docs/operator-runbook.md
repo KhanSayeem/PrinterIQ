@@ -704,6 +704,51 @@ booted without the secret or `TENANT_ID`, and
 `preview view rejected: reason=invalid_secret`, which means nginx and the
 reply-agent hold different secrets.
 
+## Dating a bounce or an unsubscribe
+
+`outreach_sends` recorded a suppression as a boolean and nothing else, so the
+dashboard dated one by `updated_at`, the row's last write. That put a lead
+suppressed today but sent to last week into today's unsubscribe rate, where the
+numerator and the denominator were then two different cohorts. Migration 0014
+adds the event's own time.
+
+1. Apply the migration:
+
+```bash
+psql $DATABASE_URL -f database/migrations/0014_add_suppression_event_times.sql
+```
+
+2. Restart the reply-agent so the suppression webhooks start stamping the new
+   columns:
+
+```bash
+pm2 restart reply-agent --update-env
+```
+
+Until it is applied the dashboard cannot read `unsubscribed_at` and the today
+bar's Unsubscribes tile errors on that query rather than showing a wrong day.
+
+Rows flagged before the migration keep a null event time on purpose: copying
+`updated_at` into them would preserve the wrong attribution and leave no way to
+tell a real event time from a guess. The today bar counts those rows separately
+and prints the count in place of the unsubscribe rate, so the gap is on screen.
+The note clears itself once every suppression in the window carries its own
+time.
+
+Verification, after the next unsubscribe webhook:
+
+```sql
+SELECT lead_id, unsubscribed, unsubscribed_at, updated_at
+FROM outreach_sends
+WHERE tenant_id = '<tenant_id>' AND unsubscribed = TRUE
+ORDER BY unsubscribed_at DESC NULLS LAST
+LIMIT 5;
+```
+
+- [ ] The newest row has `unsubscribed_at` set.
+- [ ] Older rows still show `unsubscribed_at` as null, and the today bar names
+      how many of them fall in today's window.
+
 ## Local smoke testing
 
 Local Redis and orchestrator smoke tests are safe to run while domains and mailboxes are warming up. Start local Redis with:

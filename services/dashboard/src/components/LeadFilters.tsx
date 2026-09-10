@@ -27,6 +27,11 @@ const filters = [
   // longer sitting in contacted, exactly like every other pill here.
   { label: "Contacted", key: "contacted", selection: { status: "contacted" } },
   { label: "Replied", key: "replied", selection: { status: "replied" } },
+  // Paid is the exception to the paragraph above. Its count and its filter are
+  // both a `payments` row, not a `leads.status` bucket, so a sale reads the same
+  // here as it does on /pipeline and /revenue. See `src/lib/paid-payments.ts`.
+  // The status key stays "paid" because /leads?status=paid is a URL the Total
+  // revenue card links to; only what it resolves to changed.
   { label: "Paid", key: "paid", selection: { status: "paid" } },
   { label: "Archived", key: "archived", selection: { status: "archived" } },
   { label: "Unsubscribed", key: "unsubscribed", selection: { unsubscribed: true } },

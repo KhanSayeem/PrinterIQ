@@ -15,6 +15,7 @@ import {
   type PipelineAnalytics,
   type PipelineStageKey,
 } from "@/lib/pipeline-funnel";
+import { PAID_LEAD_FILTER, PAID_PAYMENT_STATUS } from "@/lib/paid-payments";
 import { readQualificationScoreThreshold } from "@/lib/qualification-threshold";
 import type { ReplyIngestSignal } from "@/lib/reply-ingest-health";
 import type { TodaySendTotals } from "@/lib/today-sends";
@@ -272,6 +273,12 @@ export type TodaySoFarCounts = {
   /** Database counts, written by the Instantly reply and unsubscribe webhooks. */
   replies: unknown;
   unsubscribes: unknown;
+  /**
+   * Sends flagged unsubscribed before `unsubscribed_at` existed, whose last
+   * write falls in today's window. Optional so a caller with nothing to report
+   * can leave it out, and absent reads as none.
+   */
+  unsubscribesUndated?: unknown;
 };
 
 export type TodaySoFarSummary = {
@@ -288,7 +295,15 @@ export type TodaySoFarSummary = {
   opensTracked: boolean;
   replies: number;
   bounces: MetricAvailability<number>;
+  /** Unsubscribes whose own event time falls inside today. */
   unsubscribes: number;
+  /**
+   * Unsubscribes today's window contains that carry no event time, because the
+   * row was flagged before migration 0014. Not added to `unsubscribes`: their
+   * day is unknown. They suppress the rate instead, so the gap is stated on the
+   * tile rather than hidden inside a smaller count.
+   */
+  unsubscribesUndated: number;
   /**
    * Percentages of today's sends. A rate is only available when the count and
    * the send count it divides by are both available, so a rate is never
@@ -361,6 +376,43 @@ function leadUnsubscribedExists(tenantId: string) {
   )`;
 }
 
+/**
+ * A lead with a sale behind it, defined once and used by the Paid pill's count,
+ * by the Paid pill's filter and by nothing else.
+ *
+ * Exported only so a test can render this fragment on its own and assert that
+ * the count and the filter contain the same one. A pill whose count disagrees
+ * with its own list is invisible until an operator clicks it, which is exactly
+ * how the old Paid pill would have failed: the count came from `leads.status`
+ * and the dollars on `/revenue` came from `payments`.
+ */
+export function leadPaidPaymentExists(tenantId: string) {
+  return sql`exists (
+    select 1 from ${payments}
+    where ${payments.leadId} = ${leads.id}
+      and ${payments.tenantId} = ${tenantId}
+      and ${payments.status} = ${PAID_PAYMENT_STATUS}
+  )`;
+}
+
+/**
+ * Paid is the one pill that is not a `leads.status` bucket. Every other status
+ * here is a current state and reads as one; paid is money, and money has to
+ * read the same on `/leads`, `/pipeline` and `/revenue`.
+ *
+ * Replied deliberately stays on `leads.status`. Its milestone evidence,
+ * inbound `conversations`, is already reported as a cohort on `/pipeline`, and
+ * a lead that replied and has since paid or been archived is no longer sitting
+ * in replied. Sourcing the pill from that evidence would count those leads in
+ * two pills at once and push the pills past the All total. Paid escapes that
+ * because paid is terminal: nothing moves a lead out of it.
+ */
+function leadStatusCondition(status: string, tenantId: string) {
+  return status === PAID_LEAD_FILTER
+    ? leadPaidPaymentExists(tenantId)
+    : eq(leads.status, status);
+}
+
 function previewViewCondition(previewView: PreviewViewFilter) {
   return previewView === "seen"
     ? isNotNull(websitePreviews.firstViewedAt)
@@ -374,7 +426,7 @@ function buildLeadListWhere(filters: LeadListFilters) {
   return [
     eq(leads.tenantId, filters.tenantId),
     eq(leads.isDeleted, false),
-    filters.status ? eq(leads.status, filters.status) : undefined,
+    filters.status ? leadStatusCondition(filters.status, filters.tenantId) : undefined,
     filters.state ? eq(leads.state, filters.state) : undefined,
     filters.tradeType ? eq(leads.vertical, filters.tradeType) : undefined,
     searchPattern
@@ -552,6 +604,9 @@ export function buildLeadFilterCountsQuery(db: DashboardDb, identity: { tenantId
       status: leads.status,
       count: sql<string>`count(*)`,
       unsubscribedCount: sql<string>`count(*) filter (where ${leadUnsubscribedExists(identity.tenantId)})`,
+      // Counted per status group and summed across them, so a lead that paid
+      // while sitting in some other status is still counted once.
+      paidCount: sql<string>`count(*) filter (where ${leadPaidPaymentExists(identity.tenantId)})`,
       previewSeenCount: sql<string>`count(*) filter (where ${websitePreviews.firstViewedAt} is not null)`,
       previewUnseenCount: sql<string>`count(*) filter (where ${websitePreviews.id} is not null and ${websitePreviews.firstViewedAt} is null)`,
     })
@@ -953,6 +1008,12 @@ export function buildPipelineRepliedCountQuery(db: DashboardDb, identity: { tena
     );
 }
 
+/**
+ * The paid cohort behind the funnel. Same table, same status and the same
+ * non-deleted lead join as the Paid pill on `/leads`, so the two screens report
+ * one figure. The status literal comes from `@/lib/paid-payments` rather than
+ * being written here twice.
+ */
 export function buildPipelinePaidCountQuery(db: DashboardDb, identity: { tenantId: string }) {
   requireTenantId(identity.tenantId);
 
@@ -963,7 +1024,7 @@ export function buildPipelinePaidCountQuery(db: DashboardDb, identity: { tenantI
     .where(
       and(
         eq(payments.tenantId, identity.tenantId),
-        eq(payments.status, "paid"),
+        eq(payments.status, PAID_PAYMENT_STATUS),
         eq(leads.tenantId, identity.tenantId),
         eq(leads.isDeleted, false),
       ),
@@ -1585,18 +1646,29 @@ export function buildTodayReplyCountQuery(
 }
 
 /**
- * Unsubscribes today, as closely as the schema allows.
+ * Unsubscribes today, dated by the unsubscribe itself.
  *
- * `outreach_sends` carries no `unsubscribed_at`. The reply agent flips the
- * boolean and stamps `updated_at`, so `updated_at` is the only time signal the
- * unsubscribe webhook leaves behind. It is the row's last write, not the
- * event's own timestamp.
+ * `unsubscribed_at` is written by the reply agent's suppression CTE and was
+ * added by migration `0014_add_suppression_event_times.sql`. Before it, this
+ * query filtered on `updated_at`, the row's last write, which made the tile's
+ * rate a ratio between two different cohorts: a lead suppressed today may have
+ * been sent to last week, so it counted against today's send count.
  *
- * Bounces are deliberately not counted here any more. The bounce boolean is
- * only as complete as the webhook deliveries, and `updated_at` is the row's
- * last write rather than the bounce's own time, so a row that bounces and later
- * unsubscribes would land the bounce on the wrong day. Instantly has no
- * same-day bounce figure to replace it with either: see `today-sends.ts`.
+ * `undatedUnsubscribeCount` is the rows that were flagged before the column
+ * existed and whose `updated_at` falls in today's window. They are exactly the
+ * rows the old query counted and this one cannot date. They are reported rather
+ * than dropped, and `normalizeTodaySoFar` turns a non-zero tally into the
+ * reason printed under the tile, so a missing figure is words on the page
+ * instead of a silently smaller number. Once every suppression carries its own
+ * time this tally is zero and the caveat clears itself.
+ *
+ * Bounces are deliberately not counted here. `bounced_at` exists now, but the
+ * bounce boolean is only as complete as the webhook deliveries, and the today
+ * bar reads bounces from Instantly instead: see `today-sends.ts`.
+ *
+ * Scoped to suppressed rows rather than to a time window, so the two tallies
+ * can be counted in one pass without scanning every send the tenant has ever
+ * made.
  */
 export function buildTodayUnsubscribeCountQuery(
   db: DashboardDb,
@@ -1606,14 +1678,21 @@ export function buildTodayUnsubscribeCountQuery(
 
   return db
     .select({
-      unsubscribeCount: sql<string>`count(*) filter (where ${outreachSends.unsubscribed})`,
+      unsubscribeCount: sql<string>`count(*) filter (
+        where ${outreachSends.unsubscribedAt} >= ${identity.dayStart}
+          and ${outreachSends.unsubscribedAt} < ${identity.dayEnd}
+      )`.as("unsubscribe_count"),
+      undatedUnsubscribeCount: sql<string>`count(*) filter (
+        where ${outreachSends.unsubscribedAt} is null
+          and ${outreachSends.updatedAt} >= ${identity.dayStart}
+          and ${outreachSends.updatedAt} < ${identity.dayEnd}
+      )`.as("undated_unsubscribe_count"),
     })
     .from(outreachSends)
     .where(
       and(
         eq(outreachSends.tenantId, identity.tenantId),
-        gte(outreachSends.updatedAt, identity.dayStart),
-        lt(outreachSends.updatedAt, identity.dayEnd),
+        eq(outreachSends.unsubscribed, true),
       ),
     );
 }
@@ -1649,14 +1728,28 @@ function toneForRate(rate: MetricAvailability<number>, warnAbove: number): Today
   return rate.available && rate.value > warnAbove ? "warning" : "neutral";
 }
 
+/**
+ * Rows flagged unsubscribed before `unsubscribed_at` existed cannot be dated,
+ * so today's count is incomplete by exactly that many and the rate would be
+ * confidently low. The tile prints this in place of the percentage, which is
+ * how every other unmeasured figure on this dashboard behaves.
+ */
+function undatedUnsubscribeReason(undated: number) {
+  return `${undated.toLocaleString()} ${undated === 1 ? "unsubscribe was" : "unsubscribes were"} recorded today without an event time, so this rate would read low`;
+}
+
 export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary {
   const sent = counts.sent;
   const bounces = counts.bounces;
   const replies = toNumber(counts.replies);
   const unsubscribes = toNumber(counts.unsubscribes);
+  const unsubscribesUndated = toNumber(counts.unsubscribesUndated ?? 0);
 
   const bounceRate = rateAgainstSent(bounces, sent);
-  const unsubscribeRate = rateAgainstSent({ available: true, value: unsubscribes }, sent);
+  const unsubscribeRate =
+    unsubscribesUndated > 0
+      ? { available: false as const, reason: undatedUnsubscribeReason(unsubscribesUndated) }
+      : rateAgainstSent({ available: true, value: unsubscribes }, sent);
 
   /**
    * A missing send count keeps the tiles on screen. Falling back to the quiet
@@ -1674,7 +1767,11 @@ export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary
     (sent.available ? sent.value : 0) +
     (bounces.available ? bounces.value : 0) +
     replies +
-    unsubscribes;
+    unsubscribes +
+    // An undated suppression is still something that happened. Leaving it out
+    // would let a day with nothing but old flagged rows fall through to the
+    // quiet day note, which is the same hiding this change is undoing.
+    unsubscribesUndated;
 
   return {
     dayLabel: counts.dayLabel,
@@ -1684,6 +1781,7 @@ export function normalizeTodaySoFar(counts: TodaySoFarCounts): TodaySoFarSummary
     replies,
     bounces,
     unsubscribes,
+    unsubscribesUndated,
     replyRate: rateAgainstSent({ available: true, value: replies }, sent),
     bounceRate,
     unsubscribeRate,
@@ -1721,6 +1819,7 @@ export async function getTodaySoFarSummary(identity: {
     bounces: identity.sendTotals.bounces,
     replies: replyRows[0]?.replyCount,
     unsubscribes: unsubscribeRows[0]?.unsubscribeCount,
+    unsubscribesUndated: unsubscribeRows[0]?.undatedUnsubscribeCount,
   });
 }
 
@@ -1858,21 +1957,25 @@ export function normalizeLeadFilterCounts(
     status: string | null;
     count: number | string;
     unsubscribedCount?: number | string | null;
+    paidCount?: number | string | null;
     previewSeenCount?: number | string | null;
     previewUnseenCount?: number | string | null;
   }>,
 ): LeadFilterCounts {
   const counts = new Map(rows.map((row) => [row.status, toNumber(row.count)]));
   const all = rows.reduce((sum, row) => sum + toNumber(row.count), 0);
-  const sumColumn = (key: "unsubscribedCount" | "previewSeenCount" | "previewUnseenCount") =>
-    rows.reduce((sum, row) => sum + toNumber(row[key] ?? 0), 0);
+  const sumColumn = (
+    key: "unsubscribedCount" | "paidCount" | "previewSeenCount" | "previewUnseenCount",
+  ) => rows.reduce((sum, row) => sum + toNumber(row[key] ?? 0), 0);
 
   return {
     all,
     qualified: counts.get("qualified") ?? 0,
     contacted: counts.get("contacted") ?? 0,
     replied: counts.get("replied") ?? 0,
-    paid: counts.get("paid") ?? 0,
+    // Not `counts.get("paid")`. A sale is a payments row, and a status without
+    // one behind it is not evidence of money.
+    paid: sumColumn("paidCount"),
     archived: counts.get("archived") ?? 0,
     unsubscribed: sumColumn("unsubscribedCount"),
     previewSeen: sumColumn("previewSeenCount"),
