@@ -93,9 +93,9 @@ export type MailboxHealth = {
   readonly sentInWindow: MetricAvailability<number>;
   readonly warmupScore: MetricAvailability<number>;
   /**
-   * Fraction increase between the two most recent completed days that have
-   * analytics rows, so 0.5 is a 50% increase. Today is excluded because a day
-   * in progress cannot be compared with a finished one.
+   * Fraction increase between the two most recent completed Sydney days on
+   * which this mailbox sent, so 0.5 is a 50% increase. Today is excluded because
+   * a day in progress cannot be compared with a finished one.
    */
   readonly dayOverDayIncrease: MetricAvailability<number>;
   readonly verdict: HealthVerdict;
@@ -116,12 +116,45 @@ export type DeliverabilityReport = {
   readonly bounceWindowDays: number;
 };
 
+/** Sends per mailbox, keyed by `mailboxKey` of the address. */
+export type MailboxSendCounts = ReadonlyMap<string, number>;
+
+/**
+ * The one spelling of a mailbox address that send counts are keyed by, so the
+ * loader that fills a count and the card that reads it cannot disagree on case
+ * or stray whitespace.
+ */
+export function mailboxKey(mailbox: string): string {
+  return mailbox.trim().toLowerCase();
+}
+
+export type SydneyDaySends = {
+  /** YYYY-MM-DD, the Sydney calendar date. */
+  readonly date: string;
+  readonly byMailbox: MailboxSendCounts;
+};
+
+/**
+ * Send counts per mailbox per Sydney day, counted one email at a time from
+ * GET /api/v2/emails. See src/lib/today-sends.ts for why the daily analytics
+ * rows cannot supply these.
+ */
+export type MailboxSends = {
+  readonly today: MetricAvailability<MailboxSendCounts>;
+  /** The completed Sydney days before today, oldest first. */
+  readonly completedDays: MetricAvailability<readonly SydneyDaySends[]>;
+};
+
 export type BuildDeliverabilityReportInput = {
   readonly accounts: readonly InstantlyAccount[];
-  /** `null` means the daily analytics call did not return data at all. */
+  /**
+   * `null` means the daily analytics call did not return data at all. Read only
+   * for the bounce window: its rows are UTC calendar days, which is noise on a
+   * 30 day sum and most of the answer on a single day.
+   */
   readonly analytics: readonly InstantlyDailyAccountAnalytics[] | null;
-  /** The sending day, YYYY-MM-DD, in the estate timezone. */
-  readonly today: string;
+  /** Sent today, limit used and the ramp all come from here, never from `analytics`. */
+  readonly sends: MailboxSends;
 };
 
 const ANALYTICS_UNAVAILABLE = "Instantly daily analytics did not load";
@@ -219,7 +252,7 @@ export function buildDeliverabilityReport(
   input: BuildDeliverabilityReportInput,
 ): DeliverabilityReport {
   const mailboxes = input.accounts
-    .map((account) => buildMailboxHealth(account, input.analytics, input.today))
+    .map((account) => buildMailboxHealth(account, input.analytics, input.sends))
     .sort(
       (left, right) =>
         VERDICT_RANK[right.verdict] - VERDICT_RANK[left.verdict] ||
@@ -239,7 +272,12 @@ export function buildDeliverabilityReport(
     unknownCount: counts.unknown,
     okCount: counts.ok,
     totalDailyLimit: sumMetric(mailboxes.map((mailbox) => mailbox.dailyLimit)),
-    totalSentToday: sumMetric(mailboxes.map((mailbox) => mailbox.sentToday)),
+    // When the count itself failed, the estate tile carries that reason rather
+    // than the generic "one mailbox did not report", which would send the
+    // operator looking at mailboxes for a fault that is in the API call.
+    totalSentToday: input.sends.today.available
+      ? sumMetric(mailboxes.map((mailbox) => mailbox.sentToday))
+      : unavailable(input.sends.today.reason),
     spamComplaintRate: unavailable(
       "Instantly reports no spam complaint rate. Read it in Google Postmaster Tools.",
     ),
@@ -265,10 +303,22 @@ function sumMetric(metrics: readonly MetricAvailability<number>[]): MetricAvaila
   );
 }
 
+const MAILBOX_NOT_COUNTED = "The send count from Instantly did not cover this mailbox";
+
+/**
+ * One mailbox's figure out of a per mailbox count. A mailbox missing from a
+ * count that did load is reported as missing: the loader gives every mailbox it
+ * was asked about an entry, so a gap means the two lists disagree, and a zero
+ * there would be a guess.
+ */
+function sendsFor(counts: MailboxSendCounts, email: string): number | undefined {
+  return counts.get(mailboxKey(email));
+}
+
 function buildMailboxHealth(
   account: InstantlyAccount,
   analytics: readonly InstantlyDailyAccountAnalytics[] | null,
-  today: string,
+  sends: MailboxSends,
 ): MailboxHealth {
   const breaches: MailboxBreach[] = [];
   const rows = analytics
@@ -318,15 +368,25 @@ function buildMailboxHealth(
       ? available(account.stat_warmup_score)
       : unavailable<number>("Instantly returned no warmup score for this account");
 
-  const sentToday: MetricAvailability<number> = rows
-    ? available(rows.find((row) => row.date === today)?.sent ?? 0)
-    : unavailable(ANALYTICS_UNAVAILABLE);
+  /**
+   * Counted per email for the Sydney day, never read off an analytics row. The
+   * rows are UTC calendar days, and the campaigns send most of a Sydney day
+   * before UTC midnight: on 2026-09-11 every one of 30 sends went out between
+   * 09:00 and 10:00 Sydney, the row dated the 11th did not exist, and this read
+   * 0 on every mailbox.
+   */
+  const todayCount = sends.today.available ? sendsFor(sends.today.value, account.email) : undefined;
+  const sentToday: MetricAvailability<number> = !sends.today.available
+    ? unavailable(sends.today.reason)
+    : todayCount === undefined
+      ? unavailable(MAILBOX_NOT_COUNTED)
+      : available(todayCount);
 
   const limitUsedPct =
     sentToday.available && dailyLimit.available && dailyLimit.value > 0
       ? available(round((sentToday.value / dailyLimit.value) * 100, 1))
       : unavailable<number>(
-          sentToday.available ? "No daily limit to measure usage against" : ANALYTICS_UNAVAILABLE,
+          sentToday.available ? "No daily limit to measure usage against" : sentToday.reason,
         );
 
   if (sentToday.available && dailyLimit.available && sentToday.value > dailyLimit.value) {
@@ -368,7 +428,7 @@ function buildMailboxHealth(
     });
   }
 
-  const dayOverDayIncrease = computeDayOverDayIncrease(rows, today);
+  const dayOverDayIncrease = computeDayOverDayIncrease(sends.completedDays, account.email);
 
   if (dayOverDayIncrease.available && dayOverDayIncrease.value > MAX_DAILY_RAMP_INCREASE) {
     breaches.push({
@@ -416,31 +476,52 @@ function buildMailboxHealth(
 }
 
 /**
- * Compares the two most recent completed days that have analytics rows. Today
- * is excluded on purpose: a day in progress against a finished day would report
- * a fake collapse every morning.
+ * Compares the two most recent completed Sydney days on which this mailbox
+ * sent. Today is excluded on purpose: a day in progress against a finished day
+ * would report a fake collapse every morning. Days with no sends are skipped,
+ * so the Monday to Friday schedule compares Monday with Friday rather than with
+ * an empty Sunday.
+ *
+ * This used to read the daily analytics rows and call every row dated before
+ * today "completed". Those rows are UTC calendar days, and the campaigns send
+ * their morning burst before UTC midnight, so the row dated yesterday was
+ * mostly today's sends. On 2026-09-11 the row it treated as the latest completed
+ * day, dated the 10th, held 2 sends from the 10th and all 30 of the 11th, still
+ * in progress, and the row before it, dated the 9th, held the 10th's 09:00
+ * burst. So the ramp was today against yesterday. The same shift puts
+ * Monday's burst on Sunday's date and leaves Friday's date nearly empty, which
+ * would have flagged a false ramp every Monday. The days now come from the per
+ * email count in src/lib/today-sends.ts, bucketed at Sydney midnight.
  */
 function computeDayOverDayIncrease(
-  rows: readonly InstantlyDailyAccountAnalytics[] | null,
-  today: string,
+  completedDays: MetricAvailability<readonly SydneyDaySends[]>,
+  email: string,
 ): MetricAvailability<number> {
-  if (!rows) {
-    return unavailable(ANALYTICS_UNAVAILABLE);
+  if (!completedDays.available) {
+    return unavailable(completedDays.reason);
   }
 
-  const completed = rows.filter((row) => row.date < today);
-  if (completed.length < 2) {
-    return unavailable("Fewer than two completed days of sending to compare");
+  const sentPerDay: number[] = [];
+  for (const day of completedDays.value) {
+    const sent = sendsFor(day.byMailbox, email);
+    if (sent === undefined) {
+      return unavailable(MAILBOX_NOT_COUNTED);
+    }
+    if (sent > 0) {
+      sentPerDay.push(sent);
+    }
   }
 
-  const latest = completed[completed.length - 1]!;
-  const previous = completed[completed.length - 2]!;
-
-  if (previous.sent === 0) {
-    return unavailable("The comparison day has no sends, so there is no increase to measure");
+  if (sentPerDay.length < 2) {
+    return unavailable(
+      `Fewer than two completed days of sending in the last ${completedDays.value.length} days to compare`,
+    );
   }
 
-  return available(round((latest.sent - previous.sent) / previous.sent, 4));
+  const latest = sentPerDay[sentPerDay.length - 1]!;
+  const previous = sentPerDay[sentPerDay.length - 2]!;
+
+  return available(round((latest - previous) / previous, 4));
 }
 
 export function formatPercent(fraction: number, decimals = 1): string {

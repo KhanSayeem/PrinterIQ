@@ -7,8 +7,10 @@ import {
   filterAccountsBySendingDomains,
   isoDateDaysBefore,
   sendingDayIsoDate,
+  type MailboxSends,
 } from "@/lib/deliverability";
 import { MISSING_SENDING_DOMAINS_MESSAGE, resolveSendingDomains } from "@/lib/sending-domains";
+import { loadMailboxSendsBySydneyDay } from "@/lib/today-sends";
 
 /** The sending estate is Australian, so the sending day is read in Sydney time. */
 const DEFAULT_TIMEZONE = "Australia/Sydney";
@@ -34,7 +36,8 @@ export default async function DeliverabilityPage() {
 
   const client = new InstantlyHttpClient();
   const timeZone = process.env.DASHBOARD_TIMEZONE || DEFAULT_TIMEZONE;
-  const today = sendingDayIsoDate(new Date(), timeZone);
+  const now = new Date();
+  const today = sendingDayIsoDate(now, timeZone);
 
   let accounts;
   try {
@@ -67,27 +70,48 @@ export default async function DeliverabilityPage() {
    * The analytics call is separate on purpose. If it fails the panel still shows
    * warmup and limits, and every analytics backed figure reads "not available"
    * rather than zero.
+   *
+   * Only the 30 day bounce window reads it now. Sent today, limit used and the
+   * ramp are counted one email at a time for the Sydney day, because the
+   * analytics rows are UTC calendar days and the morning burst lands on the
+   * previous UTC date. See loadMailboxSendsBySydneyDay in src/lib/today-sends.ts.
+   * That loader never throws and reports each failure as its own reason, so the
+   * two run side by side.
    */
-  let analytics: InstantlyDailyAccountAnalytics[] | null = null;
+  const loadAnalytics = async () => {
+    try {
+      return await client.getDailyAccountAnalytics({
+        emails: mailboxes.map((account) => account.email),
+        startDate: isoDateDaysBefore(today, BOUNCE_WINDOW_DAYS - 1),
+        endDate: today,
+      });
+    } catch (error) {
+      const message = loadErrorMessage(error);
+      console.error("Failed to load Instantly daily account analytics", { message });
+      return null;
+    }
+  };
+
+  const [analytics, sends]: [InstantlyDailyAccountAnalytics[] | null, MailboxSends] =
+    await Promise.all([
+      loadAnalytics(),
+      loadMailboxSendsBySydneyDay({
+        client,
+        mailboxes: mailboxes.map((account) => account.email),
+        now,
+      }),
+    ]);
+
   let notice: string | null = null;
-  try {
-    analytics = await client.getDailyAccountAnalytics({
-      emails: mailboxes.map((account) => account.email),
-      startDate: isoDateDaysBefore(today, BOUNCE_WINDOW_DAYS - 1),
-      endDate: today,
-    });
-  } catch (error) {
-    const message = loadErrorMessage(error);
-    console.error("Failed to load Instantly daily account analytics", { message });
-    notice =
-      "Daily analytics could not be loaded from Instantly, so send counts, bounce rate and ramp are not available.";
+  if (!analytics) {
+    notice = `Daily analytics could not be loaded from Instantly, so the ${BOUNCE_WINDOW_DAYS} day send and bounce counts and the bounce rate are not available.`;
   }
 
   if (!notice && !sendingDomains.length) {
     notice = `${MISSING_SENDING_DOMAINS_MESSAGE} Every mailbox in the workspace is listed below, and ADR 005 records that some of them belong to a different project and are not PrinterIQ capacity.`;
   }
 
-  const report = buildDeliverabilityReport({ accounts: mailboxes, analytics, today });
+  const report = buildDeliverabilityReport({ accounts: mailboxes, analytics, sends });
 
   return (
     <>
