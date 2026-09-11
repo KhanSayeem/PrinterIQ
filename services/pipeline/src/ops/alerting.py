@@ -15,8 +15,11 @@ change the provider, and the service boundary stays where the PRD put it.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, cast
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -98,3 +101,30 @@ class PrintingAlertSink:
     async def send_ops_alert(self, alert: OpsAlert) -> None:
         self.sent.append(alert)
         print(f"[dry-run] {alert.subject}: {alert.body}")
+
+
+class LoggingAlertSink:
+    """Writes the alert to the monitor's log instead of texting anyone.
+
+    The operator turned alarm texts off on 2026-09-11 with
+    OPS_ALERT_SMS_ENABLED=false, keeping texts for replies. Only the ops
+    alarms come through this module; reply escalations are sent by
+    `escalate()` inside the reply agent and never pass through here, so this
+    cannot silence a reply.
+
+    The alert is still written down, at warning level so `pm2 logs` shows it,
+    because an alarm nobody can read anywhere is the silent failure this
+    project keeps finding. The body is safe to log: alarm bodies carry counts
+    and campaign ids, never a lead's name or email.
+    """
+
+    def __init__(self, *, source: str) -> None:
+        self._source = source
+
+    async def send_ops_alert(self, alert: OpsAlert) -> None:
+        logger.warning(
+            "Ops alert not texted, alarm SMS is off: source=%s %s: %s",
+            self._source,
+            alert.subject,
+            alert.body,
+        )

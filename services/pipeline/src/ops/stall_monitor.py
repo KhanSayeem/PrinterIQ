@@ -41,7 +41,7 @@ if __package__ in {None, "", "src.ops"}:
 
 from db.queries import QueueJobStore, QueueProgress
 from env import load_pipeline_env
-from ops.alerting import OpsAlert, PrintingAlertSink, ReplyAgentAlertSink
+from ops.alerting import LoggingAlertSink, OpsAlert, PrintingAlertSink, ReplyAgentAlertSink
 from ops.stall_detector import (
     STALL_THRESHOLD_SECONDS,
     PipelineProgressSnapshot,
@@ -324,6 +324,11 @@ def build_alert_sink(
     """
     if dry_run:
         return PrintingAlertSink()
+    # The operator's switch for alarm texts, set on 2026-09-11. Only the
+    # literal false turns texts off, so a typo keeps the alarm loud. Checked
+    # before the reply agent settings, which a switched-off alarm never uses.
+    if os.getenv("OPS_ALERT_SMS_ENABLED", "").strip().lower() == "false":
+        return LoggingAlertSink(source=source)
     return ReplyAgentAlertSink(
         base_url=_required_env("REPLY_AGENT_INTERNAL_URL"),
         secret=_required_env("OPS_ALERT_SECRET"),
