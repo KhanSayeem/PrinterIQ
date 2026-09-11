@@ -2,8 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InstantlyAccount, InstantlySentEmail } from "@/clients/instantly";
 import { getSydneyDayRange } from "@/lib/sydney-day";
 import {
+  RAMP_LOOKBACK_DAYS,
+  countSendsByMailbox,
   countSendsInSydneyDay,
+  loadMailboxSendsBySydneyDay,
   loadTodayInstantlySendTotals,
+  type SentEmailsClient,
   type TodaySendsClient,
 } from "./today-sends";
 
@@ -16,7 +20,7 @@ function sentEmail(instant: string, email = "mac@printeriq-mail.com"): Instantly
 }
 
 /**
- * Tuesday 10 September 2026 in Sydney, which is AEST, so the day runs from
+ * Thursday 10 September 2026 in Sydney, which is AEST, so the day runs from
  * 14:00Z on the 9th to 14:00Z on the 10th. The campaigns send between 09:00 and
  * 17:00, which is 23:00Z to 07:00Z, so this one Australian day sits across two
  * UTC dates. That is the whole reason a UTC calendar bucket cannot answer it.
@@ -128,6 +132,261 @@ describe("countSendsInSydneyDay", () => {
     expect(countSendsInSydneyDay([sentEmail("2027-01-04T22:47:00.000Z")], summer, MAILBOXES)).toBe(1);
     // 12:47Z on 4 January is 23:47 on 4 January in Sydney, the day before.
     expect(countSendsInSydneyDay([sentEmail("2027-01-04T12:47:00.000Z")], summer, MAILBOXES)).toBe(0);
+  });
+});
+
+describe("countSendsByMailbox", () => {
+  const day = { start: SYDNEY_DAY_START, end: SYDNEY_DAY_END };
+  const ESTATE = ["mac@printeriq-mail.com", "murphy@printeriq-mail.com"];
+
+  /**
+   * /deliverability shows one card per mailbox, so a send has to land on the
+   * mailbox that sent it. A count that is right in total but on the wrong card
+   * would put one mailbox over its limit and show another as idle.
+   */
+  it("attributes each send to the mailbox that sent it", () => {
+    const rows = [
+      sentEmail("2026-09-09T23:47:25.000Z", "mac@printeriq-mail.com"),
+      sentEmail("2026-09-09T23:48:25.000Z", "murphy@printeriq-mail.com"),
+      sentEmail("2026-09-09T23:49:25.000Z", "murphy@printeriq-mail.com"),
+    ];
+
+    const counts = countSendsByMailbox(rows, day, ESTATE);
+
+    expect(counts.get("mac@printeriq-mail.com")).toBe(1);
+    expect(counts.get("murphy@printeriq-mail.com")).toBe(2);
+  });
+
+  it("gives a mailbox that sent nothing a real zero rather than no entry", () => {
+    const counts = countSendsByMailbox(
+      [sentEmail("2026-09-09T23:47:25.000Z", "mac@printeriq-mail.com")],
+      day,
+      ESTATE,
+    );
+
+    expect(counts.get("murphy@printeriq-mail.com")).toBe(0);
+    expect([...counts.keys()].sort()).toEqual([...ESTATE].sort());
+  });
+
+  it("keys the counts by lowercased mailbox, whatever case Instantly returned", () => {
+    const counts = countSendsByMailbox(
+      [sentEmail("2026-09-09T23:47:25.000Z", "Murphy@PrinterIQ-Mail.com")],
+      day,
+      ["MURPHY@printeriq-mail.com"],
+    );
+
+    expect([...counts.entries()]).toEqual([["murphy@printeriq-mail.com", 1]]);
+  });
+
+  it("uses the same half open Sydney day as the today bar", () => {
+    const rows = [
+      sentEmail("2026-09-09T13:59:59.999Z", "mac@printeriq-mail.com"),
+      sentEmail("2026-09-09T14:00:00.000Z", "mac@printeriq-mail.com"),
+      sentEmail("2026-09-10T13:59:59.999Z", "mac@printeriq-mail.com"),
+      sentEmail("2026-09-10T14:00:00.000Z", "mac@printeriq-mail.com"),
+    ];
+
+    expect(countSendsByMailbox(rows, day, ESTATE).get("mac@printeriq-mail.com")).toBe(2);
+  });
+
+  it("drops a row from a mailbox outside the configured list", () => {
+    const counts = countSendsByMailbox(
+      [sentEmail("2026-09-09T23:47:25.000Z", "someone@another-project.com")],
+      day,
+      ESTATE,
+    );
+
+    expect(counts.has("someone@another-project.com")).toBe(false);
+    expect([...counts.values()]).toEqual([0, 0]);
+  });
+});
+
+describe("loadMailboxSendsBySydneyDay", () => {
+  const ESTATE = ["mac@printeriq-mail.com", "murphy@printeriq-mail.com"];
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Answers each window the way Instantly does: every row whose instant falls
+   * inside the window asked for. Two calls with two windows therefore see two
+   * different slices of the same history.
+   */
+  function windowedClient(rows: readonly InstantlySentEmail[]): SentEmailsClient {
+    return {
+      listSentEmails: vi.fn(async (query) => ({
+        emails: rows.filter(
+          (row) =>
+            row.sentAt.getTime() >= query.createdAtOrAfter.getTime() &&
+            row.sentAt.getTime() < query.createdBefore.getTime(),
+        ),
+        complete: true,
+      })),
+    };
+  }
+
+  it("looks back four completed Sydney days, so Monday still sees Friday and Thursday", () => {
+    expect(RAMP_LOOKBACK_DAYS).toBe(4);
+  });
+
+  it("asks for today's Sydney day and the completed days before it as instants, never a UTC date", async () => {
+    const client = windowedClient([]);
+
+    await loadMailboxSendsBySydneyDay({ client, mailboxes: ESTATE, now: NOW });
+
+    expect(client.listSentEmails).toHaveBeenCalledWith({
+      emails: ESTATE,
+      createdAtOrAfter: SYDNEY_DAY_START,
+      createdBefore: SYDNEY_DAY_END,
+    });
+    expect(client.listSentEmails).toHaveBeenCalledWith({
+      emails: ESTATE,
+      // Sydney midnight opening 6 September, four days before the 10th.
+      createdAtOrAfter: new Date("2026-09-05T14:00:00.000Z"),
+      createdBefore: SYDNEY_DAY_START,
+    });
+  });
+
+  /**
+   * The production shape on 2026-09-11. All 30 of the day's sends went out
+   * between 09:00 and 10:00 Sydney, which is 23:00Z to 00:00Z on the previous
+   * UTC date, so Instantly's daily row for the 11th did not exist and the row
+   * for the 10th read 32. Counted here per email, the 11th reads 30.
+   */
+  it("counts a 09:47 Sydney send into today on the mailbox that sent it", async () => {
+    const client = windowedClient([
+      sentEmail("2026-09-09T23:47:25.000Z", "murphy@printeriq-mail.com"),
+      sentEmail("2026-09-09T23:52:25.000Z", "murphy@printeriq-mail.com"),
+      sentEmail("2026-09-09T23:58:25.000Z", "mac@printeriq-mail.com"),
+    ]);
+
+    const sends = await loadMailboxSendsBySydneyDay({ client, mailboxes: ESTATE, now: NOW });
+
+    expect(sends.today.available).toBe(true);
+    if (sends.today.available) {
+      expect(sends.today.value.get("murphy@printeriq-mail.com")).toBe(2);
+      expect(sends.today.value.get("mac@printeriq-mail.com")).toBe(1);
+    }
+  });
+
+  it("splits the completed days per Sydney day, oldest first, and keeps today out of them", async () => {
+    const client = windowedClient([
+      // 09:10 on Monday 7 September in Sydney, a UTC Sunday.
+      sentEmail("2026-09-06T23:10:00.000Z", "mac@printeriq-mail.com"),
+      // 09:10 and 10:30 on Wednesday 9 September in Sydney, across UTC midnight.
+      sentEmail("2026-09-08T23:10:00.000Z", "mac@printeriq-mail.com"),
+      sentEmail("2026-09-09T00:30:00.000Z", "mac@printeriq-mail.com"),
+      // 09:47 today, 10 September in Sydney. Belongs to today only.
+      sentEmail("2026-09-09T23:47:25.000Z", "mac@printeriq-mail.com"),
+    ]);
+
+    const sends = await loadMailboxSendsBySydneyDay({ client, mailboxes: ESTATE, now: NOW });
+
+    expect(sends.completedDays.available).toBe(true);
+    if (sends.completedDays.available) {
+      expect(
+        sends.completedDays.value.map((day) => [day.date, day.byMailbox.get("mac@printeriq-mail.com")]),
+      ).toEqual([
+        ["2026-09-06", 0],
+        ["2026-09-07", 1],
+        ["2026-09-08", 0],
+        ["2026-09-09", 2],
+      ]);
+    }
+  });
+
+  it("reports today as not available, never 0, when the sent email call failed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const client: SentEmailsClient = {
+      listSentEmails: vi.fn(async (query) => {
+        if (query.createdAtOrAfter.getTime() === SYDNEY_DAY_START.getTime()) {
+          throw new Error("Instantly API GET /api/v2/emails failed with 429");
+        }
+        return { emails: [], complete: true };
+      }),
+    };
+
+    const sends = await loadMailboxSendsBySydneyDay({ client, mailboxes: ESTATE, now: NOW });
+
+    expect(sends.today.available).toBe(false);
+    expect(sends.today.available ? null : sends.today.reason).toMatch(/Instantly/);
+    expect(JSON.stringify(sends.today)).not.toContain('"value"');
+    // The other window answered, so its figure stands on its own.
+    expect(sends.completedDays.available).toBe(true);
+  });
+
+  it("reports the completed days as not available when their call failed, and keeps today", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const client: SentEmailsClient = {
+      listSentEmails: vi.fn(async (query) => {
+        if (query.createdAtOrAfter.getTime() !== SYDNEY_DAY_START.getTime()) {
+          throw new Error("Instantly API GET /api/v2/emails failed with 500");
+        }
+        return { emails: [sentEmail("2026-09-09T23:47:25.000Z")], complete: true };
+      }),
+    };
+
+    const sends = await loadMailboxSendsBySydneyDay({ client, mailboxes: ESTATE, now: NOW });
+
+    expect(sends.completedDays.available).toBe(false);
+    expect(sends.today.available).toBe(true);
+  });
+
+  it("reports unavailable, never a short count, when a page walk was truncated", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const client: SentEmailsClient = {
+      listSentEmails: vi.fn(async () => ({
+        emails: [sentEmail("2026-09-09T23:47:25.000Z")],
+        complete: false,
+      })),
+    };
+
+    const sends = await loadMailboxSendsBySydneyDay({ client, mailboxes: ESTATE, now: NOW });
+
+    expect(sends.today.available).toBe(false);
+    expect(sends.completedDays.available).toBe(false);
+    expect(JSON.stringify(sends)).not.toContain('"value"');
+  });
+
+  /**
+   * Sunday 4 October 2026 is the AEST to AEDT changeover, a 23 hour Sydney day.
+   * Stepping back a fixed 24 hours from Tuesday would land an hour off on every
+   * day before it.
+   */
+  it("steps back across a daylight saving change by Sydney midnights, not by 24 hours", async () => {
+    const client = windowedClient([]);
+
+    // Midday Tuesday 6 October in Sydney, AEDT.
+    const sends = await loadMailboxSendsBySydneyDay({
+      client,
+      mailboxes: ESTATE,
+      now: new Date("2026-10-06T01:00:00.000Z"),
+    });
+
+    expect(client.listSentEmails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // Sydney midnight opening Friday 2 October, still AEST.
+        createdAtOrAfter: new Date("2026-10-01T14:00:00.000Z"),
+        // Sydney midnight opening Tuesday 6 October, AEDT.
+        createdBefore: new Date("2026-10-05T13:00:00.000Z"),
+      }),
+    );
+    expect(
+      sends.completedDays.available ? sends.completedDays.value.map((day) => day.date) : null,
+    ).toEqual(["2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05"]);
+  });
+
+  it("never reads the pre-aggregated daily analytics", async () => {
+    const getDailyAccountAnalytics = vi.fn(async () => []);
+    const client = {
+      ...windowedClient([]),
+      getDailyAccountAnalytics,
+    } as unknown as SentEmailsClient;
+
+    await loadMailboxSendsBySydneyDay({ client, mailboxes: ESTATE, now: NOW });
+
+    expect(getDailyAccountAnalytics).not.toHaveBeenCalled();
   });
 });
 
