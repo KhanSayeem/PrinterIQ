@@ -1706,17 +1706,22 @@ export function buildTodayUnsubscribeCountQuery(
 ) {
   requireTenantId(identity.tenantId);
 
+  // The comparisons go through gte, lt and isNull rather than raw `>= ${date}`
+  // inside the template. Those operators carry the column, so Drizzle encodes
+  // the Date as the timestamp the driver expects. A bare Date in raw sql`` skips
+  // that encoding, and the postgres-js client Drizzle configures throws
+  // ERR_INVALID_ARG_TYPE on it, which failed the Today so far bar on every load.
   return db
     .select({
-      unsubscribeCount: sql<string>`count(*) filter (
-        where ${outreachSends.unsubscribedAt} >= ${identity.dayStart}
-          and ${outreachSends.unsubscribedAt} < ${identity.dayEnd}
-      )`.as("unsubscribe_count"),
-      undatedUnsubscribeCount: sql<string>`count(*) filter (
-        where ${outreachSends.unsubscribedAt} is null
-          and ${outreachSends.updatedAt} >= ${identity.dayStart}
-          and ${outreachSends.updatedAt} < ${identity.dayEnd}
-      )`.as("undated_unsubscribe_count"),
+      unsubscribeCount: sql<string>`count(*) filter (where ${and(
+        gte(outreachSends.unsubscribedAt, identity.dayStart),
+        lt(outreachSends.unsubscribedAt, identity.dayEnd),
+      )})`.as("unsubscribe_count"),
+      undatedUnsubscribeCount: sql<string>`count(*) filter (where ${and(
+        isNull(outreachSends.unsubscribedAt),
+        gte(outreachSends.updatedAt, identity.dayStart),
+        lt(outreachSends.updatedAt, identity.dayEnd),
+      )})`.as("undated_unsubscribe_count"),
     })
     .from(outreachSends)
     .where(
