@@ -36,6 +36,14 @@ function loadDotenv(filePath) {
 
 const rootEnv = loadDotenv(path.join(__dirname, '.env'));
 
+// The operator can switch the bounce alarm off with BOUNCE_MONITOR_ENABLED=false
+// in .env. The switch has to live here, not in a `pm2 delete` on the box:
+// every deploy runs `pm2 delete all` and then `pm2 start ecosystem.config.js`,
+// so a process removed by hand comes straight back on the next deploy and
+// starts texting again with nobody having decided it should. Anything other
+// than the literal string false leaves the alarm on, so a typo fails loud.
+const bounceMonitorEnabled = rootEnv.BOUNCE_MONITOR_ENABLED !== 'false';
+
 module.exports = {
   apps: [
     {
@@ -148,5 +156,5 @@ module.exports = {
         PORT: 3000,
       },
     },
-  ],
+  ].filter((app) => bounceMonitorEnabled || app.name !== 'pipeline-bounce-monitor'),
 };
