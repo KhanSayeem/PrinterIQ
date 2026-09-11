@@ -996,8 +996,19 @@ describe("today so far queries", () => {
     expect(query.sql).toContain('"outreach_sends"."unsubscribed" =');
     expect(query.sql).toContain('"unsubscribe_count"');
     expect(query.params).toContain(tenantId);
-    expect(query.params).toContain(dayStart);
-    expect(query.params).toContain(dayEnd);
+    // The window bounds must reach the driver as values it can serialise. A
+    // bare Date inside raw sql`` skips the column's encoder, and the postgres-js
+    // client Drizzle configures then throws ERR_INVALID_ARG_TYPE. The Today so
+    // far bar on /leads failed on every page load from #174 until this, while
+    // this test asserted that the Date objects themselves were the params.
+    expect(query.params).toContain(dayStart.toISOString());
+    expect(query.params).toContain(dayEnd.toISOString());
+    expect(query.params.some((param) => param instanceof Date)).toBe(false);
+    // Half-open day. An unsubscribe stamped exactly at Sydney midnight belongs
+    // to the new day only; an inclusive end would count it on two days' bars.
+    expect(query.sql).toMatch(/"unsubscribed_at" < \$\d+/);
+    expect(query.sql).toMatch(/"updated_at" < \$\d+/);
+    expect(query.sql).not.toMatch(/<= \$\d+/);
   });
 
   it("no longer answers sends or bounces from outreach_sends", () => {
