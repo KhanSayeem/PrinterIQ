@@ -4,6 +4,7 @@ import {
   GOOGLE_SPAM_RATE_HARD_LIMIT,
   GOOGLE_SPAM_RATE_TARGET,
   MAX_DAILY_RAMP_INCREASE,
+  MIN_SENDS_FOR_MAILBOX_BOUNCE_RATE,
   buildDeliverabilityReport,
   filterAccountsBySendingDomains,
   sendingDayIsoDate,
@@ -81,7 +82,10 @@ describe("buildDeliverabilityReport per mailbox", () => {
   it("renders the mailbox address, its domain, warmup, limit usage and score", () => {
     const report = buildDeliverabilityReport({
       accounts: [account({ email: "murphy@presciaweb.com", daily_limit: 20, stat_warmup_score: 100 })],
-      analytics: [day(TODAY, 15, 0)],
+      // Two days so the window clears the 30 send floor. With today alone, 15
+      // sends is too few to judge a bounce rate and the mailbox is rightly
+      // unknown rather than ok.
+      analytics: [day("2026-09-08", 15, 0), day(TODAY, 15, 0)],
       today: TODAY,
     });
 
@@ -444,5 +448,72 @@ describe("overall verdict", () => {
     });
 
     expect(report.totalDailyLimit.available).toBe(false);
+  });
+});
+
+describe("bounce rate volume floor", () => {
+  it("needs 30 sends in the window before a mailbox's rate is judged", () => {
+    expect(MIN_SENDS_FOR_MAILBOX_BOUNCE_RATE).toBe(30);
+  });
+
+  /**
+   * Measured on 2026-09-11: five healthy mailboxes, active and warming at 98 to
+   * 100, showed critical with "Stop sending from this mailbox" because 1 or 2 of
+   * their 6 sends had bounced. The bounces came from unverified leads that were
+   * pulled from the campaigns that morning, not from the mailboxes. At six sends
+   * one bounce reads as 17%, so the 3% line cannot tell a bad mailbox from bad
+   * luck, and a panel that cries wolf gets ignored the day it is right.
+   */
+  it("does not judge 2 bounced of 6 sent, and still shows both counts", () => {
+    const report = buildDeliverabilityReport({
+      accounts: [account()],
+      analytics: [day("2026-09-10", 3, 1), day("2026-09-11", 3, 1)],
+      today: TODAY,
+    });
+
+    const mailbox = report.mailboxes[0]!;
+    expect(mailbox.bounceRate.available).toBe(false);
+    if (!mailbox.bounceRate.available) {
+      expect(mailbox.bounceRate.reason).toContain("Too few sends");
+      expect(mailbox.bounceRate.reason).toContain("30");
+    }
+    expect(mailbox.breaches.map((breach) => breach.id)).not.toContain("bounce-rate");
+    expect(mailbox.verdict).toBe("unknown");
+    expect(mailbox.bouncedInWindow).toEqual({ available: true, value: 2 });
+    expect(mailbox.sentInWindow).toEqual({ available: true, value: 6 });
+  });
+
+  it("still does not judge one send below the floor", () => {
+    const report = buildDeliverabilityReport({
+      accounts: [account()],
+      analytics: [day("2026-09-08", 29, 5)],
+      today: TODAY,
+    });
+
+    expect(report.mailboxes[0]!.bounceRate.available).toBe(false);
+    expect(report.mailboxes[0]!.verdict).toBe("unknown");
+  });
+
+  it("judges the rate from exactly the floor, and a real breach turns critical", () => {
+    const report = buildDeliverabilityReport({
+      accounts: [account()],
+      analytics: [day("2026-09-08", 30, 2)],
+      today: TODAY,
+    });
+
+    const mailbox = report.mailboxes[0]!;
+    expect(mailbox.bounceRate).toEqual({ available: true, value: 0.0667 });
+    expect(mailbox.verdict).toBe("critical");
+    expect(mailbox.breaches.map((breach) => breach.id)).toContain("bounce-rate");
+  });
+
+  it("does not let the floor hide an account error", () => {
+    const report = buildDeliverabilityReport({
+      accounts: [account({ status: -2 })],
+      analytics: [day("2026-09-08", 6, 2)],
+      today: TODAY,
+    });
+
+    expect(report.mailboxes[0]!.verdict).toBe("critical");
   });
 });
