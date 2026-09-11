@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DeliverabilityPanel } from "./DeliverabilityPanel";
-import { buildDeliverabilityReport } from "@/lib/deliverability";
+import { buildDeliverabilityReport, type MailboxSends } from "@/lib/deliverability";
 import type { InstantlyAccount, InstantlyDailyAccountAnalytics } from "@/clients/instantly";
 
 const TODAY = "2026-09-09";
@@ -28,18 +28,52 @@ function day(
   return { date, email_account: email, sent, bounced };
 }
 
+function counts(entries: Record<string, number>) {
+  return new Map(Object.entries(entries).map(([email, sent]) => [email.toLowerCase(), sent]));
+}
+
+/**
+ * Per email send counts as /deliverability loads them. Left out, today reads a
+ * real zero for every account and there are no completed days for the ramp.
+ */
+function sends(
+  accounts: InstantlyAccount[],
+  options: {
+    sentToday?: Record<string, number>;
+    completedDays?: ReadonlyArray<readonly [string, Record<string, number>]>;
+  } = {},
+): MailboxSends {
+  const sentToday =
+    options.sentToday ?? Object.fromEntries(accounts.map((item) => [item.email, 0]));
+  return {
+    today: { available: true, value: counts(sentToday) },
+    completedDays: {
+      available: true,
+      value: (options.completedDays ?? []).map(([date, byMailbox]) => ({
+        date,
+        byMailbox: counts(byMailbox),
+      })),
+    },
+  };
+}
+
 function renderReport(
   accounts: InstantlyAccount[],
   analytics: InstantlyDailyAccountAnalytics[] | null,
+  options: Parameters<typeof sends>[1] = {},
 ) {
   return render(
-    <DeliverabilityPanel report={buildDeliverabilityReport({ accounts, analytics, today: TODAY })} />,
+    <DeliverabilityPanel
+      report={buildDeliverabilityReport({ accounts, analytics, sends: sends(accounts, options) })}
+    />,
   );
 }
 
 describe("DeliverabilityPanel per mailbox", () => {
   it("shows the mailbox, its domain, warmup, limit usage, bounce rate and score", () => {
-    renderReport([account()], [day(TODAY, 15, 0), day("2026-09-08", 85, 1)]);
+    renderReport([account()], [day(TODAY, 15, 0), day("2026-09-08", 85, 1)], {
+      sentToday: { "murphy@presciaweb.com": 15 },
+    });
 
     const card = screen.getByRole("group", { name: "murphy@presciaweb.com" });
     expect(within(card).getByText("presciaweb.com")).toBeInTheDocument();
@@ -97,7 +131,12 @@ describe("DeliverabilityPanel threshold breaches", () => {
   });
 
   it("flags a day over day increase above Google's published 100% band", () => {
-    renderReport([account()], [day("2026-09-07", 40, 0), day("2026-09-08", 81, 0)]);
+    renderReport([account()], [day("2026-09-07", 40, 0), day("2026-09-08", 81, 0)], {
+      completedDays: [
+        ["2026-09-07", { "murphy@presciaweb.com": 40 }],
+        ["2026-09-08", { "murphy@presciaweb.com": 81 }],
+      ],
+    });
 
     const card = screen.getByRole("group", { name: "murphy@presciaweb.com" });
     expect(card).toHaveClass("deliv-card-warning");
@@ -105,7 +144,12 @@ describe("DeliverabilityPanel threshold breaches", () => {
   });
 
   it("does not flag a day over day increase of exactly 100%", () => {
-    renderReport([account()], [day("2026-09-07", 40, 0), day("2026-09-08", 80, 0)]);
+    renderReport([account()], [day("2026-09-07", 40, 0), day("2026-09-08", 80, 0)], {
+      completedDays: [
+        ["2026-09-07", { "murphy@presciaweb.com": 40 }],
+        ["2026-09-08", { "murphy@presciaweb.com": 80 }],
+      ],
+    });
 
     expect(screen.getByRole("group", { name: "murphy@presciaweb.com" })).not.toHaveClass(
       "deliv-card-warning",
@@ -126,6 +170,7 @@ describe("DeliverabilityPanel unavailable metrics", () => {
     renderReport(
       [account({ daily_limit: null, stat_warmup_score: null })],
       [day(TODAY, 5, 0), day("2026-09-08", 100, 2)],
+      { sentToday: { "murphy@presciaweb.com": 5 } },
     );
 
     const card = screen.getByRole("group", { name: "murphy@presciaweb.com" });
@@ -209,7 +254,11 @@ describe("DeliverabilityPanel notice", () => {
   it("surfaces a loading problem passed in by the page", () => {
     render(
       <DeliverabilityPanel
-        report={buildDeliverabilityReport({ accounts: [account()], analytics: null, today: TODAY })}
+        report={buildDeliverabilityReport({
+          accounts: [account()],
+          analytics: null,
+          sends: sends([account()]),
+        })}
         notice="Daily analytics could not be loaded from Instantly."
       />,
     );
