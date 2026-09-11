@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -16,6 +17,7 @@ from ops.stall_monitor import (
     ReadOnlyAlertThrottle,
     RedisAlertThrottle,
     StallCheckResult,
+    build_alert_sink,
     build_alert_throttle,
     run_stall_check,
 )
@@ -505,3 +507,54 @@ def test_stall_dry_run_entrypoint_prints_the_sms_and_writes_no_redis_state(
     # A rehearsal that claims the real cooldown silences the next real check.
     assert redis_client.keys == {}
     assert "[dry-run]" in capsys.readouterr().out
+
+
+def test_alarm_texts_switched_off_log_the_alert_and_never_reach_the_reply_agent(
+    monkeypatch, caplog
+) -> None:
+    """The operator turned alarm texts off on 2026-09-11. Replies still text.
+
+    Only the two ops alarms come through this sink. Reply escalations are sent
+    by `escalate()` inside the reply agent and never pass through here, so
+    switching this path off cannot silence a reply. The alert still lands in
+    the monitor's log, because an alarm nobody can read at all is the silent
+    failure this project keeps finding.
+    """
+    from ops.alerting import LoggingAlertSink
+
+    monkeypatch.setenv("OPS_ALERT_SMS_ENABLED", "false")
+    # The switched-off path must not need the reply agent at all.
+    monkeypatch.delenv("REPLY_AGENT_INTERNAL_URL", raising=False)
+    monkeypatch.delenv("OPS_ALERT_SECRET", raising=False)
+
+    sink = build_alert_sink(source="pipeline-bounce-monitor")
+
+    assert isinstance(sink, LoggingAlertSink)
+    with caplog.at_level(logging.WARNING):
+        alert = OpsAlert(subject="PrinterIQ bounce alarm", body="Bounce rate 13.3%")
+        asyncio.run(sink.send_ops_alert(alert))
+    assert "Bounce rate 13.3%" in caplog.text
+    assert "pipeline-bounce-monitor" in caplog.text
+
+
+@pytest.mark.parametrize("value", [None, "", "true", "flase"])
+def test_alarm_texts_stay_on_unless_switched_off_exactly(monkeypatch, value) -> None:
+    """Only an explicit false turns texts off, so a typo keeps the alarm loud."""
+    from ops.alerting import ReplyAgentAlertSink
+
+    if value is None:
+        monkeypatch.delenv("OPS_ALERT_SMS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("OPS_ALERT_SMS_ENABLED", value)
+    monkeypatch.setenv("REPLY_AGENT_INTERNAL_URL", "http://127.0.0.1:3001")
+    monkeypatch.setenv("OPS_ALERT_SECRET", "test-secret")
+
+    assert isinstance(build_alert_sink(), ReplyAgentAlertSink)
+
+
+def test_dry_run_still_prints_when_alarm_texts_are_off(monkeypatch) -> None:
+    from ops.alerting import PrintingAlertSink
+
+    monkeypatch.setenv("OPS_ALERT_SMS_ENABLED", "false")
+
+    assert isinstance(build_alert_sink(dry_run=True), PrintingAlertSink)
