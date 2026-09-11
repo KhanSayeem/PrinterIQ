@@ -14,6 +14,23 @@ class SendWindowNotReachedError(RuntimeError):
     """Raised when outreach should be retried after the configured send time."""
 
 
+class UnverifiedEmailError(ValueError):
+    """The lead's email has not been verified, so it is not handed to Instantly."""
+
+
+# Verifier labels as they actually appear in `leads.email_status`, compared
+# case-insensitively. Everything else is refused, including labels nobody has
+# seen yet: an unknown label is an unverified email until someone checks it.
+#
+# Measured against production on 2026-09-11: 894 handed-off leads carried one
+# of these labels and none had bounced. Every one of the 7 bounces came from
+# the two vendor buckets "Syntactically valid public business email" and
+# "Publicly Listed, Source Pending Official Check" (the second label carries a
+# dash in the data), which only say an address looks right or was seen in a
+# public listing, not that a mailbox exists behind it.
+VERIFIED_EMAIL_STATUSES = frozenset({"verified", "valid"})
+
+
 class OutreachSendLockedError(RuntimeError):
     """Raised when another worker already holds the same outreach send lock."""
 
@@ -124,6 +141,13 @@ async def schedule_outreach(
     if lead.get("status") != "qualified":
         raise ValueError("schedule_outreach requires a qualified lead")
 
+    # Before the lock and the reservation, so a refused lead leaves no
+    # half-written send behind. Once Instantly has a lead it sends on its own
+    # schedule, and pulling leads back out is the slow path that runs after
+    # the bounces have already landed on the sending domains.
+    if not _email_is_verified(lead):
+        raise UnverifiedEmailError("schedule_outreach requires a verified email")
+
     lock_acquired = await outreach_repo.acquire_outreach_send_lock(
         tenant_id=tenant_id,
         lead_id=lead_id,
@@ -189,6 +213,13 @@ async def schedule_outreach(
             instantly_campaign_id=campaign_id,
             channel=channel,
         )
+
+
+def _email_is_verified(lead: dict[str, object]) -> bool:
+    status = lead.get("email_status")
+    if not isinstance(status, str):
+        return False
+    return status.strip().lower() in VERIFIED_EMAIL_STATUSES
 
 
 def _campaign_id(payload: dict[str, object]) -> str:

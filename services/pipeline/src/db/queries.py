@@ -1525,7 +1525,7 @@ async def get_lead_by_id(
 ) -> dict[str, object]:
     result = await connection.fetchrow(
         """
-        SELECT id, tenant_id, email, website_url, technologies, status,
+        SELECT id, tenant_id, email, email_status, website_url, technologies, status,
                phone,
                first_name, last_name, business_name, city, state,
                industry, vertical, keywords

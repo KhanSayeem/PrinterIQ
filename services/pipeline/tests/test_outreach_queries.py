@@ -87,6 +87,10 @@ def test_get_lead_by_id_includes_preview_trade_context() -> None:
         assert "industry" in query
         assert "vertical" in query
         assert "keywords" in query
+        # schedule_outreach refuses anything unverified, so it has to be able
+        # to see the status. Without this column the guard reads a missing
+        # key on every real lead.
+        assert "email_status" in query
         assert "tenant_id = $1" in query
         assert "id = $2" in query
 
