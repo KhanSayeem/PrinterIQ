@@ -11,6 +11,7 @@ from pipeline_queue.definitions import JobType
 from workers.schedule_outreach import (
     OutreachSendLockedError,
     SendWindowNotReachedError,
+    UnverifiedEmailError,
     schedule_outreach,
 )
 
@@ -145,6 +146,7 @@ def _lead() -> dict[str, object]:
         "website_url": "https://stonebuilders.com.au",
         "phone": "+61400000001",
         "status": "qualified",
+        "email_status": "Verified",
     }
 
 
@@ -615,5 +617,105 @@ def test_custom_variables_carry_the_tenant_id_alongside_the_lead_id() -> None:
         assert isinstance(custom_variables, dict)
         assert custom_variables["tenant_id"] == str(TENANT_ID)
         assert custom_variables["lead_id"] == str(LEAD_ID)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "email_status",
+    [
+        # The two vendor buckets that bounced in production. On 2026-09-10 the
+        # first bounced 3 of the day's 30 sends; on 2026-09-11 the second
+        # bounced 4 of about 15 in one campaign, while 878 verified sends had
+        # bounced none.
+        "Syntactically valid public business email",
+        "Publicly Listed",
+        "unverified",
+        "",
+        None,
+    ],
+)
+def test_refuses_to_hand_an_unverified_email_to_instantly(email_status: object) -> None:
+    """Every bounce so far came from an unverified email, and none from a verified one.
+
+    Nothing between import and Instantly looked at `email_status`, so any
+    lead that scored well enough was sent whatever its email was worth. Once
+    handed off, Instantly sends on its own schedule, and pulling leads back
+    out afterwards is the slow, after-the-damage path. The check has to sit
+    here, before the handoff.
+    """
+
+    async def scenario() -> None:
+        repo = FakeOutreachRepository()
+        instantly = FakeInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]})
+        lead = _lead()
+        lead["email_status"] = email_status
+
+        with pytest.raises(UnverifiedEmailError):
+            await schedule_outreach(
+                _payload(preview_url=PREVIEW_URL),
+                lead_fetcher=FakeLeadFetcher(lead),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=repo,
+                instantly_client=instantly,
+            )
+
+        assert instantly.calls == []
+        assert repo.reserved == []
+        assert repo.lock_acquired is False
+
+    asyncio.run(scenario())
+
+
+def test_refuses_a_lead_whose_email_status_was_never_read() -> None:
+    """A lead dict without the key is refused, not waved through.
+
+    The production lead query did not select `email_status` at all. Treating
+    a missing key as fine would have made this guard a no-op in exactly the
+    place it runs.
+    """
+
+    async def scenario() -> None:
+        instantly = FakeInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]})
+        lead = _lead()
+        del lead["email_status"]
+
+        with pytest.raises(UnverifiedEmailError):
+            await schedule_outreach(
+                _payload(preview_url=PREVIEW_URL),
+                lead_fetcher=FakeLeadFetcher(lead),
+                qualification_fetcher=FakeQualificationFetcher(_qualification()),
+                outreach_repo=FakeOutreachRepository(),
+                instantly_client=instantly,
+            )
+
+        assert instantly.calls == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("email_status", ["Verified", "verified", "valid", " VALID "])
+def test_hands_off_a_verified_email_whatever_the_casing(email_status: str) -> None:
+    """The verified labels in production are spelled more than one way.
+
+    878 handed-off leads read "Verified", 12 read "verified" and 4 read
+    "valid", and none of them has bounced. Refusing one spelling would stall
+    good leads for no reason.
+    """
+
+    async def scenario() -> None:
+        instantly = FakeInstantlyClient(result={"created_leads": [{"id": "instantly-lead-1"}]})
+        lead = _lead()
+        lead["email_status"] = email_status
+
+        await schedule_outreach(
+            _payload(preview_url=PREVIEW_URL),
+            lead_fetcher=FakeLeadFetcher(lead),
+            qualification_fetcher=FakeQualificationFetcher(_qualification()),
+            outreach_repo=FakeOutreachRepository(),
+            instantly_client=instantly,
+        )
+
+        assert len(instantly.calls) == 1
 
     asyncio.run(scenario())
