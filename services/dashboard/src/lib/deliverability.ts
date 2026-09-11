@@ -43,6 +43,24 @@ export const MAX_DAILY_RAMP_INCREASE = 1;
 export const BOUNCE_RATE_INVESTIGATE_THRESHOLD = 0.03;
 /** Bounce rate is measured over a window because a single day at this volume is noise. */
 export const BOUNCE_WINDOW_DAYS = 30;
+/**
+ * Fewest sends in the window before a mailbox's bounce rate is judged at all.
+ *
+ * A window is not enough on its own at this volume. On 2026-09-11 five healthy
+ * mailboxes, active and warming at 98 to 100, showed critical with "Stop sending
+ * from this mailbox" because 1 or 2 of their 6 sends had bounced. The bounces
+ * came from unverified leads, pulled from the campaigns that morning, not from
+ * the mailboxes. At six sends one bounce is 17%, so the 3% line cannot tell a
+ * bad mailbox from bad luck, and a panel that cries wolf is ignored the day it
+ * is right.
+ *
+ * ADR 005 makes the same argument about spam complaints, where it drops the
+ * percentage for an absolute count because the volume is too low for a rate to
+ * mean anything. 30 matches the floor the bounce alarm uses before it judges a
+ * rate. Below it the rate reads "not available" with the counts beside it, so
+ * the mailbox is unknown, never green.
+ */
+export const MIN_SENDS_FOR_MAILBOX_BOUNCE_RATE = 30;
 
 export type MetricAvailability<T> =
   | { readonly available: true; readonly value: T }
@@ -335,7 +353,11 @@ function buildMailboxHealth(
         ? unavailable(
             `Nothing sent in the last ${BOUNCE_WINDOW_DAYS} days, so there is no bounce rate to report`,
           )
-        : available(round(windowBounced / windowSent, 4));
+        : windowSent < MIN_SENDS_FOR_MAILBOX_BOUNCE_RATE
+          ? unavailable(
+              `Too few sends to judge a rate: ${windowSent} in the last ${BOUNCE_WINDOW_DAYS} days, needs ${MIN_SENDS_FOR_MAILBOX_BOUNCE_RATE}`,
+            )
+          : available(round(windowBounced / windowSent, 4));
 
   if (bounceRate.available && bounceRate.value > BOUNCE_RATE_INVESTIGATE_THRESHOLD) {
     breaches.push({
