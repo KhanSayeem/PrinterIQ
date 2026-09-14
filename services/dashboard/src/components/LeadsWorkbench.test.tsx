@@ -154,6 +154,17 @@ describe("LeadsWorkbench", () => {
     expect(screen.getByText(/Mon 15 Jun/)).toBeInTheDocument();
   });
 
+  it("shows emails delivered to date when the page supplies them", () => {
+    render(
+      <LeadsWorkbench
+        {...baseProps}
+        sendsToDate={{ available: true, value: { sent: 75, bounced: 7, delivered: 68, contacted: 67 } }}
+      />,
+    );
+
+    expect(screen.getByText("Delivered to date")).toBeInTheDocument();
+  });
+
   it("says the day could not be read rather than hiding the bar", () => {
     const { container } = render(<LeadsWorkbench {...baseProps} todaySummary={null} />);
 

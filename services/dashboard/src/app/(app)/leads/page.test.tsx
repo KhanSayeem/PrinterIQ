@@ -7,6 +7,7 @@ const {
   getLeadListPageMock,
   getTodaySoFarSummaryMock,
   loadTodayInstantlySendTotalsMock,
+  loadSendsToDateMock,
   leadsWorkbenchMock,
 } = vi.hoisted(() => ({
   getDashboardTenantIdMock: vi.fn(),
@@ -14,6 +15,7 @@ const {
   getLeadListPageMock: vi.fn(),
   getTodaySoFarSummaryMock: vi.fn(),
   loadTodayInstantlySendTotalsMock: vi.fn(),
+  loadSendsToDateMock: vi.fn(),
   leadsWorkbenchMock: vi.fn<(props: Record<string, unknown>) => null>(() => null),
 }));
 
@@ -59,6 +61,15 @@ vi.mock("@/lib/today-sends", async (importOriginal) => ({
   loadTodayInstantlySendTotals: loadTodayInstantlySendTotalsMock,
 }));
 
+vi.mock("@/lib/sends-to-date", () => ({
+  loadSendsToDate: loadSendsToDateMock,
+}));
+
+const sendsToDate = {
+  available: true as const,
+  value: { sent: 75, bounced: 7, delivered: 68, contacted: 67 },
+};
+
 vi.mock("@/components/LeadsWorkbench", () => ({
   LeadsWorkbench: leadsWorkbenchMock,
 }));
@@ -72,6 +83,7 @@ describe("LeadsPage", () => {
     getLeadListPageMock.mockReset();
     getTodaySoFarSummaryMock.mockReset();
     loadTodayInstantlySendTotalsMock.mockReset();
+    loadSendsToDateMock.mockReset();
     leadsWorkbenchMock.mockClear();
 
     getDashboardTenantIdMock.mockReturnValue("10000000-0000-0000-0000-000000000001");
@@ -85,6 +97,7 @@ describe("LeadsPage", () => {
     });
     getTodaySoFarSummaryMock.mockResolvedValue(todaySummary);
     loadTodayInstantlySendTotalsMock.mockResolvedValue(sendTotals);
+    loadSendsToDateMock.mockResolvedValue(sendsToDate);
   });
 
   it("passes the search parameter into the server-rendered lead list query", async () => {
@@ -108,6 +121,24 @@ describe("LeadsPage", () => {
     expect(getLeadListPageMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: "contacted", page: 1 }),
     );
+  });
+
+  it("hands the workbench the emails delivered to date", async () => {
+    render(await LeadsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(loadSendsToDateMock).toHaveBeenCalledTimes(1);
+    expect(leadsWorkbenchMock.mock.calls[0]?.[0]).toMatchObject({ sendsToDate });
+  });
+
+  it("keeps the lead list when the lifetime figure throws, and says why", async () => {
+    loadSendsToDateMock.mockRejectedValue(new Error("boom"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(await LeadsPage({ searchParams: Promise.resolve({}) }));
+
+    const props = leadsWorkbenchMock.mock.calls[0]?.[0] as { sendsToDate?: { available: boolean } };
+    expect(props.sendsToDate?.available).toBe(false);
+    errorSpy.mockRestore();
   });
 
   it("hands the workbench today's numbers for the operator's own day", async () => {

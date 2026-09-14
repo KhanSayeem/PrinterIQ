@@ -8,6 +8,9 @@ import { LeadFilters, type LeadFilterSelection } from "./LeadFilters";
 import { LeadQuickPanelWithClose, type LeadListRow } from "./LeadQuickPanel";
 import { LeadTable } from "./LeadTable";
 import { TodaySoFarBar } from "./TodaySoFarBar";
+import { SendsToDateBar } from "./SendsToDateBar";
+import type { SendsToDate } from "@/lib/sends-to-date";
+import type { MetricAvailability } from "@/lib/deliverability";
 
 type LeadListFilters = Omit<LeadListFilterParams, "page">;
 
@@ -118,6 +121,7 @@ function LeadPagination({
 export function LeadsWorkbench({
   tenantId,
   todaySummary,
+  sendsToDate,
   leads,
   counts,
   filters,
@@ -132,6 +136,8 @@ export function LeadsWorkbench({
    * to render the workbench without the bar at all.
    */
   todaySummary?: TodaySoFarSummary | null;
+  /** Emails delivered since launch. Omitted where the page does not load them. */
+  sendsToDate?: MetricAvailability<SendsToDate>;
   leads: LeadListRow[];
   counts: LeadFilterCounts;
   filters: LeadListFilters;
@@ -303,6 +309,7 @@ export function LeadsWorkbench({
         </div>
       </div>
       {todaySummary !== undefined ? <TodaySoFarBar summary={todaySummary} /> : null}
+      {sendsToDate !== undefined ? <SendsToDateBar sendsToDate={sendsToDate} /> : null}
       {importMessage ? <div className="import-status success" role="status">{importMessage}</div> : null}
       {importError ? <div className="import-status error" role="alert">{importError}</div> : null}
       <LeadFilters
