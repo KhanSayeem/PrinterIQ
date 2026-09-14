@@ -4,6 +4,8 @@ import { LeadsWorkbench } from "@/components/LeadsWorkbench";
 import { getDashboardTenantId } from "@/auth/tenant";
 import { parseLeadListParams } from "@/lib/lead-list-params";
 import { loadTodayInstantlySendTotals, unavailableTodaySendTotals } from "@/lib/today-sends";
+import { loadSendsToDate, type SendsToDate } from "@/lib/sends-to-date";
+import type { MetricAvailability } from "@/lib/deliverability";
 
 /**
  * Today's numbers are a side panel on the lead list, not a precondition for
@@ -42,6 +44,22 @@ async function loadTodaySoFar(tenantId: string, now: Date): Promise<TodaySoFarSu
   }
 }
 
+/**
+ * The lifetime card follows the today bar's rule: a failure is words on the
+ * card, never a missing lead list. `loadSendsToDate` is written not to throw,
+ * and is guarded anyway for the same reason as `loadTodaySoFar` above.
+ */
+async function loadSendsToDateSafely(): Promise<MetricAvailability<SendsToDate>> {
+  try {
+    return await loadSendsToDate();
+  } catch (error) {
+    console.error("Failed to load emails delivered to date", {
+      message: error instanceof Error ? error.message : "Unknown delivered to date error",
+    });
+    return { available: false, reason: "The campaign totals could not be read from Instantly." };
+  }
+}
+
 function getLeadLoadErrorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message;
@@ -66,6 +84,7 @@ export default async function LeadsPage({
   let pageSize = 25;
   let tenantId: string;
   let todaySummary: TodaySoFarSummary | null = null;
+  let sendsToDate: MetricAvailability<SendsToDate> | undefined;
 
   try {
     const resolvedTenantId = getDashboardTenantId();
@@ -78,7 +97,7 @@ export default async function LeadsPage({
     // database window cannot land on different sides of Sydney midnight.
     const now = new Date();
 
-    const [filterCounts, leadPage, today] = await Promise.all([
+    const [filterCounts, leadPage, today, toDate] = await Promise.all([
       getLeadFilterCounts({ tenantId }),
       getLeadListPage({
         tenantId,
@@ -94,8 +113,10 @@ export default async function LeadsPage({
         pageSize,
       }),
       loadTodaySoFar(tenantId, now),
+      loadSendsToDateSafely(),
     ]);
     todaySummary = today;
+    sendsToDate = toDate;
     counts = filterCounts;
     rows = leadPage.rows;
     total = leadPage.total;
@@ -118,6 +139,7 @@ export default async function LeadsPage({
     <LeadsWorkbench
       tenantId={tenantId}
       todaySummary={todaySummary}
+      sendsToDate={sendsToDate}
       leads={rows}
       counts={counts}
       filters={filters}

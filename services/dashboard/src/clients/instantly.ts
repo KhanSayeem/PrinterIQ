@@ -15,6 +15,30 @@ export type InstantlyCampaign = {
   status: number;
 };
 
+/**
+ * Lifetime totals for one campaign, from GET /api/v2/campaigns/analytics
+ * called without a date range.
+ */
+export type InstantlyCampaignTotals = {
+  campaignId: string;
+  /** Every email the campaign has sent, follow ups included. */
+  emailsSent: number;
+  bounced: number;
+  /** Distinct leads the campaign has emailed at least once. */
+  contacted: number;
+};
+
+const CAMPAIGN_ANALYTICS_PATH = "/api/v2/campaigns/analytics";
+
+/** A count this figure depends on is thrown when absent, never read as zero. */
+function requiredCampaignCount(record: Record<string, unknown>, field: string): number {
+  const value = record[field];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Instantly API GET ${CAMPAIGN_ANALYTICS_PATH} returned a campaign row with no ${field}`);
+  }
+  return value;
+}
+
 export type InstantlyReplyInput = {
   instantlyEmailId: string;
   instantlyAccountId: string;
@@ -229,6 +253,48 @@ export class InstantlyHttpClient {
       name: typeof campaign.name === "string" ? campaign.name : "",
       status: typeof campaign.status === "number" ? campaign.status : Number.NaN,
     };
+  }
+
+  /**
+   * Lifetime totals for the given campaigns, in the order Instantly returns them.
+   *
+   * The endpoint ignores its own campaign_id filter. Measured on 2026-09-14:
+   * two requested ids came back as three rows, the dev preview smoke campaign
+   * included, and an id that does not exist came back as every campaign in the
+   * workspace. So the rows are filtered here. Only requested rows are checked: a
+   * malformed row for another campaign is not this figure's problem, but a
+   * missing count on a requested one is thrown rather than read as zero.
+   */
+  async getCampaignTotals(campaignIds: readonly string[]): Promise<InstantlyCampaignTotals[]> {
+    const query = campaignIds.map((id) => `campaign_id=${encodeURIComponent(id)}`).join("&");
+    const body = await this.requestJson<unknown>(
+      `${CAMPAIGN_ANALYTICS_PATH}?${query}`,
+      { method: "GET" },
+      CAMPAIGN_ANALYTICS_PATH,
+    );
+
+    if (!Array.isArray(body)) {
+      throw new Error(`Instantly API GET ${CAMPAIGN_ANALYTICS_PATH} returned a response that is not a list`);
+    }
+
+    const wanted = new Set(campaignIds);
+    const totals: InstantlyCampaignTotals[] = [];
+    for (const raw of body) {
+      if (typeof raw !== "object" || raw === null) {
+        continue;
+      }
+      const record = raw as Record<string, unknown>;
+      if (typeof record.campaign_id !== "string" || !wanted.has(record.campaign_id)) {
+        continue;
+      }
+      totals.push({
+        campaignId: record.campaign_id,
+        emailsSent: requiredCampaignCount(record, "emails_sent_count"),
+        bounced: requiredCampaignCount(record, "bounced_count"),
+        contacted: requiredCampaignCount(record, "contacted_count"),
+      });
+    }
+    return totals;
   }
 
   async pauseCampaign(instantlyCampaignId: string): Promise<void> {

@@ -98,6 +98,8 @@ button, input { font-family: var(--font); }
 .today-metric-label { font-size: 9px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
 .today-metric-value { font-size: 22px; font-weight: 300; font-family: var(--font-mono); line-height: 1.1; }
 .today-metric-detail { font-size: 10px; color: var(--text-tertiary); margin-top: 3px; }
+/* A lone card keeps a card's width instead of stretching across the bar. */
+.today-metric.today-metric-solo { flex: 0 1 260px; }
 .login-screen { min-height: 100vh; display: grid; place-items: center; background: var(--bg); padding: 24px; }
 .login-card { width: min(380px, 100%); background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 40px 36px; }
 .login-card-skeleton { height: 390px; animation: pulse 1.5s infinite; }
