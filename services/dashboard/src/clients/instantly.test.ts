@@ -676,3 +676,67 @@ describe("InstantlyHttpClient.listSentEmails", () => {
     expect((error as Error).message).not.toContain("murphy@presciaweb.com");
   });
 });
+
+describe("InstantlyHttpClient.getCampaignTotals", () => {
+  function clientReturning(body: unknown) {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body });
+    const client = new InstantlyHttpClient({
+      apiKey: "api-key",
+      fetchFn: fetchMock,
+      baseUrl: "https://api.instantly.test",
+    });
+    return { client, fetchMock };
+  }
+
+  function row(campaignId: string, sent: number, bounced: number, contacted: number) {
+    return {
+      campaign_id: campaignId,
+      campaign_name: "any",
+      emails_sent_count: sent,
+      bounced_count: bounced,
+      contacted_count: contacted,
+    };
+  }
+
+  /**
+   * Measured on 2026-09-14: asking for two campaign ids returned three rows, the
+   * dev preview smoke campaign included, and asking for an id that does not
+   * exist returned every campaign in the workspace. The endpoint ignores its
+   * own filter, so trusting it would add a test campaign's sends to the
+   * operator's lifetime figure.
+   */
+  it("keeps only the requested campaigns, because Instantly ignores the campaign_id filter", async () => {
+    const { client, fetchMock } = clientReturning([
+      row("campaign-1", 45, 1, 37),
+      row("smoke-campaign", 29, 2, 29),
+      row("campaign-2", 30, 6, 30),
+    ]);
+
+    await expect(client.getCampaignTotals(["campaign-1", "campaign-2"])).resolves.toEqual([
+      { campaignId: "campaign-1", emailsSent: 45, bounced: 1, contacted: 37 },
+      { campaignId: "campaign-2", emailsSent: 30, bounced: 6, contacted: 30 },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.instantly.test/api/v2/campaigns/analytics?campaign_id=campaign-1&campaign_id=campaign-2",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("throws rather than reading a missing count as zero", async () => {
+    const { client } = clientReturning([{ campaign_id: "campaign-1", bounced_count: 1, contacted_count: 3 }]);
+
+    await expect(client.getCampaignTotals(["campaign-1"])).rejects.toThrow("emails_sent_count");
+  });
+
+  it("does not fail over a malformed row for a campaign nobody asked for", async () => {
+    const { client } = clientReturning([row("campaign-1", 5, 0, 5), { campaign_id: "other" }]);
+
+    await expect(client.getCampaignTotals(["campaign-1"])).resolves.toHaveLength(1);
+  });
+
+  it("throws when the response is not a list", async () => {
+    const { client } = clientReturning({ items: [] });
+
+    await expect(client.getCampaignTotals(["campaign-1"])).rejects.toThrow("not a list");
+  });
+});
