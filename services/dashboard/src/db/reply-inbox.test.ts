@@ -67,6 +67,24 @@ describe("reply inbox queries", () => {
     expect(query.params).toContain(true);
   });
 
+  /**
+   * A reply Hugh Fenton sent on 2026-09-16 was answered the same morning and
+   * still showed as waiting, because nothing in the queue knew the thread had
+   * been answered. Unclassified is not the same as unanswered.
+   */
+  it("drops a reply that has already been answered", () => {
+    const query = buildReplyInboxQuery(db, { tenantId, filter: "needs_attention" }).toSQL();
+
+    expect(query.sql).toContain("not exists");
+    expect(query.params).toContain("outbound");
+  });
+
+  it("keeps an operator note from counting as an answer", () => {
+    const query = buildReplyInboxQuery(db, { tenantId, filter: "needs_attention" }).toSQL();
+
+    expect(query.params).not.toContain("note");
+  });
+
   it("narrows an intent filter to that single classification", () => {
     const query = buildReplyInboxQuery(db, { tenantId, filter: "not_interested" }).toSQL();
 

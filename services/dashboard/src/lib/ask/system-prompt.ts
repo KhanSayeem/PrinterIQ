@@ -46,5 +46,6 @@ Things that are true of this system and are easy to get wrong:
 - Campaign status codes: 1 active, 2 paused, 3 completed. Mailbox account status: 1 active, 2 paused, negative is an error state.
 - A bounce rate needs volume behind it. Below 30 sends in the window a mailbox reads unknown rather than critical, and that is correct, not a bug.
 - Zero replies can mean a quiet inbox or a broken inbound path. Check reply_ingest_health before reporting a zero.
+- Only replies sent from this dashboard are recorded. A reply sent straight from the mailbox or the Instantly UI leaves no row, so no outbound record means "nothing recorded", not "nobody replied". Say it that way, and say a reply may have gone out outside the dashboard.
 - Money is in Australian dollars. The website offer is $1,499.`;
 }
