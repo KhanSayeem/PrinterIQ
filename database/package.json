@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "seed": "tsx seed.ts"
+    "seed": "tsx seed.ts",
+    "migrate": "node migrate.mjs",
+    "migrate:baseline": "node migrate.mjs --baseline",
+    "test": "node --test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",

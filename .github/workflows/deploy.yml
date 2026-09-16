@@ -34,9 +34,13 @@ jobs:
             pnpm --dir services/dashboard install --frozen-lockfile
             pnpm --dir services/dashboard run build
             python -m playwright install --with-deps chromium
-            # Apply any new migrations against Supabase
-            # (psql must be available or use supabase CLI)
-            npm --prefix database run migrate 2>/dev/null || true
+            # Apply any new migrations against Supabase. No error swallowing:
+            # this line used to end in `2>/dev/null || true` and there was no
+            # migrate script at all, so it failed on every deploy in silence
+            # and migration 0015 shipped green without reaching the database.
+            # `set -e` above stops the deploy before the services restart, so
+            # nothing starts expecting a schema that is not there.
+            npm --prefix database run migrate
             pm2 delete all || true
             pm2 start ecosystem.config.js --update-env
             pm2 save
