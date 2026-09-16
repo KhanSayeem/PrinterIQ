@@ -22,6 +22,7 @@ import { loadSendsToDate } from "@/lib/sends-to-date";
 import { loadTodayInstantlySendTotals } from "@/lib/today-sends";
 import { readInstantlyCampaignTargets } from "@/lib/instantly-campaigns";
 
+import { askLeadPath } from "./dashboard-routes";
 import { loadDeliverabilitySnapshot } from "./deliverability-snapshot";
 import {
   HEALTH_CHECKS,
@@ -182,15 +183,20 @@ export function buildAskTools(): readonly AskTool[] {
     {
       name: "lead_detail",
       description:
-        "Everything recorded about one lead: contact fields, score, status history, conversations, preview and payment. Needs the lead id, which leads_search returns.",
+        "Everything recorded about one lead: contact fields, score, status history, the whole conversation thread, preview and payment, plus the dashboard path of that lead's page so the operator can be pointed at it. Needs the lead id, which leads_search returns.",
       inputSchema: {
         type: "object",
         properties: { leadId: { type: "string", description: "The lead's uuid." } },
         required: ["leadId"],
         additionalProperties: false,
       },
-      run: async (input, context) =>
-        getLeadDetail({ tenantId: context.tenantId, leadId: requiredString(input, "leadId") }),
+      run: async (input, context) => {
+        const leadId = requiredString(input, "leadId");
+        const lead = await getLeadDetail({ tenantId: context.tenantId, leadId });
+
+        /** The path is returned with the record so the answer can say where to look. */
+        return { dashboardPath: askLeadPath(leadId), lead };
+      },
     },
     {
       name: "replies_recent",

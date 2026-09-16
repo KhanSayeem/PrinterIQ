@@ -40,6 +40,11 @@ jobs:
             # and migration 0015 shipped green without reaching the database.
             # `set -e` above stops the deploy before the services restart, so
             # nothing starts expecting a schema that is not there.
+            # Two env files that disagree about one name means whichever file the
+            # process happens to read wins. On 2026-09-16 the dashboard's own
+            # .env.production held a second Instantly API key for a workspace with
+            # no paid plan, and pm2 hid it by starting every app from the root .env.
+            node scripts/check-env-drift.mjs
             npm --prefix database run migrate
             pm2 delete all || true
             pm2 start ecosystem.config.js --update-env
