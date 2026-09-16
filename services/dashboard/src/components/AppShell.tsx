@@ -3,6 +3,7 @@
 import { Menu } from "lucide-react";
 import { useState } from "react";
 import { Sidebar } from "./Sidebar";
+import { AskPanel } from "./AskPanel";
 import { HeaderActions } from "./HeaderActions";
 
 export function AppShell({
@@ -43,6 +44,8 @@ export function AppShell({
             <Menu size={18} aria-hidden="true" />
           </button>
           <div className="topbar-spacer" />
+          {/* On every page, because a question does not wait for the right page. */}
+          <AskPanel />
           <HeaderActions operatorEmail={operatorEmail} />
         </header>
         <div className="content">{children}</div>
