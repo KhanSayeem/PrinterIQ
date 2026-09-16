@@ -608,3 +608,24 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
   .ask-panel { width: 100vw; border-left: 0; }
   .topbar-ask { margin-right: 4px; }
 }
+
+/* The ask panel's waiting state: a shimmer sweeping through the status text.
+   Adapted from 21st.dev "AI Text Loading", as CSS rather than an animation
+   library. Respects a reduced motion preference by holding still. */
+.ask-shimmer {
+  background: linear-gradient(90deg, var(--text-tertiary) 0%, var(--text-primary) 50%, var(--text-tertiary) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ask-shimmer-sweep 2.2s linear infinite;
+}
+
+@keyframes ask-shimmer-sweep {
+  from { background-position: 200% center; }
+  to { background-position: -200% center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-shimmer { animation: none; color: var(--text-secondary); background: none; -webkit-background-clip: border-box; background-clip: border-box; }
+}
