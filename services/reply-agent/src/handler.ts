@@ -14,6 +14,7 @@ import { claudeAgent } from "./claude_agent.js";
 import { queries as defaultQueries } from "./db/queries.js";
 import { escalate as defaultEscalate, type EscalationInput } from "./escalation.js";
 import { stripePayments } from "./stripe.js";
+import { createHash } from "node:crypto";
 
 export type ReplyQueries = {
   insertInboundConversation(
@@ -111,6 +112,33 @@ function classificationUpdate(classification: ClaudeReplyClassification): Conver
   };
 }
 
+/** The key that makes one inbound reply one row, however often the job runs.
+ *
+ * This insert is the first thing `handleProcessReply` does, deliberately: the
+ * lead's own words are recorded before anything that can fail. But a BullMQ
+ * retry re-runs the whole handler, and on 2026-09-16 that turned one reply
+ * into three rows, which the three-replies rule below then read as three
+ * replies from the lead.
+ *
+ * The Instantly email id is the right key when the webhook carries one, since
+ * it is unique per email. It is often absent, and then the key is a hash of
+ * the tenant, lead, channel and body. The tradeoff, stated rather than hidden:
+ * a lead who sends a byte-identical message twice is recorded once. That is a
+ * better failure than one message counted three times, and it disappears
+ * whenever Instantly sends the email id.
+ */
+function inboundDedupeKey(job: ProcessReplyJob): string {
+  if (job.instantly_email_id) {
+    return `reply:email:${job.instantly_email_id}`;
+  }
+
+  const digest = createHash("sha256")
+    .update(JSON.stringify([job.tenant_id, job.lead_id, job.channel, job.body]))
+    .digest("hex");
+
+  return `reply:body:${digest}`;
+}
+
 export async function handleProcessReply(
   job: ProcessReplyJob,
   deps: HandlerDeps = {},
@@ -124,6 +152,7 @@ export async function handleProcessReply(
     instantly_lead_id: job.instantly_lead_id ?? null,
     instantly_email_id: job.instantly_email_id ?? null,
     instantly_account_id: job.instantly_account_id ?? null,
+    dedupe_key: inboundDedupeKey(job),
   });
   await db.advanceLeadToReplied(job.tenant_id, job.lead_id);
 

@@ -17,6 +17,8 @@ type InstantlyReplyMetadata = {
   instantly_lead_id?: string | null;
   instantly_email_id?: string | null;
   instantly_account_id?: string | null;
+  /** Makes one inbound reply one row across BullMQ retries. See migration 0015. */
+  dedupe_key?: string | null;
 };
 
 function db(client?: Queryable): Queryable {
@@ -40,7 +42,8 @@ export async function insertInboundConversation(
         channel,
         body,
         instantly_email_id,
-        instantly_account_id
+        instantly_account_id,
+        dedupe_key
       )
       SELECT
         tenant_id,
@@ -49,7 +52,8 @@ export async function insertInboundConversation(
         $3,
         $4,
         $5,
-        $6
+        $6,
+        $8
       FROM leads
       WHERE tenant_id = $1
         AND id = $2
@@ -60,6 +64,9 @@ export async function insertInboundConversation(
             AND outreach_sends.lead_id = leads.id
             AND outreach_sends.instantly_lead_id = $7
         )
+      -- One reply, one row. A BullMQ retry runs this insert again with the same
+      -- key, and Postgres refuses the copy rather than recording it.
+      ON CONFLICT (tenant_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
       RETURNING id
     `,
     [
@@ -70,15 +77,37 @@ export async function insertInboundConversation(
       metadata.instantly_email_id ?? null,
       metadata.instantly_account_id ?? null,
       metadata.instantly_lead_id ?? null,
+      metadata.dedupe_key ?? null,
     ],
   );
 
   const row = result.rows[0];
-  if (!row) {
-    throw new Error("lead not found for tenant");
+  if (row) {
+    return row;
   }
 
-  return row;
+  // No row means one of two things, and they must not be conflated: the key was
+  // already used, which is a retry of the same reply, or the lead does not
+  // belong to this tenant. Only the second is an error.
+  const dedupeKey = metadata.dedupe_key ?? null;
+  if (dedupeKey) {
+    const existing = await db(client).query<{ id: string }>(
+      `
+        SELECT id
+        FROM conversations
+        WHERE tenant_id = $1
+          AND dedupe_key = $2
+      `,
+      [tenantId, dedupeKey],
+    );
+
+    const alreadyRecorded = existing.rows[0];
+    if (alreadyRecorded) {
+      return alreadyRecorded;
+    }
+  }
+
+  throw new Error("lead not found for tenant");
 }
 
 export async function fetchLeadContext(

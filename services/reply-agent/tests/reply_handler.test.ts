@@ -175,6 +175,9 @@ describe("process_reply handler", () => {
       "email",
       "Can you send the quote?",
       {
+        // Keyed on the Instantly email id when the webhook carries one, so a
+        // BullMQ retry of this job records the same row instead of a copy.
+        dedupe_key: "reply:email:email-uuid-123",
         instantly_lead_id: "instantly-lead-123",
         instantly_email_id: "email-uuid-123",
         instantly_account_id: "sender@presciaiq.com",
@@ -428,5 +431,86 @@ describe("retry_checkout handler", () => {
 
     expect(queries.hasCompletedPayment).toHaveBeenCalledWith(tenantId, leadId);
     expect(result).toEqual({ action: "noop", reason: "payment_completed" });
+  });
+});
+
+describe("process_reply is idempotent across BullMQ retries", () => {
+  /** A fake store that behaves like the unique index on (tenant_id, dedupe_key). */
+  function createDedupingQueries() {
+    const byKey = new Map<string, string>();
+    const queries = createQueries({
+      insertInboundConversation: vi
+        .fn()
+        .mockImplementation(async (_tenantId, _leadId, _channel, _body, metadata) => {
+          const key = (metadata as { dedupe_key?: string } | undefined)?.dedupe_key;
+          if (!key) {
+            throw new Error("the handler must supply a dedupe key");
+          }
+          if (!byKey.has(key)) {
+            byKey.set(key, `conversation-${byKey.size + 1}`);
+          }
+          return { id: byKey.get(key)! };
+        }),
+      countInboundReplies: vi.fn().mockImplementation(async () => byKey.size),
+    });
+    return { queries, byKey };
+  }
+
+  /**
+   * Production on 2026-09-16: the classifier's 400 failed the job, BullMQ
+   * retried it twice, and each attempt inserted the reply again. The third
+   * attempt counted its own three copies and escalated with
+   * "three_inbound_replies_without_checkout", so a single reply both filled
+   * the replies page three times and paged the operator.
+   */
+  it("records one inbound reply when the same job runs three times", async () => {
+    const { queries, byKey } = createDedupingQueries();
+    const escalation = createEscalationService();
+    const job = processJob("I don't have the funds for this at the moment.");
+    const deps = { queries, claude: createClaude(), queue: createQueue(), escalation };
+
+    await handleProcessReply(job, deps);
+    await handleProcessReply(job, deps);
+    await handleProcessReply(job, deps);
+
+    expect(byKey.size).toBe(1);
+    expect(queries.insertInboundConversation).toHaveBeenCalledTimes(3);
+    expect(escalation.escalate).not.toHaveBeenCalled();
+  });
+
+  it("uses the same dedupe key every attempt, and a different one per reply", async () => {
+    const { queries } = createDedupingQueries();
+    const deps = {
+      queries,
+      claude: createClaude(),
+      queue: createQueue(),
+      escalation: createEscalationService(),
+    };
+
+    await handleProcessReply(processJob("Same words"), deps);
+    await handleProcessReply(processJob("Same words"), deps);
+    await handleProcessReply(processJob("Different words"), deps);
+
+    const keyOf = (call: unknown[]) => (call[4] as { dedupe_key?: string }).dedupe_key;
+    const calls = (queries.insertInboundConversation as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(keyOf(calls[0]!)).toBe(keyOf(calls[1]!));
+    expect(keyOf(calls[2]!)).not.toBe(keyOf(calls[0]!));
+  });
+
+  it("prefers the Instantly email id as the key when the webhook carries one", async () => {
+    const { queries } = createDedupingQueries();
+    const deps = {
+      queries,
+      claude: createClaude(),
+      queue: createQueue(),
+      escalation: createEscalationService(),
+    };
+
+    await handleProcessReply({ ...processJob("Hi"), instantly_email_id: "email-uuid-123" }, deps);
+
+    const [, , , , metadata] = (
+      queries.insertInboundConversation as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0]!;
+    expect((metadata as { dedupe_key?: string }).dedupe_key).toContain("email-uuid-123");
   });
 });
