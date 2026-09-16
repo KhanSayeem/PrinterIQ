@@ -47,6 +47,11 @@
 html { font-size: 14px; -webkit-font-smoothing: antialiased; }
 body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--text-primary); min-height: 100vh; overflow-x: hidden; }
 a { color: inherit; text-decoration: none; }
+/* Links inside an answer, styled here rather than with Tailwind utilities:
+   the reset above is unlayered, and unlayered CSS beats @layer utilities
+   whatever the specificity, so text-blue-700 on the anchor never applied. */
+.ask-panel a { color: var(--text-link); text-decoration: underline; text-underline-offset: 2px; }
+.ask-panel a:hover { text-decoration: none; }
 button, input { font-family: var(--font); }
 
 .sidebar { position: fixed; inset: 0 auto 0 0; width: var(--sidebar-collapsed); background: var(--bg-card); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 100; overflow: hidden; transition: width var(--transition); }
