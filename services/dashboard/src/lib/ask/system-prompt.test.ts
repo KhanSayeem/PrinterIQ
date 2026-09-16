@@ -33,6 +33,10 @@ describe("buildAskSystemPrompt", () => {
     expect(prompt).toMatch(/say which tool each number came from/i);
   });
 
+  it("bans the dashes the operator does not want to read", () => {
+    expect(prompt).toMatch(/never write an em dash or an en dash/i);
+  });
+
   it("says it can only read, and hands actions back to the operator", () => {
     expect(prompt).toMatch(/you can only read/i);
   });

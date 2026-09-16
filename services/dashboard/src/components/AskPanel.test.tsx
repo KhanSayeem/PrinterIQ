@@ -3,13 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AskPanel } from "./AskPanel";
 
+const NL = "\n";
+
 /** One NDJSON stream, the way the route sends it. */
 function streamOf(lines: string[]): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       for (const line of lines) {
-        controller.enqueue(encoder.encode(`${line}\n`));
+        controller.enqueue(encoder.encode(line + NL));
       }
       controller.close();
     },
@@ -75,6 +77,117 @@ describe("AskPanel", () => {
     expect(screen.getByText("sends_today")).toBeTruthy();
   });
 
+  it("renders the answer's markdown instead of printing the asterisks", async () => {
+    const answer = [
+      "From Instantly campaigns:",
+      "",
+      "- **Active (status 1):** Has Website",
+      "- **Paused (status 2):** No Website",
+    ].join(NL);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamOf([
+          JSON.stringify({ type: "text", text: answer }),
+          JSON.stringify({ type: "done", inputTokens: 1, outputTokens: 1 }),
+        ]),
+      ),
+    );
+
+    render(<AskPanel />);
+    ask("which campaigns are on?");
+
+    await waitFor(() => {
+      expect(screen.getByText("Active (status 1):")).toBeTruthy();
+    });
+
+    const panel = screen.getByRole("dialog");
+    expect(panel.textContent).not.toContain("**");
+    expect(screen.getByText("Active (status 1):").tagName).toBe("STRONG");
+    expect(panel.querySelectorAll("li").length).toBe(2);
+  });
+
+  it("names the read it is waiting on, and stops once the answer lands", async () => {
+    let release: (() => void) | undefined;
+    let finish: (() => void) | undefined;
+    const encoder = new TextEncoder();
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            JSON.stringify({
+              type: "tool_start",
+              id: "t1",
+              name: "sending_accounts",
+              input: {},
+            }) + NL,
+          ),
+        );
+
+        release = () => {
+          const rest = [
+            JSON.stringify({ type: "tool_end", id: "t1", failed: false, output: "{}" }),
+            JSON.stringify({ type: "text", text: "8 of 10 are sending." }),
+          ].join(NL);
+          controller.enqueue(encoder.encode(rest + NL));
+        };
+
+        finish = () => {
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({ type: "done", inputTokens: 1, outputTokens: 1 }) + NL,
+            ),
+          );
+          controller.close();
+        };
+      },
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+
+    render(<AskPanel />);
+    ask("how many mailboxes are sending?");
+
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe("Reading mailbox health");
+    });
+
+    release?.();
+
+    /** Still streaming, but the answer is arriving, so the wait is over. */
+    await waitFor(() => {
+      expect(screen.getByText("8 of 10 are sending.")).toBeTruthy();
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+
+    finish?.();
+
+    await waitFor(() => {
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+  });
+
+  it("shows a waiting line before the first read starts", async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(JSON.stringify({ type: "conversation", conversationId: "c1" }) + NL),
+        );
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+
+    render(<AskPanel />);
+    ask("anything broken?");
+
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe("Thinking");
+    });
+  });
+
   it("shows a failed read as not available rather than dropping it", async () => {
     vi.stubGlobal(
       "fetch",
@@ -104,13 +217,11 @@ describe("AskPanel", () => {
   it("surfaces a request that never got started", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY is not configured" }), {
-            status: 500,
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY is not configured" }), {
+          status: 500,
+        }),
+      ),
     );
 
     render(<AskPanel />);
@@ -119,6 +230,9 @@ describe("AskPanel", () => {
     await waitFor(() => {
       expect(screen.getByText(/ANTHROPIC_API_KEY is not configured/)).toBeTruthy();
     });
+
+    /** A failed request has no answer coming, so nothing should still be waiting. */
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("carries the question, the conversation and the thread to the route", async () => {

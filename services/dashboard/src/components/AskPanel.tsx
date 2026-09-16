@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/agent-chat";
 import type { SuggestionItem } from "@/components/ui/suggestions";
 import { createAskEventParser } from "@/lib/ask/client-stream";
+import { ASK_THINKING_LABELS, askToolLabel } from "@/lib/ask/tool-labels";
 
 /**
  * Ask anything about the pipeline, in a panel that opens over whatever page
@@ -221,6 +222,33 @@ export function AskPanel() {
     }
   }, [messages]);
 
+  /**
+   * What to show while waiting, derived rather than tracked: a running tool
+   * part names itself, and before the first tool the model is still deciding.
+   * Derived means the line cannot get stuck on after the answer arrives.
+   */
+  const waitingLabels = (() => {
+    if (status !== "submitted" && status !== "streaming") {
+      return [];
+    }
+
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") {
+      return ASK_THINKING_LABELS;
+    }
+
+    const running = last.parts.find(
+      (part) => part.type === "tool" && part.state === "running",
+    );
+    if (running && running.type === "tool") {
+      return [askToolLabel(running.name)];
+    }
+
+    /** Text is already arriving, so the answer itself is the progress. */
+    const hasText = last.parts.some((part) => part.type === "text" && part.text.length > 0);
+    return hasText ? [] : ASK_THINKING_LABELS;
+  })();
+
   return (
     <>
       <button
@@ -266,6 +294,7 @@ export function AskPanel() {
                 error={error}
                 emptyStatePosition={messages.length === 0 ? "center" : "default"}
                 suggestions={SUGGESTIONS}
+                waitingLabels={waitingLabels}
               />
             </div>
           </aside>

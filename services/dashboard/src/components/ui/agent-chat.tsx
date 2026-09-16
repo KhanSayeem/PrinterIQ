@@ -4,11 +4,15 @@
  * The chat shell: scrolling message list with a composer at the bottom.
  * From 21st.dev Agent Elements ("Agent Chat" by serafimcloud).
  *
- * Two changes from the fetched version, both marked below:
+ * Changes from the fetched version, each marked below:
  *  - a `tool` message part, rendered with the tool call component, so every
  *    read behind an answer is visible next to it;
  *  - suggestion chips in the empty state, so the panel opens showing what it
- *    can answer rather than a blank box.
+ *    can answer rather than a blank box;
+ *  - the answer renders as markdown, because the model writes markdown and
+ *    the plain text version printed "**bold**" at the operator;
+ *  - a waiting line, so a question that takes ten seconds of reads does not
+ *    look like a question that went nowhere.
  */
 import {
   memo,
@@ -30,6 +34,8 @@ import {
   type ToolCallState,
 } from "./tool-call";
 import { Suggestions, type SuggestionItem } from "./suggestions";
+import { AiTextLoading } from "./ai-text-loading";
+import { Markdown } from "./markdown";
 
 export type ChatStatus = "ready" | "streaming" | "submitted" | "idle";
 
@@ -61,6 +67,11 @@ export type AgentChatProps = {
   emptyStatePosition?: "default" | "center";
   /** Added: chips shown with the empty state. */
   suggestions?: SuggestionItem[];
+  /**
+   * Added: what the panel is waiting on, in plain English. Empty means
+   * nothing is pending, so the line disappears.
+   */
+  waitingLabels?: string[];
   className?: string;
 };
 
@@ -97,12 +108,11 @@ function UserBubble({ text }: { text: string }) {
   );
 }
 
+/** Added: markdown, because the model writes it and the operator should not read it raw. */
 function AssistantText({ text }: { text: string }) {
   return (
     <div className="flex justify-start">
-      <div className="max-w-[90%] text-sm leading-relaxed text-foreground whitespace-pre-wrap break-words">
-        {text}
-      </div>
+      <Markdown content={text} className="max-w-[90%] [&>*:last-child]:mb-0" />
     </div>
   );
 }
@@ -149,7 +159,13 @@ function ToolPart({ part }: { part: Extract<MessagePart, { type: "tool" }> }) {
   );
 }
 
-function MessageList({ messages }: { messages: AgentMessage[] }) {
+function MessageList({
+  messages,
+  waitingLabels,
+}: {
+  messages: AgentMessage[];
+  waitingLabels: string[];
+}) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -157,7 +173,7 @@ function MessageList({ messages }: { messages: AgentMessage[] }) {
     if (typeof endRef.current?.scrollIntoView === "function") {
       endRef.current.scrollIntoView({ block: "end" });
     }
-  }, [messages]);
+  }, [messages, waitingLabels]);
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
@@ -178,6 +194,8 @@ function MessageList({ messages }: { messages: AgentMessage[] }) {
             })}
           </div>
         ))}
+        {/* Added: the wait, named. */}
+        {waitingLabels.length > 0 ? <AiTextLoading texts={waitingLabels} /> : null}
         <div ref={endRef} />
       </div>
     </div>
@@ -307,6 +325,7 @@ export const AgentChat = memo(function AgentChat({
   error,
   emptyStatePosition = "default",
   suggestions = [],
+  waitingLabels = [],
   className,
 }: AgentChatProps) {
   const [draft, setDraft] = useState("");
@@ -362,7 +381,7 @@ export const AgentChat = memo(function AgentChat({
           </div>
         </div>
       ) : (
-        <MessageList messages={messagesWithError} />
+        <MessageList messages={messagesWithError} waitingLabels={waitingLabels} />
       )}
       {!isCenteredEmpty && inputBar}
     </div>
