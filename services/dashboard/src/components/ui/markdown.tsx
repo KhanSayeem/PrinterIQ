@@ -120,7 +120,13 @@ const components: Components = {
       return <span>{children}</span>;
     }
 
-    const className = "text-blue-700 underline underline-offset-2 hover:no-underline";
+    /**
+     * No colour or underline utility here on purpose. This dashboard's reset
+     * (`a { color: inherit; text-decoration: none; }` in globals.css) is
+     * unlayered, and unlayered CSS beats Tailwind's @layer utilities, so those
+     * classes were dead. The link styling sits beside that reset instead.
+     */
+    const className = undefined;
 
     /**
      * A path into this dashboard goes through the router, like every other
