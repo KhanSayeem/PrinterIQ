@@ -13,6 +13,7 @@
  * replaced with the dashboard's own tokens, so an answer looks like the rest
  * of the dashboard rather than like a different product.
  */
+import Link from "next/link";
 import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -118,15 +119,24 @@ const components: Components = {
     if (!href) {
       return <span>{children}</span>;
     }
-    const isExternal = href.startsWith("http") || href.startsWith("mailto:");
+
+    const className = "text-blue-700 underline underline-offset-2 hover:no-underline";
+
+    /**
+     * A path into this dashboard goes through the router, like every other
+     * link in the app, so "take me to that reply" is one click rather than a
+     * full page load.
+     */
+    if (href.startsWith("/")) {
+      return (
+        <Link {...props} href={href} className={className}>
+          {children}
+        </Link>
+      );
+    }
+
     return (
-      <a
-        {...props}
-        href={href}
-        target={isExternal ? "_blank" : undefined}
-        rel={isExternal ? "noopener noreferrer" : undefined}
-        className="text-blue-700 underline-offset-2 hover:underline"
-      >
+      <a {...props} href={href} target="_blank" rel="noopener noreferrer" className={className}>
         {children}
       </a>
     );
