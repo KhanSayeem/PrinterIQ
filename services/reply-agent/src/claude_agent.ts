@@ -61,10 +61,15 @@ export async function classifyReply(input: ClassifyInput): Promise<ClaudeReplyCl
   const client = new Anthropic({ apiKey });
   const model = process.env.CLAUDE_REPLY_MODEL ?? defaultModel;
   const prompt = fillPrompt(await loadPrompt(), input);
+  // No temperature, top_p or top_k. Sampling parameters were removed from the
+  // current models and are rejected outright: production on 2026-09-16 failed
+  // every classification with
+  // `400 invalid_request_error: temperature is deprecated for this model`,
+  // on claude-opus-5. The first real inbound reply this agent ever handled was
+  // retried three times and never classified because of this one line.
   const response = await client.messages.create({
     model,
     max_tokens: 700,
-    temperature: 0.2,
     messages: [{ role: "user", content: prompt }],
   });
 

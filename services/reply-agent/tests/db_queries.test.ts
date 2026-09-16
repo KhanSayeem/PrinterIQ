@@ -176,6 +176,8 @@ describe("reply-agent DB queries", () => {
       "email-uuid-123",
       "sender@presciaiq.com",
       "instantly-lead-123",
+      // The dedupe key, null here because these callers pass none.
+      null,
     ]);
   });
 
@@ -208,6 +210,8 @@ describe("reply-agent DB queries", () => {
       "email-uuid-123",
       "sender@presciaiq.com",
       "instantly-lead-123",
+      // The dedupe key, null here because these callers pass none.
+      null,
     ]);
   });
 
@@ -557,5 +561,75 @@ describe("Instantly webhook lead resolution queries", () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
 
     expect(await findOutreachTargetByLeadId("tenant-id", "lead-id", { query })).toBeNull();
+  });
+});
+
+describe("inbound conversation deduplication", () => {
+  /**
+   * Production on 2026-09-16: one reply from one lead became three inbound
+   * rows. The classifier was failing with a 400, BullMQ retried the job at 30
+   * and 60 seconds, and each attempt inserted the row again. The third
+   * attempt then read its own duplicates as three replies and escalated.
+   */
+  it("writes a dedupe key and lets Postgres refuse the second copy", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: "conversation-id" }] });
+
+    await insertInboundConversation(
+      "tenant-id",
+      "lead-id",
+      "email",
+      "Hi",
+      {
+        instantly_lead_id: "instantly-lead-123",
+        instantly_email_id: "email-uuid-123",
+        instantly_account_id: "sender@presciaiq.com",
+        dedupe_key: "reply:email-uuid-123",
+      },
+      { query },
+    );
+
+    const [sql, params] = query.mock.calls[0]!;
+    expect(sql).toContain("dedupe_key");
+    expect(sql).toContain("ON CONFLICT");
+    expect(sql).toContain("DO NOTHING");
+    expect(params).toContain("reply:email-uuid-123");
+  });
+
+  it("returns the row already there when the insert is refused as a duplicate", async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: "first-conversation-id" }] });
+
+    const result = await insertInboundConversation(
+      "tenant-id",
+      "lead-id",
+      "email",
+      "Hi",
+      { dedupe_key: "reply:email-uuid-123" },
+      { query },
+    );
+
+    expect(result).toEqual({ id: "first-conversation-id" });
+    expect(query).toHaveBeenCalledTimes(2);
+    const [secondSql, secondParams] = query.mock.calls[1]!;
+    expect(secondSql).toContain("SELECT");
+    expect(secondSql).toContain("dedupe_key");
+    expect(secondParams).toEqual(["tenant-id", "reply:email-uuid-123"]);
+  });
+
+  it("still refuses a lead that does not belong to the tenant", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+
+    await expect(
+      insertInboundConversation(
+        "tenant-id",
+        "lead-id",
+        "email",
+        "Hi",
+        { dedupe_key: "reply:email-uuid-123" },
+        { query },
+      ),
+    ).rejects.toThrow("lead not found for tenant");
   });
 });
