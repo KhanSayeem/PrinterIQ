@@ -39,6 +39,7 @@ export type LeadActionDeps = {
       subject?: string | null;
       body: string;
     }): Promise<void>;
+    getEmailSubject(instantlyEmailId: string): Promise<string | null>;
   };
   revalidatePath: (path: string) => void;
 };
@@ -116,10 +117,33 @@ export function createLeadActions(deps: LeadActionDeps) {
         throw error;
       }
 
+      /**
+       * Instantly rejects a reply with no subject, and this action used to send
+       * `subject: null`, so every override reply would have failed with
+       * `400 body must have required property 'subject'`. The subject comes
+       * from the thread being replied to, prefixed once.
+       */
+      let subject: string | null = null;
+      try {
+        subject = await deps.instantly.getEmailSubject(metadata.instantlyEmailId);
+      } catch (error) {
+        console.error("Could not read the reply subject from Instantly", {
+          message: error instanceof Error ? error.message : "unknown error",
+        });
+      }
+
+      if (!subject) {
+        return {
+          ok: false,
+          message:
+            "Could not read the subject of the reply from Instantly, and Instantly rejects a reply without one. Try again, or reply from the mailbox directly.",
+        };
+      }
+
       try {
         await deps.instantly.sendReply({
           ...metadata,
-          subject: null,
+          subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`,
           body,
         });
       } catch (error) {

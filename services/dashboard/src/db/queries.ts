@@ -2356,11 +2356,39 @@ export type ReplyInboxRow = {
 
 export type ReplyInboxFilterCounts = Record<ReplyInboxFilter, number>;
 
+/**
+ * A reply needs attention when it is unclassified, interested or escalated,
+ * AND nothing has been sent back to that lead since it arrived.
+ *
+ * The second half was missing until 2026-09-16. Hugh Fenton's reply was
+ * answered that morning with a half price offer and still sat in the queue
+ * hours later, because the queue only knew "unclassified" and read that as
+ * unanswered. There is no read or unread column anywhere in this schema, so an
+ * outbound row newer than the inbound one is the only evidence that a human or
+ * the agent has dealt with it.
+ *
+ * Operator notes are direction "note", not "outbound", so writing a note does
+ * not make a reply look answered.
+ */
+function replyNotAnsweredCondition() {
+  return sql`not exists (
+    select 1
+    from ${conversations} as reply_answer
+    where reply_answer.lead_id = ${conversations.leadId}
+      and reply_answer.tenant_id = ${conversations.tenantId}
+      and reply_answer.direction = ${"outbound"}
+      and reply_answer.created_at > ${conversations.createdAt}
+  )`;
+}
+
 function replyNeedsAttentionCondition() {
-  return or(
-    isNull(conversations.intent),
-    eq(conversations.intent, "interested"),
-    eq(conversations.escalated, true),
+  return and(
+    or(
+      isNull(conversations.intent),
+      eq(conversations.intent, "interested"),
+      eq(conversations.escalated, true),
+    ),
+    replyNotAnsweredCondition(),
   );
 }
 
