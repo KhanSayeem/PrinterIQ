@@ -178,9 +178,14 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 .score-fill { height: 100%; background: #059669; }
 .detail-panel { border-left: 1px solid var(--border); background: var(--bg-card); display: flex; flex-direction: column; min-width: 0; }
 .detail-panel-backdrop { display: none; }
-.sticky-detail-panel { position: fixed; top: 48px; right: 0; width: 268px; height: calc(100vh - 48px); max-height: calc(100vh - 48px); align-self: start; z-index: 5; animation: detail-panel-in var(--transition); }
+.sticky-detail-panel { position: fixed; top: 48px; right: 0; width: 268px; height: calc(100vh - 48px); max-height: calc(100vh - 48px); align-self: start; z-index: 5; }
+/* One open animation for every panel that slides in from the right: the leads
+   detail panel and the ask panel. Same keyframes, same duration, so the two
+   cannot drift apart. */
+.sticky-detail-panel, .ask-panel { animation: detail-panel-in var(--transition); }
 @keyframes detail-panel-in { from { opacity: 0; transform: translateX(10px); } }
 @keyframes detail-panel-backdrop-in { from { opacity: 0; } }
+.ask-backdrop { animation: detail-panel-backdrop-in var(--transition); }
 .dp-header { padding: 16px 16px 14px; border-bottom: 1px solid var(--border); }
 .dp-header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .dp-header-actions { display: flex; gap: 4px; flex-shrink: 0; }
@@ -570,7 +575,7 @@ td { padding: 10px 14px; font-size: 12px; vertical-align: middle; color: var(--t
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sticky-detail-panel, .detail-panel-backdrop { animation: none; }
+  .sticky-detail-panel, .detail-panel-backdrop, .ask-panel, .ask-backdrop { animation: none; }
 }
 
 /* Send rate control, /sending */
