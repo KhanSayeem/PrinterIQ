@@ -108,6 +108,52 @@ describe("AskPanel", () => {
     expect(panel.querySelectorAll("li").length).toBe(2);
   });
 
+  it("turns a dashboard path in the answer into a link the operator can click", async () => {
+    const answer = "The latest reply is on [Hugh Fenton's record](/leads/e3e3e286-c7a2-4930-89b0-6ec7b5dacf1d).";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamOf([
+          JSON.stringify({ type: "text", text: answer }),
+          JSON.stringify({ type: "done", inputTokens: 1, outputTokens: 1 }),
+        ]),
+      ),
+    );
+
+    render(<AskPanel />);
+    ask("take me to the latest reply");
+
+    const link = await waitFor(() => screen.getByRole("link", { name: "Hugh Fenton's record" }));
+
+    expect(link.getAttribute("href")).toBe("/leads/e3e3e286-c7a2-4930-89b0-6ec7b5dacf1d");
+    /** An internal path stays in the app, so it must not open a new tab. */
+    expect(link.getAttribute("target")).toBeNull();
+  });
+
+  it("opens an outside link in a new tab, safely", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamOf([
+          JSON.stringify({
+            type: "text",
+            text: "Instantly's own dashboard is at [app.instantly.ai](https://app.instantly.ai).",
+          }),
+          JSON.stringify({ type: "done", inputTokens: 1, outputTokens: 1 }),
+        ]),
+      ),
+    );
+
+    render(<AskPanel />);
+    ask("where do I see the campaign?");
+
+    const link = await waitFor(() => screen.getByRole("link", { name: "app.instantly.ai" }));
+
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+  });
+
   it("names the read it is waiting on, and stops once the answer lands", async () => {
     let release: (() => void) | undefined;
     let finish: (() => void) | undefined;

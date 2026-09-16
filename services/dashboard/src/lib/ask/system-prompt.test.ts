@@ -54,6 +54,16 @@ describe("buildAskSystemPrompt", () => {
     expect(prompt).toMatch(/never invent a page or a URL/i);
   });
 
+  /**
+   * Asked to be taken to a reply, the panel printed the path in bold. A path
+   * the operator has to copy is not being taken anywhere.
+   */
+  it("asks for a clickable link rather than a bare path", () => {
+    expect(prompt).toMatch(/write every path as a markdown link/i);
+    expect(prompt).toContain("[the reply inbox](/replies)");
+    expect(prompt).toMatch(/never write a bare path or a path in bold/i);
+  });
+
   it("says it can only read, and hands actions back to the operator", () => {
     expect(prompt).toMatch(/you can only read/i);
   });
