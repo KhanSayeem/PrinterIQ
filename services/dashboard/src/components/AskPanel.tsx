@@ -26,9 +26,19 @@ import { ASK_THINKING_LABELS, askToolLabel } from "@/lib/ask/tool-labels";
  */
 
 const SUGGESTIONS: SuggestionItem[] = [
+  /**
+   * The tour goes first, because it is the one question that teaches the panel
+   * itself. The label stays short for the chip; the value is the fuller ask,
+   * so the answer covers the pages rather than the pipeline.
+   */
+  {
+    id: "tour",
+    label: "Give me a tour",
+    value:
+      "Give me a tour of this dashboard: what each page shows, in the order I should look at them, with a link to each one. Keep it short, one line per page.",
+  },
   { id: "today", label: "How is sending going today?" },
   { id: "replies", label: "Anything waiting on me?" },
-  { id: "broken", label: "Is anything broken right now?" },
   { id: "bounces", label: "Which mailboxes are bouncing?" },
   { id: "money", label: "What came in this week?" },
 ];

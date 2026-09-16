@@ -47,11 +47,23 @@ describe("AskPanel", () => {
     expect(screen.getByText(/cannot send or change anything/i)).toBeTruthy();
   });
 
-  it("opens with questions it can answer", () => {
+  it("opens with questions it can answer, the tour first", () => {
     render(<AskPanel />);
     fireEvent.click(screen.getByRole("button", { name: "Ask about the pipeline" }));
 
-    expect(screen.getByText("Is anything broken right now?")).toBeTruthy();
+    expect(screen.getByText("Give me a tour")).toBeTruthy();
+    expect(screen.getByText("What came in this week?")).toBeTruthy();
+    expect(screen.queryByText("Is anything broken right now?")).toBeNull();
+  });
+
+  it("puts the fuller question in the box when a chip is picked", () => {
+    render(<AskPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask about the pipeline" }));
+    fireEvent.click(screen.getByText("Give me a tour"));
+
+    expect(screen.getByLabelText<HTMLTextAreaElement>("Ask a question").value).toMatch(
+      /tour of this dashboard/i,
+    );
   });
 
   it("shows the answer and the read behind it", async () => {
