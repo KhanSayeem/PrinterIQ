@@ -36,6 +36,7 @@ function createDeps() {
     instantly: {
       pauseLead: vi.fn().mockResolvedValue(undefined),
       sendReply: vi.fn().mockResolvedValue(undefined),
+      getEmailSubject: vi.fn().mockResolvedValue("A new website for Enlightening Education"),
     },
     revalidatePath: vi.fn(),
   };
@@ -128,7 +129,7 @@ describe("lead actions", () => {
     expect(deps.instantly.sendReply).toHaveBeenCalledWith({
       instantlyEmailId: "email-uuid-123",
       instantlyAccountId: "sender@printeriq.com",
-      subject: null,
+      subject: "Re: A new website for Enlightening Education",
       body: "Happy to send the details.",
     });
     expect(deps.insertOperatorConversation).toHaveBeenCalledWith({
@@ -224,5 +225,55 @@ describe("lead actions", () => {
       conversationId: "note-1",
     });
     expect(result).toEqual({ ok: true, message: "Note deleted.", deletedConversationId: "note-1" });
+  });
+});
+
+describe("overrideReply subject", () => {
+  /**
+   * Instantly answers `400 body must have required property 'subject'` when a
+   * reply carries no subject, and this action used to hard code null, so every
+   * override reply would have failed in production.
+   */
+  it("prefixes the thread's subject once", async () => {
+    const deps = createDeps();
+    deps.instantly.getEmailSubject = vi.fn().mockResolvedValue("Re: A new website for Acme");
+
+    await createLeadActions(deps).overrideReply(
+      initialLeadActionState,
+      form({ tenantId, leadId, body: "Sounds good." }),
+    );
+
+    expect(deps.instantly.sendReply).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "Re: A new website for Acme" }),
+    );
+  });
+
+  it("refuses to send, rather than sending a reply Instantly will reject", async () => {
+    const deps = createDeps();
+    deps.instantly.getEmailSubject = vi.fn().mockResolvedValue(null);
+
+    const result = await createLeadActions(deps).overrideReply(
+      initialLeadActionState,
+      form({ tenantId, leadId, body: "Sounds good." }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/could not read the subject/i);
+    expect(deps.instantly.sendReply).not.toHaveBeenCalled();
+    expect(deps.insertOperatorConversation).not.toHaveBeenCalled();
+  });
+
+  it("does not record an outbound reply that was never sent", async () => {
+    const deps = createDeps();
+    deps.instantly.getEmailSubject = vi.fn().mockRejectedValue(new Error("Instantly is down"));
+
+    const result = await createLeadActions(deps).overrideReply(
+      initialLeadActionState,
+      form({ tenantId, leadId, body: "Sounds good." }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(deps.insertOperatorConversation).not.toHaveBeenCalled();
+    expect(deps.updateLeadStatus).not.toHaveBeenCalled();
   });
 });

@@ -256,6 +256,26 @@ export class InstantlyHttpClient {
   }
 
   /**
+   * The subject line of one email in a thread. Read only.
+   *
+   * Instantly's reply endpoint rejects a reply with no subject:
+   * `400 body must have required property 'subject'`. Nothing in this schema
+   * stores the subject of an inbound reply, so it is read back from the thread
+   * itself rather than guessed from the campaign.
+   */
+  async getEmailSubject(instantlyEmailId: string): Promise<string | null> {
+    const path = `/api/v2/emails/${instantlyEmailId}`;
+    const body = await this.requestJson<unknown>(path, { method: "GET" });
+
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return null;
+    }
+
+    const subject = (body as Record<string, unknown>).subject;
+    return typeof subject === "string" && subject.trim().length > 0 ? subject.trim() : null;
+  }
+
+  /**
    * Lifetime totals for the given campaigns, in the order Instantly returns them.
    *
    * The endpoint ignores its own campaign_id filter. Measured on 2026-09-14:

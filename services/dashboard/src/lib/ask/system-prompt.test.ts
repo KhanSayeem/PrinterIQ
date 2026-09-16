@@ -37,6 +37,11 @@ describe("buildAskSystemPrompt", () => {
     expect(prompt).toMatch(/never write an em dash or an en dash/i);
   });
 
+  it("knows that a reply sent outside the dashboard leaves no record", () => {
+    expect(prompt).toMatch(/only replies sent from this dashboard are recorded/i);
+    expect(prompt).toMatch(/not "nobody replied"/i);
+  });
+
   it("says it can only read, and hands actions back to the operator", () => {
     expect(prompt).toMatch(/you can only read/i);
   });
