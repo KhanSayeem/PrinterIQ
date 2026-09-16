@@ -42,6 +42,18 @@ describe("buildAskSystemPrompt", () => {
     expect(prompt).toMatch(/not "nobody replied"/i);
   });
 
+  /**
+   * Asked "where in our dashboard can I see that reply", the panel answered
+   * that it had no visibility into the page structure. It reads the data, so
+   * it should be able to say which screen shows it.
+   */
+  it("knows the dashboard's own pages, so it can say where to look", () => {
+    expect(prompt).toContain("/replies is");
+    expect(prompt).toContain("/leads/<leadId> is");
+    expect(prompt).toContain("/deliverability is");
+    expect(prompt).toMatch(/never invent a page or a URL/i);
+  });
+
   it("says it can only read, and hands actions back to the operator", () => {
     expect(prompt).toMatch(/you can only read/i);
   });
