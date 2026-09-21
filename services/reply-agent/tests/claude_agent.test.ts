@@ -1,7 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LeadContext } from "../src/types.js";
 
-const sdk = vi.hoisted(() => ({ calls: [] as Record<string, unknown>[] }));
+const CLASSIFICATION = {
+  intent: "objection",
+  confidence: 82,
+  reply_body: "No worries at all.",
+  action: "reply",
+  escalation_reason: null,
+};
+
+const sdk = vi.hoisted(() => ({
+  calls: [] as Record<string, unknown>[],
+  content: null as unknown[] | null,
+}));
 
 vi.mock("@anthropic-ai/sdk", () => {
   class FakeAnthropic {
@@ -9,17 +20,8 @@ vi.mock("@anthropic-ai/sdk", () => {
       create: async (params: Record<string, unknown>) => {
         sdk.calls.push(params);
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                intent: "objection",
-                confidence: 82,
-                reply_body: "No worries at all.",
-                action: "reply",
-                escalation_reason: null,
-              }),
-            },
+          content: sdk.content ?? [
+            { type: "tool_use", id: "toolu_1", name: "classify_reply", input: CLASSIFICATION },
           ],
           usage: { input_tokens: 1200, output_tokens: 150 },
         };
@@ -40,6 +42,7 @@ const leadContext = {
 describe("classifyReply request shape", () => {
   beforeEach(() => {
     sdk.calls.length = 0;
+    sdk.content = null;
     process.env.ANTHROPIC_API_KEY = "test-key";
     process.env.CLAUDE_REPLY_MODEL = "claude-opus-5";
   });
@@ -79,5 +82,67 @@ describe("classifyReply request shape", () => {
     expect(result.intent).toBe("objection");
     expect(result.model_used).toBe("claude-opus-5");
     expect(result.cost_usd).toBeGreaterThan(0);
+  });
+});
+
+describe("classifyReply output", () => {
+  beforeEach(() => {
+    sdk.calls.length = 0;
+    sdk.content = null;
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    process.env.CLAUDE_REPLY_MODEL = "claude-opus-5";
+  });
+
+  /**
+   * Production on 2026-09-17: a reply from Beyond Training failed three times
+   * with "Claude returned invalid JSON" and was dropped. The classifier asked
+   * for JSON in prose and parsed the text, so any preamble or code fence broke
+   * it. Forcing a tool call makes the API hand back an object instead.
+   */
+  it("forces the answer through the classify tool", async () => {
+    await classifyReply({ leadContext, conversationHistory: [], inboundBody: "Not now thanks." });
+
+    const params = sdk.calls[0] as {
+      tools?: { name: string; input_schema: { required?: string[] } }[];
+      tool_choice?: { type: string; name?: string };
+    };
+
+    expect(params.tool_choice).toEqual({ type: "tool", name: "classify_reply" });
+    expect(params.tools?.map((tool) => tool.name)).toEqual(["classify_reply"]);
+    expect(params.tools?.[0]?.input_schema.required).toEqual(
+      expect.arrayContaining(["intent", "confidence", "reply_body", "action", "escalation_reason"]),
+    );
+  });
+
+  it("reads the classification from the tool call, not from text", async () => {
+    const result = await classifyReply({ leadContext, conversationHistory: [], inboundBody: "Not now thanks." });
+
+    expect(result.intent).toBe("objection");
+    expect(result.action).toBe("reply");
+  });
+
+  /** The exact shape that failed: JSON wrapped in a fence, with no tool call. */
+  it("says what went wrong when the model answers in text instead", async () => {
+    const fenced = ["```json", JSON.stringify(CLASSIFICATION), "```"].join("\n");
+    sdk.content = [{ type: "text", text: fenced }];
+
+    await expect(
+      classifyReply({ leadContext, conversationHistory: [], inboundBody: "Not now thanks." }),
+    ).rejects.toThrow(/did not call the classify tool/i);
+  });
+
+  it("still rejects a classification outside the allowed values", async () => {
+    sdk.content = [
+      {
+        type: "tool_use",
+        id: "toolu_1",
+        name: "classify_reply",
+        input: { ...CLASSIFICATION, intent: "delighted" },
+      },
+    ];
+
+    await expect(
+      classifyReply({ leadContext, conversationHistory: [], inboundBody: "Not now thanks." }),
+    ).rejects.toThrow();
   });
 });

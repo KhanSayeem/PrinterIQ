@@ -1,6 +1,10 @@
 import { Worker, type Job } from "bullmq";
 import { pathToFileURL } from "node:url";
-import { handleProcessReply as defaultHandleProcessReply, handleSendReply as defaultHandleSendReply } from "./handler.js";
+import {
+  handleProcessReply as defaultHandleProcessReply,
+  handleSendReply as defaultHandleSendReply,
+  inboundDedupeKey,
+} from "./handler.js";
 import { escalate as defaultEscalate, maskSnippetPii, type EscalationInput } from "./escalation.js";
 import { queries as defaultQueries } from "./db/queries.js";
 import {
@@ -10,9 +14,80 @@ import {
   REPLY_JOB_OPTIONS,
   type ReplyJobData,
 } from "./queue.js";
-import type { SendReplyJob } from "./types.js";
+import type { ProcessReplyJob, SendReplyJob } from "./types.js";
 
 export { createReplyQueue, REPLIES_QUEUE_NAME, REPLY_JOB_OPTIONS, type ReplyJobData };
+
+/** Escalation reason used when a reply could not be processed after every retry. */
+export const UNCLASSIFIED_ESCALATION_REASON = "reply_not_processed_after_retries";
+
+export type UnprocessedReplyDeps = {
+  queries?: {
+    insertInboundConversation: typeof defaultQueries.insertInboundConversation;
+    markConversationEscalated(tenantId: string, conversationId: string, reason: string): Promise<unknown>;
+  };
+  escalate?: (input: EscalationInput) => Promise<void>;
+  logger?: ReplyWorkerLogger;
+};
+
+/**
+ * A reply that could not be processed goes to a human, not to a log line.
+ *
+ * On 2026-09-17 a reply from Beyond Training failed classification three
+ * times, BullMQ gave up, and the only trace was "FAILED PERMANENTLY" in an
+ * error log nobody reads. It sat for five days.
+ *
+ * The conversation id is found by repeating the handler's own insert, which
+ * is idempotent on the dedupe key since migration 0015: it returns the row the
+ * handler already wrote. If the handler failed before writing it, this writes
+ * it, which is the right outcome too: the reply is recorded and escalated
+ * rather than lost.
+ *
+ * Never throws. It runs inside the worker's failure handler, and a throw there
+ * would only produce another log line.
+ */
+export async function escalateUnprocessedReply(
+  job: ProcessReplyJob,
+  deps: UnprocessedReplyDeps = {},
+): Promise<void> {
+  const queries = deps.queries ?? defaultQueries;
+  const escalate = deps.escalate ?? defaultEscalate;
+  const logger = deps.logger ?? console;
+
+  try {
+    const conversation = await queries.insertInboundConversation(
+      job.tenant_id,
+      job.lead_id,
+      job.channel,
+      job.body,
+      {
+        instantly_lead_id: job.instantly_lead_id ?? null,
+        instantly_email_id: job.instantly_email_id ?? null,
+        instantly_account_id: job.instantly_account_id ?? null,
+        dedupe_key: inboundDedupeKey(job),
+      },
+    );
+
+    await queries.markConversationEscalated(
+      job.tenant_id,
+      conversation.id,
+      UNCLASSIFIED_ESCALATION_REASON,
+    );
+
+    await escalate({
+      tenant_id: job.tenant_id,
+      lead_id: job.lead_id,
+      conversation_id: conversation.id,
+      reason: UNCLASSIFIED_ESCALATION_REASON,
+      inbound_body: job.body,
+    });
+  } catch (error) {
+    // The error class only: a message here can quote the reply or the lead.
+    logger.warn(
+      `Could not escalate a reply that failed processing: ${error instanceof Error ? error.name : "unknown error"}`,
+    );
+  }
+}
 
 /** Escalation reason used when the operator, not the agent, must send checkout. */
 export const SEND_CHECKOUT_ESCALATION_REASON = "send_checkout_requires_operator";
@@ -170,6 +245,10 @@ async function main(): Promise<void> {
         `attempt=${job?.attemptsMade ?? 0}/${job?.opts?.attempts ?? REPLY_JOB_OPTIONS.attempts} ` +
         `reason=${maskSnippetPii(error instanceof Error ? error.message : "unknown")}`,
     );
+
+    if (exhausted && job?.data && (job.data as { job_type?: string }).job_type === "process_reply") {
+      void escalateUnprocessedReply(job.data as ProcessReplyJob);
+    }
   });
 
   // BullMQ forwards Redis connection failures as an `error` event. Node throws
