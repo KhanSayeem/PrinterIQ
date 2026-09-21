@@ -43,6 +43,12 @@ function createQueries(overrides: Partial<ReplyQueries> = {}): ReplyQueries {
     conversationExists: vi.fn().mockResolvedValue(true),
     advanceLeadToReplied: vi.fn().mockResolvedValue(undefined),
     archiveLeadForSuppression: vi.fn().mockResolvedValue(undefined),
+    findOutreachTargetByLeadId: vi.fn().mockResolvedValue({
+      tenant_id: tenantId,
+      lead_id: leadId,
+      instantly_lead_id: "instantly-lead-1",
+    }),
+    recordInstantlyUnsubscribe: vi.fn().mockResolvedValue(undefined),
     fetchCheckoutLead: vi.fn().mockResolvedValue({
       tenant_id: tenantId,
       lead_id: leadId,
@@ -317,7 +323,7 @@ describe("process_reply handler", () => {
     expect(result.action).toBe("reply");
   });
 
-  it("archives the lead and does not enqueue a reply for suppress actions", async () => {
+  it("does not enqueue a reply for suppress actions", async () => {
     const queries = createQueries();
     const queue = createQueue();
 
@@ -329,11 +335,82 @@ describe("process_reply handler", () => {
         reply_body: "",
       }),
       queue,
+      instantly: { blockEmail: vi.fn().mockResolvedValue(undefined) },
     });
 
-    expect(queries.archiveLeadForSuppression).toHaveBeenCalledWith(tenantId, leadId);
     expect(queue.add).not.toHaveBeenCalled();
     expect(result.action).toBe("suppress");
+  });
+
+  /**
+   * Production on 2026-09-17: "Please remove me from your mailing list" was a
+   * reply, not a click on the unsubscribe link, and the suppress action only
+   * archived the lead. The send was never marked unsubscribed and the address
+   * was never blocked, so another campaign could have emailed her again. A
+   * reply asking to be removed now counts exactly like the link.
+   */
+  it("records a remove-me reply as an unsubscribe, the same as a link click", async () => {
+    const queries = createQueries();
+
+    await handleProcessReply(processJob("Please remove me from your mailing list"), {
+      queries,
+      claude: createClaude({ intent: "unsubscribe", action: "suppress", reply_body: "" }),
+      queue: createQueue(),
+      instantly: { blockEmail: vi.fn().mockResolvedValue(undefined) },
+    });
+
+    expect(queries.recordInstantlyUnsubscribe).toHaveBeenCalledWith(
+      tenantId,
+      leadId,
+      "instantly-lead-1",
+    );
+  });
+
+  it("blocks the address in Instantly, so no campaign can email them again", async () => {
+    const blockEmail = vi.fn().mockResolvedValue(undefined);
+
+    await handleProcessReply(processJob("Please remove me from your mailing list"), {
+      queries: createQueries(),
+      claude: createClaude({ intent: "unsubscribe", action: "suppress", reply_body: "" }),
+      queue: createQueue(),
+      instantly: { blockEmail },
+    });
+
+    expect(blockEmail).toHaveBeenCalledWith("lead@example.com");
+  });
+
+  it("archives a lead that never went through Instantly, and still blocks the address", async () => {
+    const queries = createQueries({
+      findOutreachTargetByLeadId: vi.fn().mockResolvedValue(null),
+    });
+    const blockEmail = vi.fn().mockResolvedValue(undefined);
+
+    await handleProcessReply(processJob("Stop emailing me"), {
+      queries,
+      claude: createClaude({ intent: "unsubscribe", action: "suppress", reply_body: "" }),
+      queue: createQueue(),
+      instantly: { blockEmail },
+    });
+
+    expect(queries.recordInstantlyUnsubscribe).not.toHaveBeenCalled();
+    expect(queries.archiveLeadForSuppression).toHaveBeenCalledWith(tenantId, leadId);
+    expect(blockEmail).toHaveBeenCalledWith("lead@example.com");
+  });
+
+  /**
+   * Half a suppression is not a suppression. If the block fails the job
+   * fails, BullMQ retries, and after the last attempt the operator is paged.
+   * Every step before it is idempotent, so a retry repeats nothing harmful.
+   */
+  it("fails the job when Instantly will not block the address, rather than half suppressing", async () => {
+    await expect(
+      handleProcessReply(processJob("Remove me"), {
+        queries: createQueries(),
+        claude: createClaude({ intent: "unsubscribe", action: "suppress", reply_body: "" }),
+        queue: createQueue(),
+        instantly: { blockEmail: vi.fn().mockRejectedValue(new Error("Instantly 500")) },
+      }),
+    ).rejects.toThrow(/Instantly 500/);
   });
 });
 
