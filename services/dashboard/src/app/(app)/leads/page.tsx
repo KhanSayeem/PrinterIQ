@@ -1,4 +1,5 @@
 import { getLeadFilterCounts, getLeadListPage, getTodaySoFarSummary, type TodaySoFarSummary } from "@/db/queries";
+import { describeDbError } from "@/lib/db-error";
 import type { LeadListRow } from "@/components/LeadQuickPanel";
 import { LeadsWorkbench } from "@/components/LeadsWorkbench";
 import { getDashboardTenantId } from "@/auth/tenant";
@@ -125,7 +126,7 @@ export default async function LeadsPage({
     pageSize = leadPage.pageSize;
   } catch (error) {
     const message = getLeadLoadErrorMessage(error);
-    console.error("Failed to load leads", { message });
+    console.error("Failed to load leads", { message, ...describeDbError(error) });
 
     return (
       <div className="error-state">

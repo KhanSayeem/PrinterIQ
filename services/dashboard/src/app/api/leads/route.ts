@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { describeDbError } from "@/lib/db-error";
 import { isAuthorizedOperator } from "@/auth/operators";
 import { createSupabaseServerClient } from "@/auth/server";
 import { getDashboardTenantId } from "@/auth/tenant";
@@ -53,7 +54,7 @@ export async function GET(request: NextRequest) {
       pageSize: leadPage.pageSize,
     });
   } catch (error) {
-    console.error("Failed to load leads", { message: error instanceof Error ? error.message : "Unknown error" });
+    console.error("Failed to load leads", describeDbError(error));
     return NextResponse.json({ error: "Failed to load leads" }, { status: 500 });
   }
 }

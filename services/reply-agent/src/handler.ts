@@ -127,7 +127,7 @@ function classificationUpdate(classification: ClaudeReplyClassification): Conver
  * better failure than one message counted three times, and it disappears
  * whenever Instantly sends the email id.
  */
-function inboundDedupeKey(job: ProcessReplyJob): string {
+export function inboundDedupeKey(job: ProcessReplyJob): string {
   if (job.instantly_email_id) {
     return `reply:email:${job.instantly_email_id}`;
   }
