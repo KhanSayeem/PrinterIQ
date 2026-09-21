@@ -26,6 +26,37 @@ const claudeSchema = z.object({
   escalation_reason: z.string().nullable(),
 });
 
+/**
+ * The classification, as a tool the model is forced to call.
+ *
+ * It used to ask for JSON in prose and JSON.parse the text. On 2026-09-17 a
+ * reply from Beyond Training came back as something that was not bare JSON,
+ * failed "Claude returned invalid JSON" three times, and was dropped. A forced
+ * tool call makes the API return an already parsed object, so that failure
+ * cannot happen. claudeSchema still checks every value afterwards.
+ */
+const CLASSIFY_TOOL_NAME = "classify_reply";
+
+const classifyTool = {
+  name: CLASSIFY_TOOL_NAME,
+  description: "Record the classification of this inbound reply and the response to send.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      intent: {
+        type: "string",
+        enum: ["interested", "question", "objection", "not_interested", "unsubscribe", "abusive"],
+      },
+      confidence: { type: "integer", minimum: 0, maximum: 100 },
+      reply_body: { type: "string" },
+      action: { type: "string", enum: ["reply", "send_checkout", "escalate", "suppress"] },
+      escalation_reason: { type: ["string", "null"] },
+    },
+    required: ["intent", "confidence", "reply_body", "action", "escalation_reason"],
+    additionalProperties: false,
+  },
+};
+
 type ClassifyInput = {
   leadContext: LeadContext;
   conversationHistory: ConversationHistoryItem[];
@@ -71,22 +102,20 @@ export async function classifyReply(input: ClassifyInput): Promise<ClaudeReplyCl
     model,
     max_tokens: 700,
     messages: [{ role: "user", content: prompt }],
+    tools: [classifyTool],
+    tool_choice: { type: "tool", name: CLASSIFY_TOOL_NAME },
   });
 
-  const text = response.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("")
-    .trim();
+  const toolUse = response.content.find(
+    (block): block is Anthropic.ToolUseBlock =>
+      block.type === "tool_use" && block.name === CLASSIFY_TOOL_NAME,
+  );
 
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(text);
-  } catch (error) {
-    throw new Error("Claude returned invalid JSON", { cause: error });
+  if (!toolUse) {
+    throw new Error("Claude did not call the classify tool, so there is no classification to read");
   }
 
-  const parsed = claudeSchema.parse(parsedJson);
+  const parsed = claudeSchema.parse(toolUse.input);
   const usage = response.usage;
 
   return {
