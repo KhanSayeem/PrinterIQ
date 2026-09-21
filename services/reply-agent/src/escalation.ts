@@ -190,6 +190,30 @@ export class InstantlyHttpClient implements InstantlyClient {
       throw new Error(`Instantly lead pause failed with ${response.status}; response body omitted`);
     }
   }
+
+  /**
+   * Adds an address to the workspace block list, so no campaign can email it.
+   * Verified against the live API on 2026-09-22: POST with `bl_value` returns
+   * 200 and the entry shows up in the list.
+   */
+  async blockEmail(email: string): Promise<void> {
+    if (!this.apiKey) {
+      throw new MissingEnvError("Missing env var: INSTANTLY_API_KEY");
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/v2/block-lists-entries`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ bl_value: email }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Instantly block list add failed with ${response.status}; response body omitted`);
+    }
+  }
 }
 
 export async function escalate(input: EscalationInput, deps: EscalationDeps = {}): Promise<void> {
